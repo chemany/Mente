@@ -1,0 +1,17 @@
+{
+  "task": {
+    "task_id": "fixture_cron_task_1",
+    "session_id": "fixture_cron_session_1",
+    "task_type": "cron",
+    "objective": "Execute scheduled job 'Nightly Sync' and return a concise result.",
+    "user_request": "Sync the repo and report the result.",
+    "metadata": {
+      "source": "cron",
+      "job": {
+        "id": "job-1",
+        "name": "Nightly Sync"
+      }
+    }
+  },
+  "notes": "Minimal cron replay fixture"
+}

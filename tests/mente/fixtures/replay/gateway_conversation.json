@@ -1,0 +1,14 @@
+{
+  "task": {
+    "task_id": "fixture_gateway_task_1",
+    "session_id": "fixture_gateway_session_1",
+    "task_type": "conversation",
+    "objective": "Continue the active conversation and answer the latest user message.",
+    "user_request": "Summarize yesterday's discussion in two bullets.",
+    "metadata": {
+      "source": "gateway",
+      "platform": "telegram"
+    }
+  },
+  "notes": "Minimal gateway replay fixture"
+}
