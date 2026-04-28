@@ -14,6 +14,7 @@ from mente.memory.repository import InMemoryMemoryRepository
 from mente.orchestrator.service import Orchestrator
 from mente.task_core.models import ExecutionRequest, ExecutionResult
 from mente.task_core.repository import InMemoryTaskRepository
+from mente.testing.benchmark import load_benchmark_suite, run_benchmark_suite
 from mente.testing.replay import compare_memory_replay, load_replay_fixture, replay_task
 
 
@@ -32,23 +33,32 @@ def build_replay_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--compare-memory", action="store_true")
     parser.add_argument("--show-prompt-metrics", action="store_true")
+    parser.add_argument("--benchmark-suite")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run a replay fixture through the Mente orchestrator."""
     args = build_replay_parser().parse_args(argv)
-    executor: Executor
-    if args.executor == "codex":
-        executor = CodexExecutor()
-    else:
-        executor = _MockReplayExecutor()
+    executor_factory = CodexExecutor if args.executor == "codex" else _MockReplayExecutor
+
+    if args.benchmark_suite:
+        suite = load_benchmark_suite(args.benchmark_suite)
+        report = run_benchmark_suite(
+            suite,
+            executor_factory=executor_factory,
+            workspace=str(Path(args.workspace)),
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if report["summary"]["fail_count"] == 0 else 1
+
+    executor: Executor = executor_factory()
 
     fixture = load_replay_fixture(args.fixture_path)
     if args.compare_memory:
         report = compare_memory_replay(
             fixture,
-            executor_factory=CodexExecutor if args.executor == "codex" else _MockReplayExecutor,
+            executor_factory=executor_factory,
             workspace=str(Path(args.workspace)),
         )
         if args.show_prompt_metrics:
