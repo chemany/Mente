@@ -1,6 +1,7 @@
 """Memory primitives for Mente."""
 
 from mente.memory.models import MemoryRecord
+from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import (
     InMemoryMemoryRepository,
     MemoryRepository,
@@ -11,6 +12,7 @@ from mente.memory.repository import (
 __all__ = [
     "InMemoryMemoryRepository",
     "MemoryRecord",
+    "MemoryPromoter",
     "MemoryRepository",
     "SQLiteMemoryRepository",
     "get_default_memory_db_path",
