@@ -18,11 +18,11 @@ def test_context_builder_produces_execution_request():
     assert request.objective == "Inspect repository"
 
 
-def test_context_builder_injects_relevant_memory_in_stable_order():
-    repo = InMemoryMemoryRepository()
-    repo.save(
+def test_context_builder_prepends_retrieved_memory():
+    memory_repo = InMemoryMemoryRepository()
+    memory_repo.save(
         MemoryRecord(
-            memory_id="mem_session",
+            memory_id="mem_1",
             session_id="session_1",
             task_id="task_old",
             task_type="conversation",
@@ -31,13 +31,16 @@ def test_context_builder_injects_relevant_memory_in_stable_order():
             fact="User prefers concise replies.",
         )
     )
-    builder = ContextBuilder(memory_repository=repo, memory_limit=5)
     task = Task(
         task_id="task_1",
         session_id="session_1",
         task_type="conversation",
         objective="Reply",
         user_request="Reply",
+        memory_facts=["Session context: existing"],
     )
-    request = builder.build(task)
-    assert request.memory_facts[0] == "Memory: User prefers concise replies."
+    request = ContextBuilder(memory_repository=memory_repo, memory_limit=5).build(task)
+    assert request.memory_facts == [
+        "Memory: User prefers concise replies.",
+        "Session context: existing",
+    ]
