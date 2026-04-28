@@ -44,6 +44,27 @@ class MemoryRepository(Protocol):
     def get(self, memory_id: str) -> MemoryRecord | None:
         """Load a memory record by id."""
 
+    def list_recent(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        source: str | None = None,
+        task_type: str | None = None,
+        memory_scope: str | None = None,
+    ) -> list[MemoryRecord]:
+        """List the most recent memories across sessions."""
+
+    def list_by_session(
+        self,
+        session_id: str,
+        limit: int = 20,
+        offset: int = 0,
+        source: str | None = None,
+        task_type: str | None = None,
+        memory_scope: str | None = None,
+    ) -> list[MemoryRecord]:
+        """List the most recent memories for a session."""
+
     def list_relevant(
         self,
         session_id: str | None,
@@ -82,6 +103,11 @@ def _record_sort_key(record: MemoryRecord, session_id: str | None, task_type: st
     )
 
 
+def _debug_sort_key(record: MemoryRecord) -> tuple[object, ...]:
+    created_at = record.created_at if record.created_at is not None else float("-inf")
+    return (created_at, record.memory_id)
+
+
 class InMemoryMemoryRepository:
     """Simple in-memory repository for Mente memories."""
 
@@ -95,6 +121,51 @@ class InMemoryMemoryRepository:
 
     def get(self, memory_id: str) -> MemoryRecord | None:
         return self._records.get(memory_id)
+
+    def list_recent(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        source: str | None = None,
+        task_type: str | None = None,
+        memory_scope: str | None = None,
+    ) -> list[MemoryRecord]:
+        if limit <= 0 or offset < 0:
+            return []
+        records = list(self._records.values())
+        if source is not None:
+            records = [record for record in records if record.source == source]
+        if task_type is not None:
+            records = [record for record in records if record.task_type == task_type]
+        if memory_scope is not None:
+            records = [record for record in records if record.scope == memory_scope]
+        records.sort(key=_debug_sort_key, reverse=True)
+        return records[offset:offset + limit]
+
+    def list_by_session(
+        self,
+        session_id: str,
+        limit: int = 20,
+        offset: int = 0,
+        source: str | None = None,
+        task_type: str | None = None,
+        memory_scope: str | None = None,
+    ) -> list[MemoryRecord]:
+        if limit <= 0 or offset < 0:
+            return []
+        records = [
+            record
+            for record in self._records.values()
+            if record.session_id == session_id
+        ]
+        if source is not None:
+            records = [record for record in records if record.source == source]
+        if task_type is not None:
+            records = [record for record in records if record.task_type == task_type]
+        if memory_scope is not None:
+            records = [record for record in records if record.scope == memory_scope]
+        records.sort(key=_debug_sort_key, reverse=True)
+        return records[offset:offset + limit]
 
     def list_relevant(
         self,
@@ -195,6 +266,80 @@ class SQLiteMemoryRepository:
         if row is None:
             return None
         return self._row_to_record(row)
+
+    def list_recent(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        source: str | None = None,
+        task_type: str | None = None,
+        memory_scope: str | None = None,
+    ) -> list[MemoryRecord]:
+        if limit <= 0 or offset < 0:
+            return []
+        clauses: list[str] = []
+        params: list[object] = []
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source)
+        if task_type is not None:
+            clauses.append("task_type = ?")
+            params.append(task_type)
+        if memory_scope is not None:
+            clauses.append("scope = ?")
+            params.append(memory_scope)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.extend([limit, offset])
+        rows = self._conn.execute(
+            f"""
+            SELECT memory_id, session_id, task_id, task_type, source, scope,
+                   fact, kind, score, metadata_json, created_at
+            FROM mente_memories
+            {where_sql}
+            ORDER BY created_at DESC, memory_id DESC
+            LIMIT ?
+            OFFSET ?
+            """,
+            params,
+        ).fetchall()
+        return [self._row_to_record(row) for row in rows]
+
+    def list_by_session(
+        self,
+        session_id: str,
+        limit: int = 20,
+        offset: int = 0,
+        source: str | None = None,
+        task_type: str | None = None,
+        memory_scope: str | None = None,
+    ) -> list[MemoryRecord]:
+        if limit <= 0 or offset < 0:
+            return []
+        clauses = ["session_id = ?"]
+        params: list[object] = [session_id]
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source)
+        if task_type is not None:
+            clauses.append("task_type = ?")
+            params.append(task_type)
+        if memory_scope is not None:
+            clauses.append("scope = ?")
+            params.append(memory_scope)
+        params.extend([limit, offset])
+        rows = self._conn.execute(
+            f"""
+            SELECT memory_id, session_id, task_id, task_type, source, scope,
+                   fact, kind, score, metadata_json, created_at
+            FROM mente_memories
+            WHERE {" AND ".join(clauses)}
+            ORDER BY created_at DESC, memory_id DESC
+            LIMIT ?
+            OFFSET ?
+            """,
+            params,
+        ).fetchall()
+        return [self._row_to_record(row) for row in rows]
 
     def list_relevant(
         self,
