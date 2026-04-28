@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from mente.memory.models import MemoryBuildTrace, MemoryTraceItem
+from mente.memory.policy import MemoryPolicy, MemoryPolicyResolver, truncate_for_policy
 from mente.memory.repository import MemoryRepository
 from mente.task_core.models import ExecutionRequest, Task
 
@@ -15,10 +16,12 @@ class ContextBuilder:
         default_workspace: str = ".",
         memory_repository: MemoryRepository | None = None,
         memory_limit: int = 5,
+        memory_policy_resolver: MemoryPolicyResolver | None = None,
     ) -> None:
         self.default_workspace = default_workspace
         self.memory_repository = memory_repository
         self.memory_limit = memory_limit
+        self.memory_policy_resolver = memory_policy_resolver or MemoryPolicyResolver.default()
 
     def build(self, task: Task) -> ExecutionRequest:
         """Build a stable execution request from a task."""
@@ -49,7 +52,8 @@ class ContextBuilder:
 
     def _build_memory_facts(self, task: Task) -> tuple[list[str], MemoryBuildTrace]:
         task_memory_facts = list(task.memory_facts)
-        trace = MemoryBuildTrace()
+        policy = self.memory_policy_resolver.resolve(task)
+        trace = MemoryBuildTrace(policy_id=policy.policy_id)
         if self.memory_repository is None or self.memory_limit <= 0:
             return task_memory_facts, trace
 
@@ -61,9 +65,18 @@ class ContextBuilder:
         trace.retrieved_count = len(retrieved)
         existing = set(task_memory_facts)
         memory_facts: list[str] = []
+        allowed_records = []
+        filtered_records = []
         for record in retrieved:
-            prompt_fact = f"Memory: {record.fact}"
-            if record.fact in existing or prompt_fact in existing:
+            if record.scope in policy.allowed_injection_scopes:
+                allowed_records.append(record)
+            else:
+                filtered_records.append(record)
+
+        for record in allowed_records:
+            normalized_fact = truncate_for_policy(record.fact, policy.max_chars_per_injected_fact)
+            prompt_fact = f"Memory: {normalized_fact}"
+            if normalized_fact in existing or prompt_fact in existing:
                 trace.skipped.append(
                     MemoryTraceItem(
                         memory_id=record.memory_id,
@@ -74,7 +87,7 @@ class ContextBuilder:
                 )
                 continue
 
-            if len(memory_facts) >= self.memory_limit:
+            if len(memory_facts) >= min(self.memory_limit, policy.max_injected_memories):
                 trace.skipped.append(
                     MemoryTraceItem(
                         memory_id=record.memory_id,
@@ -85,14 +98,36 @@ class ContextBuilder:
                 )
                 continue
 
+            if trace.prompt_budget_char_count + len(prompt_fact) > policy.max_total_injected_chars:
+                trace.skipped.append(
+                    MemoryTraceItem(
+                        memory_id=record.memory_id,
+                        scope=record.scope,
+                        fact=record.fact,
+                        reason="prompt_budget_reached",
+                    )
+                )
+                continue
+
             memory_facts.append(prompt_fact)
             existing.add(prompt_fact)
+            trace.prompt_budget_char_count += len(prompt_fact)
             trace.selected.append(
                 MemoryTraceItem(
                     memory_id=record.memory_id,
                     scope=record.scope,
                     fact=record.fact,
                     reason="scope_match",
+                )
+            )
+
+        for record in filtered_records:
+            trace.skipped.append(
+                MemoryTraceItem(
+                    memory_id=record.memory_id,
+                    scope=record.scope,
+                    fact=record.fact,
+                    reason="scope_filtered",
                 )
             )
 

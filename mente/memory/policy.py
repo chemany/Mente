@@ -78,3 +78,13 @@ class MemoryPolicyResolver:
                 return policy
 
         raise KeyError(f"missing default memory policy: {self.default_policy_id}")
+
+
+def truncate_for_policy(text: str, max_chars: int) -> str:
+    """Trim and deterministically truncate a memory fact."""
+    trimmed = text.strip()
+    if len(trimmed) <= max_chars:
+        return trimmed
+    if max_chars < 4:
+        return trimmed[:max_chars]
+    return trimmed[: max_chars - 3].rstrip() + "..."

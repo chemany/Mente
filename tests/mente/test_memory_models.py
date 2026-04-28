@@ -19,6 +19,8 @@ def test_memory_trace_models_serialize_deterministically():
     trace = MemoryBuildTrace(
         retrieved_count=2,
         injected_count=1,
+        policy_id="gateway:conversation",
+        prompt_budget_char_count=39,
         selected=[
             MemoryTraceItem(
                 memory_id="mem_1",
@@ -40,6 +42,8 @@ def test_memory_trace_models_serialize_deterministically():
     assert trace.model_dump(mode="json") == {
         "retrieved_count": 2,
         "injected_count": 1,
+        "policy_id": "gateway:conversation",
+        "prompt_budget_char_count": 39,
         "selected": [
             {
                 "memory_id": "mem_1",

@@ -37,5 +37,7 @@ class MemoryBuildTrace(BaseModel):
 
     retrieved_count: int = 0
     injected_count: int = 0
+    policy_id: str | None = None
+    prompt_budget_char_count: int = 0
     selected: list[MemoryTraceItem] = Field(default_factory=list)
     skipped: list[MemoryTraceItem] = Field(default_factory=list)

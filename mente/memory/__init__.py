@@ -1,7 +1,7 @@
 """Memory primitives for Mente."""
 
 from mente.memory.models import MemoryRecord
-from mente.memory.policy import MemoryPolicy, MemoryPolicyResolver
+from mente.memory.policy import MemoryPolicy, MemoryPolicyResolver, truncate_for_policy
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import (
     InMemoryMemoryRepository,
@@ -19,4 +19,5 @@ __all__ = [
     "MemoryRepository",
     "SQLiteMemoryRepository",
     "get_default_memory_db_path",
+    "truncate_for_policy",
 ]
