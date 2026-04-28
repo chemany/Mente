@@ -6,6 +6,8 @@ import logging
 
 from mente.context_builder.builder import ContextBuilder
 from mente.executors.base import Executor
+from mente.memory.promoter import MemoryPromoter
+from mente.memory.repository import MemoryRepository
 from mente.task_core.models import ExecutionResult, Task, TaskStatus
 from mente.task_core.repository import TaskRepository
 
@@ -20,10 +22,14 @@ class Orchestrator:
         repository: TaskRepository,
         context_builder: ContextBuilder,
         executor: Executor,
+        memory_repository: MemoryRepository | None = None,
+        memory_promoter: MemoryPromoter | None = None,
     ) -> None:
         self.repository = repository
         self.context_builder = context_builder
         self.executor = executor
+        self.memory_repository = memory_repository
+        self.memory_promoter = memory_promoter
 
     def run(self, task: Task) -> ExecutionResult:
         """Persist, prepare, execute, and finalize a task."""
@@ -40,6 +46,7 @@ class Orchestrator:
         task.status = TaskStatus.EXECUTING
         self.repository.save(task)
         result = self.executor.execute(request)
+        self._persist_promoted_memory(task, result)
 
         task.status = TaskStatus.PERSISTED
         self.repository.save(task)
@@ -59,3 +66,16 @@ class Orchestrator:
         )
 
         return result
+
+    def _persist_promoted_memory(self, task: Task, result: ExecutionResult) -> None:
+        if self.memory_repository is None or self.memory_promoter is None:
+            return
+
+        try:
+            promoted = self.memory_promoter.persist(task, result, self.memory_repository)
+        except Exception:
+            logger.exception("failed to persist promoted memory for task %s", task.task_id)
+            result.metadata["promoted_memory_count"] = 0
+            return
+
+        result.metadata["promoted_memory_count"] = len(promoted)
