@@ -47,6 +47,14 @@ from hermes_cli.config import (
     redact_key,
 )
 from gateway.status import get_running_pid, read_runtime_status
+from mente.memory.memory_query import (
+    MemoryQueryError,
+    execute_memory_query,
+    parse_http_memory_query,
+    serialize_memory,
+    serialize_memory_query,
+)
+from mente.memory.repository import SQLiteMemoryRepository
 from mente.task_core.repository import SQLiteTaskRepository
 from mente.task_core.task_query import (
     TaskQueryError,
@@ -2046,6 +2054,28 @@ async def get_debug_tasks(request: Request):
         "count": page["count"],
         "pagination": page["pagination"],
         "tasks": [serialize_task(task) for task in page["tasks"]],
+    }
+
+
+@app.get("/api/debug/memories")
+async def get_debug_memories(request: Request):
+    """Inspect persisted Mente memory records for dashboard debugging."""
+    try:
+        query = parse_http_memory_query(request.query_params)
+    except MemoryQueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        page = execute_memory_query(query, SQLiteMemoryRepository)
+    except Exception as exc:
+        _log.exception("GET /api/debug/memories failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "query": serialize_memory_query(query),
+        "count": page["count"],
+        "pagination": page["pagination"],
+        "memories": [serialize_memory(memory) for memory in page["memories"]],
     }
 
 

@@ -47,6 +47,14 @@ from gateway.platforms.base import (
     SendResult,
     is_network_accessible,
 )
+from mente.memory.memory_query import (
+    MemoryQueryError,
+    execute_memory_query,
+    parse_http_memory_query,
+    serialize_memory,
+    serialize_memory_query,
+)
+from mente.memory.repository import SQLiteMemoryRepository
 from mente.task_core.repository import SQLiteTaskRepository
 from mente.task_core.task_query import (
     TaskQueryError,
@@ -2040,6 +2048,29 @@ class APIServerAdapter(BasePlatformAdapter):
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
+    async def _handle_debug_memories(self, request: "web.Request") -> "web.Response":
+        """GET /api/debug/memories — inspect persisted Mente memory records."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        try:
+            query = parse_http_memory_query(request.query)
+        except MemoryQueryError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+        try:
+            page = execute_memory_query(query, SQLiteMemoryRepository)
+            return web.json_response(
+                {
+                    "query": serialize_memory_query(query),
+                    "count": page["count"],
+                    "pagination": page["pagination"],
+                    "memories": [serialize_memory(memory) for memory in page["memories"]],
+                }
+            )
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     async def _handle_create_job(self, request: "web.Request") -> "web.Response":
         """POST /api/jobs — create a new cron job."""
         auth_err = self._check_auth(request)
@@ -2659,6 +2690,7 @@ class APIServerAdapter(BasePlatformAdapter):
             # Cron jobs management API
             self._app.router.add_get("/api/jobs", self._handle_list_jobs)
             self._app.router.add_get("/api/debug/tasks", self._handle_debug_tasks)
+            self._app.router.add_get("/api/debug/memories", self._handle_debug_memories)
             self._app.router.add_post("/api/jobs", self._handle_create_job)
             self._app.router.add_get("/api/jobs/{job_id}", self._handle_get_job)
             self._app.router.add_patch("/api/jobs/{job_id}", self._handle_update_job)

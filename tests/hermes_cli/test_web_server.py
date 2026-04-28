@@ -492,6 +492,78 @@ class TestWebServerEndpoints:
         resp = unauth_client.get("/api/debug/tasks")
         assert resp.status_code == 401
 
+    def test_get_debug_memories_recent_with_filters(self, monkeypatch):
+        """GET /api/debug/memories should expose filtered recent memory records."""
+        import hermes_cli.web_server as web_server
+        from mente.memory.models import MemoryRecord
+
+        calls = []
+        memory = MemoryRecord(
+            memory_id="mem_001",
+            session_id="sess-123",
+            task_id="task-001",
+            task_type="conversation",
+            source="gateway",
+            scope="session",
+            fact="User prefers concise replies.",
+            created_at=1714300000.0,
+            metadata={"promotion_reason": "executor_memory_candidate"},
+        )
+
+        class FakeRepo:
+            def list_recent(self, limit=20, offset=0, source=None, task_type=None, memory_scope=None):
+                calls.append(
+                    {
+                        "limit": limit,
+                        "offset": offset,
+                        "source": source,
+                        "task_type": task_type,
+                        "memory_scope": memory_scope,
+                    }
+                )
+                return [memory]
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(web_server, "SQLiteMemoryRepository", FakeRepo)
+
+        resp = self.client.get(
+            "/api/debug/memories?scope=recent&source=gateway&task_type=conversation&memory_scope=session&limit=1"
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["query"] == {
+            "scope": "recent",
+            "session_id": None,
+            "source": "gateway",
+            "task_type": "conversation",
+            "memory_scope": "session",
+            "limit": 1,
+            "offset": 0,
+        }
+        assert data["count"] == 1
+        assert data["pagination"] == {
+            "limit": 1,
+            "offset": 0,
+            "returned": 1,
+            "has_more": False,
+            "next_offset": None,
+            "next_cursor": None,
+        }
+        assert data["memories"][0]["memory_id"] == "mem_001"
+        assert data["memories"][0]["fact"] == "User prefers concise replies."
+        assert calls == [
+            {
+                "limit": 2,
+                "offset": 0,
+                "source": "gateway",
+                "task_type": "conversation",
+                "memory_scope": "session",
+            }
+        ]
+
     def test_path_traversal_blocked(self):
         """Verify URL-encoded path traversal is blocked."""
         # %2e%2e = ..
