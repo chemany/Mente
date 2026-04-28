@@ -60,6 +60,7 @@ import CronPage from "@/pages/CronPage";
 import SkillsPage from "@/pages/SkillsPage";
 import ChatPage from "@/pages/ChatPage";
 import TasksPage from "@/pages/TasksPage";
+import MemoriesPage from "@/pages/MemoriesPage";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { useI18n } from "@/i18n";
@@ -86,6 +87,7 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/analytics": AnalyticsPage,
   "/logs": LogsPage,
   "/tasks": TasksPage,
+  "/memories": MemoriesPage,
   "/cron": CronPage,
   "/skills": SkillsPage,
   "/config": ConfigPage,
@@ -108,6 +110,7 @@ const BUILTIN_NAV_REST: NavItem[] = [
   },
   { path: "/logs", labelKey: "logs", label: "Logs", icon: FileText },
   { path: "/tasks", labelKey: "tasks", label: "Tasks", icon: Database },
+  { path: "/memories", labelKey: "memories", label: "Memories", icon: Eye },
   { path: "/cron", labelKey: "cron", label: "Cron", icon: Clock },
   { path: "/skills", labelKey: "skills", label: "Skills", icon: Package },
   { path: "/config", labelKey: "config", label: "Config", icon: Settings },

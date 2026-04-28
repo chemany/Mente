@@ -44,6 +44,8 @@ import React, { Fragment, useEffect, useState } from "react";
  *  - `logs:bottom`      — bottom of /logs page (below log viewer)
  *  - `tasks:top`        — top of /tasks page
  *  - `tasks:bottom`     — bottom of /tasks page
+ *  - `memories:top`     — top of /memories page
+ *  - `memories:bottom`  — bottom of /memories page
  *  - `cron:top`         — top of /cron page
  *  - `cron:bottom`      — bottom of /cron page
  *  - `skills:top`       — top of /skills page
@@ -78,6 +80,8 @@ export const KNOWN_SLOT_NAMES = [
   "logs:bottom",
   "tasks:top",
   "tasks:bottom",
+  "memories:top",
+  "memories:bottom",
   "cron:top",
   "cron:bottom",
   "skills:top",
