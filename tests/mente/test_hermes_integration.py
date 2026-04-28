@@ -144,6 +144,72 @@ def test_second_run_receives_first_run_memory(monkeypatch, tmp_path):
     assert "Memory: User prefers concise replies." in seen_requests[1].memory_facts
 
 
+def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_path):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+    class _FakeUuid:
+        def __init__(self, value):
+            self.hex = value
+
+    uuids = iter((_FakeUuid("gatewayfirst"), _FakeUuid("gatewaysecond")))
+    monkeypatch.setattr("mente.integrations.hermes.uuid.uuid4", lambda: next(uuids))
+
+    def _fake_execute(self, request):
+        if request.task_id.endswith("gatewayfirst"):
+            return ExecutionResult(
+                status="success",
+                summary="first",
+                memory_candidates=["User prefers concise replies."],
+            )
+        return ExecutionResult(status="success", summary="second")
+
+    monkeypatch.setattr("mente.integrations.hermes.CodexExecutor.execute", _fake_execute)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    first_result = run_gateway_task(
+        message="first question",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        channel_prompt="be concise",
+        workspace=str(tmp_path),
+    )
+    second_result = run_gateway_task(
+        message="second question",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        channel_prompt="be concise",
+        workspace=str(tmp_path),
+    )
+
+    repository = SQLiteTaskRepository(db_path=task_db_path)
+    second_task = repository.get("mente_gateway_gatewaysecond")
+
+    assert first_result.metadata["memory_promotion"]["promoted_memory_ids"] == [
+        "mente_gateway_gatewayfirst:memory:0"
+    ]
+    assert second_result.metadata["memory_context"]["injected_count"] == 1
+    assert second_task is not None
+    assert second_task.metadata["memory_context"]["selected"][0]["memory_id"] == (
+        "mente_gateway_gatewayfirst:memory:0"
+    )
+
+
 def test_run_cron_task_persists_task_record(tmp_path, monkeypatch):
     db_path = tmp_path / "state.db"
     monkeypatch.setenv("MENTE_TASK_DB_PATH", str(db_path))

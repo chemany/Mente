@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from mente.context_builder.builder import ContextBuilder
+from mente.memory.models import MemoryBuildTrace
 from mente.executors.base import Executor
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import MemoryRepository
@@ -39,13 +41,15 @@ class Orchestrator:
         task.status = TaskStatus.PLANNED
         self.repository.save(task)
 
-        request = self.context_builder.build(task)
+        request, trace = self.context_builder.build_with_trace(task)
+        self._persist_memory_context(task, trace)
         task.status = TaskStatus.CONTEXT_PREPARED
         self.repository.save(task)
 
         task.status = TaskStatus.EXECUTING
         self.repository.save(task)
         result = self.executor.execute(request)
+        self._persist_memory_context(result, trace)
         self._persist_promoted_memory(task, result)
 
         task.status = TaskStatus.PERSISTED
@@ -67,8 +71,29 @@ class Orchestrator:
 
         return result
 
+    def _persist_memory_context(
+        self,
+        target: Task | ExecutionResult,
+        trace: MemoryBuildTrace,
+    ) -> None:
+        try:
+            target.metadata["memory_context"] = trace.model_dump(mode="json")
+        except Exception:
+            logger.exception("failed to serialize memory context diagnostics")
+
     def _persist_promoted_memory(self, task: Task, result: ExecutionResult) -> None:
-        if self.memory_repository is None or self.memory_promoter is None:
+        if self.memory_promoter is None:
+            return
+
+        summary: dict[str, Any] = {
+            "candidate_count": len(result.memory_candidates),
+            "promoted_count": 0,
+            "promoted_memory_ids": [],
+        }
+
+        if self.memory_repository is None:
+            result.metadata["promoted_memory_count"] = 0
+            self._persist_memory_promotion(task, result, summary)
             return
 
         try:
@@ -76,6 +101,22 @@ class Orchestrator:
         except Exception:
             logger.exception("failed to persist promoted memory for task %s", task.task_id)
             result.metadata["promoted_memory_count"] = 0
+            self._persist_memory_promotion(task, result, summary)
             return
 
+        summary["promoted_count"] = len(promoted)
+        summary["promoted_memory_ids"] = [record.memory_id for record in promoted]
         result.metadata["promoted_memory_count"] = len(promoted)
+        self._persist_memory_promotion(task, result, summary)
+
+    def _persist_memory_promotion(
+        self,
+        task: Task,
+        result: ExecutionResult,
+        summary: dict[str, Any],
+    ) -> None:
+        try:
+            task.metadata["memory_promotion"] = dict(summary)
+            result.metadata["memory_promotion"] = dict(summary)
+        except Exception:
+            logger.exception("failed to serialize memory promotion diagnostics for task %s", task.task_id)
