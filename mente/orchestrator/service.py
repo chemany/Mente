@@ -43,6 +43,7 @@ class Orchestrator:
 
         request, trace = self.context_builder.build_with_trace(task)
         self._persist_memory_context(task, trace)
+        self._persist_memory_policy(task, trace)
         task.status = TaskStatus.CONTEXT_PREPARED
         self.repository.save(task)
 
@@ -50,6 +51,7 @@ class Orchestrator:
         self.repository.save(task)
         result = self.executor.execute(request)
         self._persist_memory_context(result, trace)
+        self._persist_memory_policy(result, trace, task)
         self._persist_promoted_memory(task, result)
 
         task.status = TaskStatus.PERSISTED
@@ -80,6 +82,27 @@ class Orchestrator:
             target.metadata["memory_context"] = trace.model_dump(mode="json")
         except Exception:
             logger.exception("failed to serialize memory context diagnostics")
+
+    def _persist_memory_policy(
+        self,
+        target: Task | ExecutionResult,
+        trace: MemoryBuildTrace,
+        task: Task | None = None,
+    ) -> None:
+        if not trace.policy_id:
+            return
+
+        source_task = task or target
+        try:
+            policy = self.context_builder.memory_policy_resolver.resolve(source_task)
+            target.metadata["memory_policy"] = {
+                "policy_id": policy.policy_id,
+                "max_injected_memories": policy.max_injected_memories,
+                "max_total_injected_chars": policy.max_total_injected_chars,
+                "max_promoted_memories": policy.max_promoted_memories,
+            }
+        except Exception:
+            logger.exception("failed to serialize memory policy diagnostics")
 
     def _persist_promoted_memory(self, task: Task, result: ExecutionResult) -> None:
         if self.memory_promoter is None:

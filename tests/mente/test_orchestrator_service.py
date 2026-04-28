@@ -108,7 +108,9 @@ def test_orchestrator_persists_memory_context_and_promotion_metadata():
     persisted = task_repo.get("task_1")
 
     assert result.metadata["memory_context"]["injected_count"] == 1
+    assert result.metadata["memory_policy"]["policy_id"] == "gateway:conversation"
     assert result.metadata["memory_promotion"]["promoted_count"] == 1
     assert persisted is not None
+    assert persisted.metadata["memory_policy"]["policy_id"] == "gateway:conversation"
     assert persisted.metadata["memory_context"]["selected"][0]["memory_id"] == "mem_1"
     assert persisted.metadata["memory_promotion"]["promoted_memory_ids"] == ["task_1:memory:0"]

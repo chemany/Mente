@@ -203,8 +203,10 @@ def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_pat
     assert first_result.metadata["memory_promotion"]["promoted_memory_ids"] == [
         "mente_gateway_gatewayfirst:memory:0"
     ]
+    assert second_result.metadata["memory_policy"]["policy_id"] == "gateway:conversation"
     assert second_result.metadata["memory_context"]["injected_count"] == 1
     assert second_task is not None
+    assert second_task.metadata["memory_policy"]["policy_id"] == "gateway:conversation"
     assert second_task.metadata["memory_context"]["selected"][0]["memory_id"] == (
         "mente_gateway_gatewayfirst:memory:0"
     )
