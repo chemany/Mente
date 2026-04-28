@@ -1,4 +1,15 @@
 {
+  "seed_memories": [
+    {
+      "memory_id": "fixture_mem_1",
+      "session_id": "fixture_gateway_session_1",
+      "task_id": "fixture_gateway_task_0",
+      "task_type": "conversation",
+      "source": "gateway",
+      "scope": "session",
+      "fact": "User prefers concise replies."
+    }
+  ],
   "task": {
     "task_id": "fixture_gateway_task_1",
     "session_id": "fixture_gateway_session_1",
@@ -6,8 +17,8 @@
     "objective": "Continue the active conversation and answer the latest user message.",
     "user_request": "Summarize yesterday's discussion in two bullets.",
     "metadata": {
-      "source": "gateway",
-      "platform": "telegram"
+      "platform": "telegram",
+      "source": "gateway"
     }
   },
   "notes": "Minimal gateway replay fixture"
