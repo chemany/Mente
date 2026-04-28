@@ -1,0 +1,42 @@
+{
+  "suite_id": "memory_policy_smoke",
+  "notes": "Small deterministic policy evaluation suite",
+  "policy_variants": {
+    "tight_gateway": {
+      "policy_id": "gateway:conversation",
+      "allowed_injection_scopes": ["session", "global"],
+      "max_injected_memories": 1,
+      "max_chars_per_injected_fact": 80,
+      "max_total_injected_chars": 120,
+      "max_promoted_memories": 1,
+      "max_chars_per_promoted_fact": 80
+    },
+    "balanced_gateway": {
+      "policy_id": "gateway:conversation",
+      "allowed_injection_scopes": ["session", "global"],
+      "max_injected_memories": 3,
+      "max_chars_per_injected_fact": 160,
+      "max_total_injected_chars": 480,
+      "max_promoted_memories": 3,
+      "max_chars_per_promoted_fact": 160
+    }
+  },
+  "cases": [
+    {
+      "case_id": "gateway_pref_concise",
+      "fixture_path": "tests/mente/fixtures/replay/gateway_conversation.json",
+      "expectations": {
+        "tight_gateway": {
+          "selected_memory_ids": ["fixture_mem_1"],
+          "memory_fact_count": 1,
+          "max_prompt_char_count": 400
+        },
+        "balanced_gateway": {
+          "selected_memory_ids": ["fixture_mem_1"],
+          "memory_fact_count": 1,
+          "max_prompt_char_count": 700
+        }
+      }
+    }
+  ]
+}
