@@ -21,3 +21,21 @@ class MemoryRecord(BaseModel):
     score: float = 1.0
     created_at: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryTraceItem(BaseModel):
+    """Deterministic trace item for memory retrieval diagnostics."""
+
+    memory_id: str
+    scope: str
+    fact: str
+    reason: str
+
+
+class MemoryBuildTrace(BaseModel):
+    """Compact trace of memory retrieval and injection decisions."""
+
+    retrieved_count: int = 0
+    injected_count: int = 0
+    selected: list[MemoryTraceItem] = Field(default_factory=list)
+    skipped: list[MemoryTraceItem] = Field(default_factory=list)
