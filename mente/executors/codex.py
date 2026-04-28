@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 from mente.executors.base import Executor
+from mente.executors.prompting import render_execution_prompt
 from mente.task_core.models import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -30,26 +31,7 @@ class CodexExecutor(Executor):
 
     def build_prompt(self, request: ExecutionRequest) -> str:
         """Build a stable textual prompt from an execution request."""
-        lines = [
-            f"Objective: {request.objective}",
-            f"Task Type: {request.task_type}",
-            f"User Request: {request.user_request}",
-        ]
-
-        if request.constraints:
-            lines.append("Constraints:")
-            lines.extend(f"- {item}" for item in request.constraints)
-        if request.acceptance_criteria:
-            lines.append("Acceptance Criteria:")
-            lines.extend(f"- {item}" for item in request.acceptance_criteria)
-        if request.memory_facts:
-            lines.append("Memory Facts:")
-            lines.extend(f"- {item}" for item in request.memory_facts)
-        if request.skill_refs:
-            lines.append("Skill References:")
-            lines.extend(f"- {item}" for item in request.skill_refs)
-
-        return "\n".join(lines)
+        return render_execution_prompt(request)
 
     def build_command(
         self,

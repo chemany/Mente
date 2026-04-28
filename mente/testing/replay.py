@@ -8,6 +8,7 @@ from typing import Any
 
 from mente.context_builder.builder import ContextBuilder
 from mente.executors.base import Executor
+from mente.executors.prompting import build_prompt_metrics
 from mente.memory.models import MemoryRecord
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import InMemoryMemoryRepository
@@ -101,17 +102,28 @@ def compare_memory_replay(
 
     memory_context = memory_result.metadata.get("memory_context", {})
     memory_promotion = memory_result.metadata.get("memory_promotion", {})
+    memory_policy = memory_result.metadata.get("memory_policy", {})
+    baseline_context = baseline_result.metadata.get("memory_context", {})
+    baseline_promotion = baseline_result.metadata.get("memory_promotion", {})
+    baseline_policy = baseline_result.metadata.get("memory_policy", {})
     selected = memory_context.get("selected", [])
+    baseline_selected = baseline_context.get("selected", [])
 
     return {
         "baseline": {
-            "memory_fact_count": len(baseline_request.memory_facts),
+            **build_prompt_metrics(baseline_request),
             "memory_facts": list(baseline_request.memory_facts),
+            "policy_id": baseline_policy.get("policy_id"),
+            "prompt_budget_char_count": baseline_context.get("prompt_budget_char_count", 0),
+            "selected_memory_ids": [item["memory_id"] for item in baseline_selected],
+            "promoted_memory_ids": list(baseline_promotion.get("promoted_memory_ids", [])),
             "status": baseline_result.status,
         },
         "memory_enabled": {
-            "memory_fact_count": len(memory_request.memory_facts),
+            **build_prompt_metrics(memory_request),
             "memory_facts": list(memory_request.memory_facts),
+            "policy_id": memory_policy.get("policy_id"),
+            "prompt_budget_char_count": memory_context.get("prompt_budget_char_count", 0),
             "selected_memory_ids": [item["memory_id"] for item in selected],
             "promoted_memory_ids": list(memory_promotion.get("promoted_memory_ids", [])),
             "status": memory_result.status,

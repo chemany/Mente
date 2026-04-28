@@ -31,6 +31,7 @@ def build_replay_parser() -> argparse.ArgumentParser:
     parser.add_argument("--executor", choices=("mock", "codex"), default="mock")
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--compare-memory", action="store_true")
+    parser.add_argument("--show-prompt-metrics", action="store_true")
     return parser
 
 
@@ -50,7 +51,20 @@ def main(argv: list[str] | None = None) -> int:
             executor_factory=CodexExecutor if args.executor == "codex" else _MockReplayExecutor,
             workspace=str(Path(args.workspace)),
         )
-        print(json.dumps(report, indent=2, sort_keys=True))
+        if args.show_prompt_metrics:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            concise_report = {
+                mode: {
+                    "status": payload["status"],
+                    "memory_fact_count": payload["memory_fact_count"],
+                    "policy_id": payload["policy_id"],
+                    "selected_memory_ids": payload["selected_memory_ids"],
+                    "promoted_memory_ids": payload["promoted_memory_ids"],
+                }
+                for mode, payload in report.items()
+            }
+            print(json.dumps(concise_report, indent=2, sort_keys=True))
         return 0 if report["baseline"]["status"] == report["memory_enabled"]["status"] == "success" else 1
 
     memory_repository = InMemoryMemoryRepository()
