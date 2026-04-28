@@ -73,6 +73,18 @@ export const api = {
     if (params.cursor !== undefined) qs.set("cursor", String(params.cursor));
     return fetchJSON<DebugTasksResponse>(`/api/debug/tasks?${qs.toString()}`);
   },
+  getDebugMemories: (params: DebugMemoriesParams = {}) => {
+    const qs = new URLSearchParams();
+    if (params.scope) qs.set("scope", params.scope);
+    if (params.session_id) qs.set("session_id", params.session_id);
+    if (params.source) qs.set("source", params.source);
+    if (params.task_type) qs.set("task_type", params.task_type);
+    if (params.memory_scope) qs.set("memory_scope", params.memory_scope);
+    if (params.limit) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
+    if (params.cursor !== undefined) qs.set("cursor", String(params.cursor));
+    return fetchJSON<DebugMemoriesResponse>(`/api/debug/memories?${qs.toString()}`);
+  },
   getAnalytics: (days: number) =>
     fetchJSON<AnalyticsResponse>(`/api/analytics/usage?days=${days}`),
   getConfig: () => fetchJSON<Record<string, unknown>>("/api/config"),
@@ -379,6 +391,48 @@ export interface DebugTasksParams {
   source?: string;
   status?: string;
   task_type?: string;
+  limit?: number;
+  offset?: number;
+  cursor?: number | string;
+}
+
+export interface DebugMemory {
+  memory_id: string;
+  session_id: string | null;
+  task_id: string;
+  task_type: string;
+  source: string;
+  scope: string;
+  fact: string;
+  kind: string;
+  score: number;
+  created_at: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface DebugMemoriesQuery {
+  scope: "recent" | "session";
+  session_id: string | null;
+  source: string | null;
+  task_type: string | null;
+  memory_scope: string | null;
+  limit: number;
+  offset: number;
+}
+
+export interface DebugMemoriesResponse {
+  query: DebugMemoriesQuery;
+  count: number;
+  pagination: TaskPagination;
+  memories: DebugMemory[];
+}
+
+export interface DebugMemoriesParams {
+  scope?: "recent" | "session";
+  session_id?: string;
+  source?: string;
+  task_type?: string;
+  memory_scope?: string;
   limit?: number;
   offset?: number;
   cursor?: number | string;
