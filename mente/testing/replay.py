@@ -9,6 +9,7 @@ from typing import Any
 from mente.context_builder.builder import ContextBuilder
 from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_metrics
+from mente.memory.policy import MemoryPolicy, MemoryPolicyResolver
 from mente.memory.models import MemoryRecord
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import InMemoryMemoryRepository
@@ -54,12 +55,41 @@ def _build_seeded_memory_repository(fixture: dict[str, Any], *, enabled: bool) -
     return repository
 
 
+def _build_memory_policy_resolver(
+    task: Task,
+    policy_override: MemoryPolicy | None,
+) -> MemoryPolicyResolver:
+    resolver = MemoryPolicyResolver.default()
+    if policy_override is None:
+        return resolver
+
+    candidates = []
+    source = str(task.metadata.get("source") or "").strip()
+    if source:
+        candidates.append(f"{source}:{task.task_type}")
+    candidates.append(task.task_type)
+    candidates.append(resolver.default_policy_id)
+
+    profiles = dict(resolver.profiles)
+    for policy_key in candidates:
+        if policy_key in profiles:
+            profiles[policy_key] = policy_override
+            break
+    else:
+        profiles[resolver.default_policy_id] = policy_override
+    return MemoryPolicyResolver(
+        profiles=profiles,
+        default_policy_id=resolver.default_policy_id,
+    )
+
+
 def _run_replay_mode(
     fixture: dict[str, Any],
     *,
     executor_factory,
     workspace: str,
     memory_enabled: bool,
+    policy_override: MemoryPolicy | None = None,
 ) -> tuple[ExecutionResult, Any]:
     task = build_task_from_fixture(fixture).model_copy(deep=True)
     if task.workspace is None:
@@ -67,15 +97,17 @@ def _run_replay_mode(
 
     memory_repository = _build_seeded_memory_repository(fixture, enabled=memory_enabled)
     executor = _CaptureExecutor(executor_factory())
+    memory_policy_resolver = _build_memory_policy_resolver(task, policy_override)
     orchestrator = Orchestrator(
         repository=InMemoryTaskRepository(),
         context_builder=ContextBuilder(
             default_workspace=workspace,
             memory_repository=memory_repository,
+            memory_policy_resolver=memory_policy_resolver,
         ),
         executor=executor,
         memory_repository=memory_repository,
-        memory_promoter=MemoryPromoter(),
+        memory_promoter=MemoryPromoter(memory_policy_resolver=memory_policy_resolver),
     )
     result = orchestrator.run(task)
     return result, executor.last_request
@@ -85,6 +117,7 @@ def compare_memory_replay(
     fixture: dict[str, Any],
     executor_factory,
     workspace: str = ".",
+    policy_override: MemoryPolicy | None = None,
 ) -> dict[str, Any]:
     """Compare a replay run with memory disabled versus enabled."""
     baseline_result, baseline_request = _run_replay_mode(
@@ -92,12 +125,14 @@ def compare_memory_replay(
         executor_factory=executor_factory,
         workspace=workspace,
         memory_enabled=False,
+        policy_override=policy_override,
     )
     memory_result, memory_request = _run_replay_mode(
         fixture,
         executor_factory=executor_factory,
         workspace=workspace,
         memory_enabled=True,
+        policy_override=policy_override,
     )
 
     memory_context = memory_result.metadata.get("memory_context", {})
