@@ -47,6 +47,14 @@ from gateway.platforms.base import (
     SendResult,
     is_network_accessible,
 )
+from mente.task_core.repository import SQLiteTaskRepository
+from mente.task_core.task_query import (
+    TaskQueryError,
+    execute_task_query,
+    parse_http_task_query,
+    serialize_task,
+    serialize_task_query,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2009,6 +2017,29 @@ class APIServerAdapter(BasePlatformAdapter):
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
+    async def _handle_debug_tasks(self, request: "web.Request") -> "web.Response":
+        """GET /api/debug/tasks — inspect persisted Mente task records."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        try:
+            query = parse_http_task_query(request.query)
+        except TaskQueryError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+        try:
+            page = execute_task_query(query, SQLiteTaskRepository)
+            return web.json_response(
+                {
+                    "query": serialize_task_query(query),
+                    "count": page["count"],
+                    "pagination": page["pagination"],
+                    "tasks": [serialize_task(task) for task in page["tasks"]],
+                }
+            )
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     async def _handle_create_job(self, request: "web.Request") -> "web.Response":
         """POST /api/jobs — create a new cron job."""
         auth_err = self._check_auth(request)
@@ -2627,6 +2658,7 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_delete("/v1/responses/{response_id}", self._handle_delete_response)
             # Cron jobs management API
             self._app.router.add_get("/api/jobs", self._handle_list_jobs)
+            self._app.router.add_get("/api/debug/tasks", self._handle_debug_tasks)
             self._app.router.add_post("/api/jobs", self._handle_create_job)
             self._app.router.add_get("/api/jobs/{job_id}", self._handle_get_job)
             self._app.router.add_patch("/api/jobs/{job_id}", self._handle_update_job)

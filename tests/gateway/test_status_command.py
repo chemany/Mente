@@ -10,6 +10,7 @@ import pytest
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.base import MessageEvent
 from gateway.session import SessionEntry, SessionSource, build_session_key
+from mente.task_core.models import Task, TaskStatus
 
 
 def _make_source(platform: Platform = Platform.TELEGRAM) -> SessionSource:
@@ -180,6 +181,337 @@ async def test_tasks_alias_routes_to_agents_command(monkeypatch):
     result = await runner._handle_message(_make_event("/tasks"))
 
     assert "Active Agents & Tasks" in result
+
+
+@pytest.mark.asyncio
+async def test_tasks_command_routes_to_dedicated_handler():
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-1",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        total_tokens=0,
+    )
+    runner = _make_runner(session_entry)
+    runner._handle_tasks_command = AsyncMock(return_value="mente tasks")
+    runner._handle_agents_command = AsyncMock(return_value="agents")
+
+    result = await runner._handle_message(_make_event("/tasks recent"))
+
+    assert result == "mente tasks"
+    runner._handle_tasks_command.assert_awaited_once()
+    runner._handle_agents_command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tasks_command_includes_recent_mente_task_history(monkeypatch):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-1",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        total_tokens=0,
+    )
+    runner = _make_runner(session_entry)
+    runner._background_tasks = set()
+
+    class _FakeRegistry:
+        def list_sessions(self):
+            return []
+
+    class _FakeRepo:
+        def __init__(self):
+            self.closed = False
+            self.session_requests = []
+            self.recent_requests = []
+
+        def list_by_session(self, session_id, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.session_requests.append((session_id, limit, offset, source, status, task_type))
+            return []
+
+        def list_recent(self, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.recent_requests.append((limit, offset, source, status, task_type))
+            return [
+                Task(
+                    task_id="mente_gateway_recent",
+                    session_id="other-session",
+                    task_type="conversation",
+                    objective="Recent task",
+                    user_request="Recent task",
+                    status=TaskStatus.SUCCEEDED,
+                    metadata={"source": "gateway"},
+                )
+            ]
+
+        def close(self):
+            self.closed = True
+
+    fake_repo = _FakeRepo()
+    monkeypatch.setattr("tools.process_registry.process_registry", _FakeRegistry())
+    monkeypatch.setattr(gateway_run, "SQLiteTaskRepository", lambda: fake_repo, raising=False)
+
+    result = await runner._handle_message(_make_event("/tasks"))
+
+    assert "**Recent Mente tasks:** 1" in result
+    assert "`mente_gateway_recent` · succeeded · conversation · gateway" in result
+    assert fake_repo.session_requests == [("sess-1", 6, 0, None, None, None)]
+    assert fake_repo.recent_requests == [(6, 0, "gateway", None, None)]
+    assert fake_repo.closed is True
+
+
+@pytest.mark.asyncio
+async def test_tasks_recent_filter_uses_source_and_limit(monkeypatch):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-1",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        total_tokens=0,
+    )
+    runner = _make_runner(session_entry)
+    runner._background_tasks = set()
+
+    class _FakeRepo:
+        def __init__(self):
+            self.closed = False
+            self.session_requests = []
+            self.recent_requests = []
+
+        def list_by_session(self, session_id, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.session_requests.append((session_id, limit, offset, source, status, task_type))
+            return []
+
+        def list_recent(self, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.recent_requests.append((limit, offset, source, status, task_type))
+            return [
+                Task(
+                    task_id="mente_cron_recent",
+                    session_id="cron-session",
+                    task_type="cron",
+                    objective="Nightly sync",
+                    user_request="Nightly sync",
+                    status=TaskStatus.SUCCEEDED,
+                    metadata={"source": "cron"},
+                )
+            ]
+
+        def close(self):
+            self.closed = True
+
+    fake_repo = _FakeRepo()
+    monkeypatch.setattr(gateway_run, "SQLiteTaskRepository", lambda: fake_repo, raising=False)
+
+    result = await runner._handle_message(_make_event("/tasks recent source=cron limit=1"))
+
+    assert "Mente Task History" in result
+    assert "**Scope:** recent" in result
+    assert "**Source:** cron" in result
+    assert "`mente_cron_recent` · succeeded · cron · cron" in result
+    assert fake_repo.session_requests == []
+    assert fake_repo.recent_requests == [(2, 0, "cron", None, None)]
+    assert fake_repo.closed is True
+
+
+@pytest.mark.asyncio
+async def test_tasks_session_filter_uses_explicit_session_id_and_limit(monkeypatch):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-current",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        total_tokens=0,
+    )
+    runner = _make_runner(session_entry)
+    runner._background_tasks = set()
+
+    class _FakeRepo:
+        def __init__(self):
+            self.closed = False
+            self.session_requests = []
+            self.recent_requests = []
+
+        def list_by_session(self, session_id, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.session_requests.append((session_id, limit, offset, source, status, task_type))
+            return [
+                Task(
+                    task_id="mente_gateway_session",
+                    session_id=session_id,
+                    task_type="conversation",
+                    objective="Follow-up",
+                    user_request="Follow-up",
+                    status=TaskStatus.EXECUTING,
+                    metadata={"source": "gateway"},
+                )
+            ]
+
+        def list_recent(self, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.recent_requests.append((limit, offset, source, status, task_type))
+            return []
+
+        def close(self):
+            self.closed = True
+
+    fake_repo = _FakeRepo()
+    monkeypatch.setattr(gateway_run, "SQLiteTaskRepository", lambda: fake_repo, raising=False)
+
+    result = await runner._handle_message(_make_event("/tasks session session_id=sess-target limit=2"))
+
+    assert "Mente Task History" in result
+    assert "**Scope:** session" in result
+    assert "**Session ID:** `sess-target`" in result
+    assert "`mente_gateway_session` · executing · conversation · gateway · this session" in result
+    assert fake_repo.session_requests == [("sess-target", 3, 0, None, None, None)]
+    assert fake_repo.recent_requests == []
+    assert fake_repo.closed is True
+
+
+@pytest.mark.asyncio
+async def test_tasks_recent_filter_forwards_status_source_and_task_type(monkeypatch):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-1",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        total_tokens=0,
+    )
+    runner = _make_runner(session_entry)
+    runner._background_tasks = set()
+
+    class _FakeRepo:
+        def __init__(self):
+            self.closed = False
+            self.session_requests = []
+            self.recent_requests = []
+
+        def list_by_session(self, session_id, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.session_requests.append((session_id, limit, offset, source, status, task_type))
+            return []
+
+        def list_recent(self, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.recent_requests.append((limit, offset, source, status, task_type))
+            return [
+                Task(
+                    task_id="mente_cron_succeeded",
+                    session_id="cron-session",
+                    task_type="cron",
+                    objective="Nightly sync",
+                    user_request="Nightly sync",
+                    status=TaskStatus.SUCCEEDED,
+                    metadata={"source": "cron"},
+                )
+            ]
+
+        def close(self):
+            self.closed = True
+
+    fake_repo = _FakeRepo()
+    monkeypatch.setattr(gateway_run, "SQLiteTaskRepository", lambda: fake_repo, raising=False)
+
+    result = await runner._handle_message(
+        _make_event("/tasks recent source=cron status=succeeded task_type=cron limit=1")
+    )
+
+    assert "Mente Task History" in result
+    assert "**Source:** cron" in result
+    assert "**Status:** succeeded" in result
+    assert "**Task Type:** cron" in result
+    assert "`mente_cron_succeeded` · succeeded · cron · cron" in result
+    assert fake_repo.session_requests == []
+    assert fake_repo.recent_requests == [(2, 0, "cron", "succeeded", "cron")]
+    assert fake_repo.closed is True
+
+
+@pytest.mark.asyncio
+async def test_tasks_recent_filter_renders_pagination_metadata_and_uses_offset(monkeypatch):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-1",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        total_tokens=0,
+    )
+    runner = _make_runner(session_entry)
+    runner._background_tasks = set()
+
+    class _FakeRepo:
+        def __init__(self):
+            self.closed = False
+            self.session_requests = []
+            self.recent_requests = []
+
+        def list_by_session(self, session_id, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.session_requests.append((session_id, limit, offset, source, status, task_type))
+            return []
+
+        def list_recent(self, limit=20, offset=0, source=None, status=None, task_type=None):
+            self.recent_requests.append((limit, offset, source, status, task_type))
+            return [
+                Task(
+                    task_id="mente_task_2",
+                    session_id="sess-2",
+                    task_type="cron",
+                    objective="Task 2",
+                    user_request="Task 2",
+                    status=TaskStatus.EXECUTING,
+                    metadata={"source": "cron"},
+                ),
+                Task(
+                    task_id="mente_task_1",
+                    session_id="sess-1",
+                    task_type="cron",
+                    objective="Task 1",
+                    user_request="Task 1",
+                    status=TaskStatus.SUCCEEDED,
+                    metadata={"source": "cron"},
+                ),
+                Task(
+                    task_id="mente_task_0",
+                    session_id="sess-0",
+                    task_type="cron",
+                    objective="Task 0",
+                    user_request="Task 0",
+                    status=TaskStatus.BLOCKED,
+                    metadata={"source": "cron"},
+                ),
+            ]
+
+        def close(self):
+            self.closed = True
+
+    fake_repo = _FakeRepo()
+    monkeypatch.setattr(gateway_run, "SQLiteTaskRepository", lambda: fake_repo, raising=False)
+
+    result = await runner._handle_message(_make_event("/tasks recent source=cron limit=2 offset=1"))
+
+    assert "**Offset:** 1" in result
+    assert "**Has More:** yes" in result
+    assert "**Next Offset:** 3" in result
+    assert "`mente_task_2` · executing · cron · cron" in result
+    assert "`mente_task_1` · succeeded · cron · cron · this session" in result
+    assert fake_repo.recent_requests == [(3, 1, "cron", None, None)]
+    assert fake_repo.closed is True
 
 
 @pytest.mark.asyncio

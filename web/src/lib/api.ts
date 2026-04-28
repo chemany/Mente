@@ -61,6 +61,18 @@ export const api = {
     if (params.component && params.component !== "all") qs.set("component", params.component);
     return fetchJSON<LogsResponse>(`/api/logs?${qs.toString()}`);
   },
+  getDebugTasks: (params: DebugTasksParams = {}) => {
+    const qs = new URLSearchParams();
+    if (params.scope) qs.set("scope", params.scope);
+    if (params.session_id) qs.set("session_id", params.session_id);
+    if (params.source) qs.set("source", params.source);
+    if (params.status) qs.set("status", params.status);
+    if (params.task_type) qs.set("task_type", params.task_type);
+    if (params.limit) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
+    if (params.cursor !== undefined) qs.set("cursor", String(params.cursor));
+    return fetchJSON<DebugTasksResponse>(`/api/debug/tasks?${qs.toString()}`);
+  },
   getAnalytics: (days: number) =>
     fetchJSON<AnalyticsResponse>(`/api/analytics/usage?days=${days}`),
   getConfig: () => fetchJSON<Record<string, unknown>>("/api/config"),
@@ -312,6 +324,64 @@ export interface SessionMessagesResponse {
 export interface LogsResponse {
   file: string;
   lines: string[];
+}
+
+export interface DebugTask {
+  task_id: string;
+  session_id: string;
+  task_type: string;
+  objective: string;
+  user_request: string;
+  status: string;
+  workspace: string | null;
+  constraints: string[];
+  allowed_tools: string[];
+  memory_facts: string[];
+  skill_refs: string[];
+  artifacts_in: string[];
+  acceptance_criteria: string[];
+  budget: Record<string, unknown>;
+  execution_mode: string | null;
+  resume_token: string | null;
+  metadata: Record<string, unknown>;
+  source: string;
+}
+
+export interface DebugTasksQuery {
+  scope: "recent" | "session";
+  session_id: string | null;
+  source: string | null;
+  status: string | null;
+  task_type: string | null;
+  limit: number;
+  offset: number;
+}
+
+export interface TaskPagination {
+  limit: number;
+  offset: number;
+  returned: number;
+  has_more: boolean;
+  next_offset: number | null;
+  next_cursor: string | null;
+}
+
+export interface DebugTasksResponse {
+  query: DebugTasksQuery;
+  count: number;
+  pagination: TaskPagination;
+  tasks: DebugTask[];
+}
+
+export interface DebugTasksParams {
+  scope?: "recent" | "session";
+  session_id?: string;
+  source?: string;
+  status?: string;
+  task_type?: string;
+  limit?: number;
+  offset?: number;
+  cursor?: number | string;
 }
 
 export interface AnalyticsDailyEntry {

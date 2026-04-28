@@ -122,6 +122,64 @@ _LOCK_DIR = _hermes_home / "cron"
 _LOCK_FILE = _LOCK_DIR / ".tick.lock"
 
 
+def _run_mente_cron_job(
+    *,
+    job: dict,
+    prompt: str,
+    session_id: str,
+    workspace: str | None = None,
+) -> tuple[bool, str, str, Optional[str]]:
+    """Run a cron job through the Mente task bridge."""
+    from mente.integrations.hermes import run_cron_task
+
+    job_id = job["id"]
+    job_name = job["name"]
+    result = run_cron_task(
+        job=job,
+        prompt=prompt,
+        session_id=session_id,
+        workspace=workspace,
+    )
+    final_response = result.summary or ""
+
+    if result.status == "success":
+        logged_response = final_response if final_response else "(No response generated)"
+        output = f"""# Cron Job: {job_name}
+
+**Job ID:** {job_id}
+**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}
+**Schedule:** {job.get('schedule_display', 'N/A')}
+
+## Prompt
+
+{prompt}
+
+## Response
+
+{logged_response}
+"""
+        return True, output, final_response, None
+
+    error_msg = result.summary or result.failure_reason or "Mente task failed"
+    output = f"""# Cron Job: {job_name} (FAILED)
+
+**Job ID:** {job_id}
+**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}
+**Schedule:** {job.get('schedule_display', 'N/A')}
+
+## Prompt
+
+{prompt}
+
+## Error
+
+```
+{error_msg}
+```
+"""
+    return False, output, "", error_msg
+
+
 def _resolve_origin(job: dict) -> Optional[dict]:
     """Extract origin info from a job, preserving any extra routing metadata."""
     origin = job.get("origin")
@@ -864,6 +922,14 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         logger.info("Job '%s': using workdir %s", job_id, _job_workdir)
 
     try:
+        if os.getenv("HERMES_CRON_EXECUTOR", "").strip().lower() == "mente":
+            return _run_mente_cron_job(
+                job=job,
+                prompt=prompt,
+                session_id=_cron_session_id,
+                workspace=_job_workdir,
+            )
+
         # Re-read .env and config.yaml fresh every run so provider/key
         # changes take effect without a gateway restart.
         from dotenv import load_dotenv

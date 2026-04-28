@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import re
-import shlex
 import sys
 import signal
 import tempfile
@@ -90,6 +89,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Resolve Hermes home directory (respects HERMES_HOME override)
 from hermes_constants import get_hermes_home
 from utils import atomic_yaml_write, base_url_host_matches, is_truthy_value
+from mente.task_core.task_query import execute_task_query, parse_gateway_task_query
+from mente.task_core.repository import SQLiteTaskRepository
 _hermes_home = get_hermes_home()
 
 # Load environment variables from ~/.hermes/.env first.
@@ -98,6 +99,153 @@ from dotenv import load_dotenv  # backward-compat for tests that monkeypatch thi
 from hermes_cli.env_loader import load_hermes_dotenv
 _env_path = _hermes_home / '.env'
 load_hermes_dotenv(hermes_home=_hermes_home, project_env=Path(__file__).resolve().parents[1] / '.env')
+
+
+def _run_mente_gateway_turn(
+    *,
+    message: str,
+    context_prompt: str,
+    history: List[Dict[str, Any]],
+    source,
+    session_id: str,
+    session_key: str | None = None,
+    channel_prompt: str | None = None,
+) -> Dict[str, Any]:
+    """Run a gateway turn through the Mente task bridge."""
+    from mente.integrations.hermes import run_gateway_task
+
+    result = run_gateway_task(
+        message=message,
+        context_prompt=context_prompt,
+        history=history,
+        source=source,
+        session_id=session_id,
+        session_key=session_key,
+        channel_prompt=channel_prompt,
+    )
+
+    if result.status == "success":
+        final_response = result.summary or ""
+        failed = False
+    else:
+        final_response = f"⚠️ {result.summary or result.failure_reason or 'Task failed'}"
+        failed = True
+
+    return {
+        "final_response": final_response,
+        "last_reasoning": None,
+        "messages": [],
+        "api_calls": 0,
+        "failed": failed,
+        "compression_exhausted": False,
+        "tools": [],
+        "history_offset": len(history),
+        "last_prompt_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "model": None,
+        "session_id": session_id,
+        "response_previewed": False,
+    }
+
+
+def _load_mente_task_history(session_id: str, limit: int = 6):
+    """Load recent Mente task history for the current session."""
+    repo = SQLiteTaskRepository()
+    try:
+        tasks = repo.list_by_session(session_id, limit=limit)
+        if tasks:
+            return tasks
+        return repo.list_recent(limit=limit, source="gateway")
+    except Exception as exc:
+        logger.debug("Failed to load Mente task history for session %s: %s", session_id, exc)
+        return []
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
+
+
+def _format_mente_task_history(session_id: str, limit: int = 6) -> list[str]:
+    """Render a compact Mente task history block for /tasks."""
+    tasks = _load_mente_task_history(session_id, limit=limit)
+    if not tasks:
+        return []
+
+    lines = [
+        "",
+        f"**Recent Mente tasks:** {len(tasks)}",
+    ]
+    for idx, task in enumerate(tasks, 1):
+        source = str(task.metadata.get("source") or "unknown")
+        current = " · this session" if task.session_id == session_id else ""
+        lines.append(
+            f"{idx}. `{task.task_id}` · {task.status.value} · "
+            f"{task.task_type} · {source}{current}"
+        )
+    return lines
+
+
+def _parse_mente_tasks_query(raw_args: str, default_session_id: str) -> dict[str, Any]:
+    """Parse `/tasks ...` filter arguments into a structured query."""
+    return parse_gateway_task_query(raw_args, default_session_id)
+
+
+def _query_mente_tasks(query: dict[str, Any]) -> dict[str, Any]:
+    """Run a parsed Mente task query against the repository."""
+    return execute_task_query(query, SQLiteTaskRepository)
+
+
+def _render_mente_tasks_query(query: dict[str, Any]) -> str:
+    """Render a focused `/tasks ...` query response."""
+    if query["help"]:
+        return (
+            "Usage: `/tasks [recent|all|session] [session_id=<id>] "
+            "[source=gateway|cron] [status=<state>] [task_type=<name>] [limit=<n>] [offset=<n>]`\n"
+            "Examples: `/tasks recent source=cron status=succeeded task_type=cron limit=5 offset=0`, "
+            "`/tasks session session_id=sess-123 status=executing limit=10 offset=10`"
+        )
+    if query["error"]:
+        return f"⚠️ {query['error']}"
+
+    page = _query_mente_tasks(query)
+    tasks = page["tasks"]
+    pagination = page["pagination"]
+    lines = [
+        "🧠 **Mente Task History**",
+        "",
+        f"**Scope:** {query['scope']}",
+        f"**Limit:** {query['limit']}",
+    ]
+    if query["scope"] == "session":
+        lines.append(f"**Session ID:** `{query['session_id']}`")
+    if query["source"]:
+        lines.append(f"**Source:** {query['source']}")
+    if query["status"]:
+        lines.append(f"**Status:** {query['status']}")
+    if query["task_type"]:
+        lines.append(f"**Task Type:** {query['task_type']}")
+    if query["offset"] > 0 or pagination["has_more"]:
+        lines.append(f"**Offset:** {query['offset']}")
+        lines.append(f"**Has More:** {'yes' if pagination['has_more'] else 'no'}")
+        if pagination["next_offset"] is not None:
+            lines.append(f"**Next Offset:** {pagination['next_offset']}")
+
+    if not tasks:
+        lines.extend(["", "No matching Mente tasks found."])
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append(f"**Tasks:** {len(tasks)}")
+    for idx, task in enumerate(tasks, 1):
+        source = str(task.metadata.get("source") or "unknown")
+        current = " · this session" if task.session_id == query["session_id"] else ""
+        lines.append(
+            f"{idx}. `{task.task_id}` · {task.status.value} · "
+            f"{task.task_type} · {source}{current}"
+        )
+    return "\n".join(lines)
 
 
 _DOCKER_VOLUME_SPEC_RE = re.compile(r"^(?P<host>.+):(?P<container>/[^:]+?)(?::(?P<options>[^:]+))?$")
@@ -3749,6 +3897,8 @@ class GatewayRunner:
 
             # /agents (/tasks alias) should be query-only and never interrupt.
             if _cmd_def_inner and _cmd_def_inner.name == "agents":
+                if event.get_command() == "tasks":
+                    return await self._handle_tasks_command(event)
                 return await self._handle_agents_command(event)
 
             # /background must bypass the running-agent guard — it starts a
@@ -3974,6 +4124,8 @@ class GatewayRunner:
             return await self._handle_status_command(event)
 
         if canonical == "agents":
+            if event.get_command() == "tasks":
+                return await self._handle_tasks_command(event)
             return await self._handle_agents_command(event)
 
         if canonical == "restart":
@@ -5527,6 +5679,7 @@ class GatewayRunner:
 
         now = time.time()
         current_session_key = self._session_key_for_source(event.source)
+        session_entry = self.session_store.get_or_create_session(event.source)
 
         running_agents: dict = getattr(self, "_running_agents", {}) or {}
         running_started: dict = getattr(self, "_running_agents_ts", {}) or {}
@@ -5605,11 +5758,25 @@ class GatewayRunner:
             ]
         )
 
-        if not agent_rows and not running_processes and not background_tasks:
+        mente_history_lines = _format_mente_task_history(session_entry.session_id)
+        if mente_history_lines:
+            lines.extend(mente_history_lines)
+
+        if not agent_rows and not running_processes and not background_tasks and not mente_history_lines:
             lines.append("")
             lines.append("No active agents or running tasks.")
 
         return "\n".join(lines)
+
+    async def _handle_tasks_command(self, event: MessageEvent) -> str:
+        """Handle /tasks command - focused Mente task debug queries."""
+        raw_args = event.get_command_args().strip()
+        if not raw_args:
+            return await self._handle_agents_command(event)
+
+        session_entry = self.session_store.get_or_create_session(event.source)
+        query = _parse_mente_tasks_query(raw_args, session_entry.session_id)
+        return _render_mente_tasks_query(query)
     
     async def _handle_stop_command(self, event: MessageEvent) -> str:
         """Handle /stop command - interrupt a running agent.
@@ -9591,6 +9758,18 @@ class GatewayRunner:
                 session_key=session_key,
                 run_generation=run_generation,
                 event_message_id=event_message_id,
+            )
+
+        if os.getenv("HERMES_GATEWAY_EXECUTOR", "").strip().lower() == "mente":
+            return await asyncio.to_thread(
+                _run_mente_gateway_turn,
+                message=message,
+                context_prompt=context_prompt,
+                history=history,
+                source=source,
+                session_id=session_id,
+                session_key=session_key,
+                channel_prompt=channel_prompt,
             )
 
         from run_agent import AIAgent

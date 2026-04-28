@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Optional
 
@@ -74,10 +75,14 @@ def run_oneshot(
     # We'll print the final response to the real stdout at the end.
     real_stdout = sys.stdout
     devnull = open(os.devnull, "w")
+    route_to_mente = os.getenv("HERMES_ONESHOT_EXECUTOR", "").strip().lower() == "mente"
 
     try:
         with redirect_stdout(devnull), redirect_stderr(devnull):
-            response = _run_agent(prompt, model=model, provider=provider)
+            if route_to_mente:
+                response = _run_mente(prompt, model=model, provider=provider)
+            else:
+                response = _run_agent(prompt, model=model, provider=provider)
     finally:
         try:
             devnull.close()
@@ -186,6 +191,40 @@ def _run_agent(
     agent.tool_gen_callback = None
 
     return agent.chat(prompt) or ""
+
+
+def _run_mente(
+    prompt: str,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> str:
+    """Route a oneshot prompt through the Phase 1 Mente runtime."""
+    from mente.context_builder.builder import ContextBuilder
+    from mente.executors.codex import CodexExecutor
+    from mente.orchestrator.service import Orchestrator
+    from mente.task_core.models import Task
+    from mente.task_core.repository import InMemoryTaskRepository
+
+    task = Task(
+        task_id=f"mente_{uuid.uuid4().hex}",
+        session_id=f"oneshot_{uuid.uuid4().hex}",
+        task_type="engineering",
+        objective=prompt,
+        user_request=prompt,
+        workspace=os.getcwd(),
+        metadata={
+            "model": model,
+            "provider": provider,
+            "source": "oneshot",
+        },
+    )
+    orchestrator = Orchestrator(
+        repository=InMemoryTaskRepository(),
+        context_builder=ContextBuilder(default_workspace=os.getcwd()),
+        executor=CodexExecutor(),
+    )
+    result = orchestrator.run(task)
+    return result.summary
 
 
 def _oneshot_clarify_callback(question: str, choices=None) -> str:

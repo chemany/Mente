@@ -76,6 +76,7 @@ export interface Translations {
       logs: string;
       sessions: string;
       skills: string;
+      tasks: string;
     };
     modelToolsSheetSubtitle: string;
     modelToolsSheetTitle: string;
@@ -183,6 +184,34 @@ export interface Translations {
     component: string;
     lines: string;
     noLogLines: string;
+  };
+
+  // ── Tasks page ──
+  tasks: {
+    filters: string;
+    scope: string;
+    scopeRecent: string;
+    scopeSession: string;
+    source: string;
+    allSources: string;
+    status: string;
+    allStatuses: string;
+    limit: string;
+    sessionId: string;
+    sessionPlaceholder: string;
+    taskType: string;
+    taskTypePlaceholder: string;
+    applyFilters: string;
+    resetFilters: string;
+    returned: string;
+    offset: string;
+    nextCursor: string;
+    queryScope: string;
+    sessionRequired: string;
+    noTasks: string;
+    rawTask: string;
+    previousPage: string;
+    nextPage: string;
   };
 
   // ── Cron page ──

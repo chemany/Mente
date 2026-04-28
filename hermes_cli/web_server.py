@@ -47,6 +47,14 @@ from hermes_cli.config import (
     redact_key,
 )
 from gateway.status import get_running_pid, read_runtime_status
+from mente.task_core.repository import SQLiteTaskRepository
+from mente.task_core.task_query import (
+    TaskQueryError,
+    execute_task_query,
+    parse_http_task_query,
+    serialize_task,
+    serialize_task_query,
+)
 
 try:
     from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -2012,6 +2020,33 @@ async def get_logs(
         needle = search.lower()
         result = [l for l in result if needle in l.lower()][-min(lines, 500):]
     return {"file": file, "lines": result}
+
+
+# ---------------------------------------------------------------------------
+# Mente task debug endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/debug/tasks")
+async def get_debug_tasks(request: Request):
+    """Inspect persisted Mente task records for dashboard debugging."""
+    try:
+        query = parse_http_task_query(request.query_params)
+    except TaskQueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        page = execute_task_query(query, SQLiteTaskRepository)
+    except Exception as exc:
+        _log.exception("GET /api/debug/tasks failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "query": serialize_task_query(query),
+        "count": page["count"],
+        "pagination": page["pagination"],
+        "tasks": [serialize_task(task) for task in page["tasks"]],
+    }
 
 
 # ---------------------------------------------------------------------------

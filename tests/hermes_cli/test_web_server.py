@@ -328,6 +328,170 @@ class TestWebServerEndpoints:
         resp = unauth_client.get("/api/status")
         assert resp.status_code == 200
 
+    def test_get_debug_tasks_recent_with_filters(self, monkeypatch):
+        """GET /api/debug/tasks should expose filtered recent task records."""
+        import hermes_cli.web_server as web_server
+        from mente.task_core.models import Task, TaskStatus
+
+        calls = []
+        task = Task(
+            task_id="task-001",
+            session_id="sess-123",
+            task_type="cron",
+            objective="Run report",
+            user_request="Run the daily report",
+            status=TaskStatus.SUCCEEDED,
+            workspace="/tmp/workspace",
+            metadata={"source": "cron"},
+        )
+
+        class FakeRepo:
+            def list_recent(self, limit=20, offset=0, source=None, status=None, task_type=None):
+                calls.append(
+                    {
+                        "limit": limit,
+                        "offset": offset,
+                        "source": source,
+                        "status": status,
+                        "task_type": task_type,
+                    }
+                )
+                return [task]
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(web_server, "SQLiteTaskRepository", FakeRepo)
+
+        resp = self.client.get(
+            "/api/debug/tasks?scope=recent&source=cron&status=succeeded&task_type=cron&limit=1"
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["query"] == {
+            "scope": "recent",
+            "session_id": None,
+            "source": "cron",
+            "status": "succeeded",
+            "task_type": "cron",
+            "limit": 1,
+            "offset": 0,
+        }
+        assert data["count"] == 1
+        assert data["pagination"] == {
+            "limit": 1,
+            "offset": 0,
+            "returned": 1,
+            "has_more": False,
+            "next_offset": None,
+            "next_cursor": None,
+        }
+        assert data["tasks"][0]["task_id"] == "task-001"
+        assert data["tasks"][0]["source"] == "cron"
+        assert calls == [
+            {
+                "limit": 2,
+                "offset": 0,
+                "source": "cron",
+                "status": "succeeded",
+                "task_type": "cron",
+            }
+        ]
+
+    def test_get_debug_tasks_supports_cursor_alias(self, monkeypatch):
+        """GET /api/debug/tasks should treat cursor as an offset alias."""
+        import hermes_cli.web_server as web_server
+        from mente.task_core.models import Task, TaskStatus
+
+        calls = []
+
+        class FakeRepo:
+            def list_recent(self, limit=20, offset=0, source=None, status=None, task_type=None):
+                calls.append(
+                    {
+                        "limit": limit,
+                        "offset": offset,
+                        "source": source,
+                        "status": status,
+                        "task_type": task_type,
+                    }
+                )
+                return [
+                    Task(
+                        task_id="task-010",
+                        session_id="sess-123",
+                        task_type="gateway_message",
+                        objective="Inspect task 10",
+                        user_request="Inspect task 10",
+                        status=TaskStatus.SUCCEEDED,
+                        metadata={"source": "gateway"},
+                    ),
+                    Task(
+                        task_id="task-011",
+                        session_id="sess-123",
+                        task_type="gateway_message",
+                        objective="Inspect task 11",
+                        user_request="Inspect task 11",
+                        status=TaskStatus.SUCCEEDED,
+                        metadata={"source": "gateway"},
+                    ),
+                    Task(
+                        task_id="task-012",
+                        session_id="sess-123",
+                        task_type="gateway_message",
+                        objective="Inspect task 12",
+                        user_request="Inspect task 12",
+                        status=TaskStatus.SUCCEEDED,
+                        metadata={"source": "gateway"},
+                    ),
+                ]
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(web_server, "SQLiteTaskRepository", FakeRepo)
+
+        resp = self.client.get("/api/debug/tasks?scope=recent&cursor=1&limit=2")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["query"]["offset"] == 1
+        assert data["count"] == 2
+        assert data["pagination"] == {
+            "limit": 2,
+            "offset": 1,
+            "returned": 2,
+            "has_more": True,
+            "next_offset": 3,
+            "next_cursor": "3",
+        }
+        assert [task["task_id"] for task in data["tasks"]] == ["task-010", "task-011"]
+        assert calls == [
+            {
+                "limit": 3,
+                "offset": 1,
+                "source": None,
+                "status": None,
+                "task_type": None,
+            }
+        ]
+
+    def test_get_debug_tasks_rejects_invalid_status(self):
+        """GET /api/debug/tasks should validate task filters."""
+        resp = self.client.get("/api/debug/tasks?status=definitely-not-valid")
+        assert resp.status_code == 400
+        assert "Invalid status" in resp.json()["detail"]
+
+    def test_get_debug_tasks_requires_authentication(self):
+        """GET /api/debug/tasks should remain behind dashboard auth."""
+        from starlette.testclient import TestClient
+        from hermes_cli.web_server import app
+
+        unauth_client = TestClient(app)
+        resp = unauth_client.get("/api/debug/tasks")
+        assert resp.status_code == 401
+
     def test_path_traversal_blocked(self):
         """Verify URL-encoded path traversal is blocked."""
         # %2e%2e = ..

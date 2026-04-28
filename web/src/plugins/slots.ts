@@ -42,6 +42,8 @@ import React, { Fragment, useEffect, useState } from "react";
  *  - `analytics:bottom` — bottom of /analytics page
  *  - `logs:top`         — top of /logs page (above filter toolbar)
  *  - `logs:bottom`      — bottom of /logs page (below log viewer)
+ *  - `tasks:top`        — top of /tasks page
+ *  - `tasks:bottom`     — bottom of /tasks page
  *  - `cron:top`         — top of /cron page
  *  - `cron:bottom`      — bottom of /cron page
  *  - `skills:top`       — top of /skills page
@@ -74,6 +76,8 @@ export const KNOWN_SLOT_NAMES = [
   "analytics:bottom",
   "logs:top",
   "logs:bottom",
+  "tasks:top",
+  "tasks:bottom",
   "cron:top",
   "cron:bottom",
   "skills:top",
