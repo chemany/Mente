@@ -9,6 +9,8 @@ from typing import Any
 
 from mente.context_builder.builder import ContextBuilder
 from mente.executors.codex import CodexExecutor
+from mente.memory.promoter import MemoryPromoter
+from mente.memory.repository import SQLiteMemoryRepository
 from mente.orchestrator.service import Orchestrator
 from mente.task_core.models import ExecutionResult, Task
 from mente.task_core.repository import SQLiteTaskRepository
@@ -24,24 +26,46 @@ def _build_task_repository() -> SQLiteTaskRepository:
     return SQLiteTaskRepository()
 
 
-def _build_orchestrator(workspace: str, repository) -> Orchestrator:
+def _build_memory_repository() -> SQLiteMemoryRepository:
+    """Create the default persistent memory repository."""
+    return SQLiteMemoryRepository()
+
+
+def _build_orchestrator(
+    workspace: str,
+    repository,
+    memory_repository: SQLiteMemoryRepository | None = None,
+) -> Orchestrator:
     """Create the default Phase 2 orchestrator stack."""
+    memory_repository = memory_repository or _build_memory_repository()
     return Orchestrator(
         repository=repository,
-        context_builder=ContextBuilder(default_workspace=workspace),
+        context_builder=ContextBuilder(
+            default_workspace=workspace,
+            memory_repository=memory_repository,
+            memory_limit=5,
+        ),
         executor=CodexExecutor(),
+        memory_repository=memory_repository,
+        memory_promoter=MemoryPromoter(),
     )
 
 
 def _run_task(task: Task) -> ExecutionResult:
     """Run a task through the default Phase 2 runtime and close resources."""
     repository = _build_task_repository()
+    memory_repository = _build_memory_repository()
     try:
-        return _build_orchestrator(task.workspace or ".", repository).run(task)
+        return _build_orchestrator(
+            task.workspace or ".",
+            repository,
+            memory_repository,
+        ).run(task)
     finally:
-        close = getattr(repository, "close", None)
-        if callable(close):
-            close()
+        for repo in (memory_repository, repository):
+            close = getattr(repo, "close", None)
+            if callable(close):
+                close()
 
 
 def _normalize_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:

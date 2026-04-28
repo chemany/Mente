@@ -1,6 +1,7 @@
 from gateway.config import Platform
 from gateway.session import SessionSource
 
+from mente.integrations import hermes as hermes_bridge
 from mente.integrations.hermes import (
     build_cron_task,
     build_gateway_task,
@@ -72,6 +73,22 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     )
     assert '"role":"user"' in history_fact
     assert "timestamp" not in history_fact
+
+
+def test_build_orchestrator_includes_memory_stack(monkeypatch):
+    captured = {}
+
+    class _FakeOrchestrator:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(hermes_bridge, "Orchestrator", _FakeOrchestrator)
+
+    hermes_bridge._build_orchestrator(".", repository=object())
+
+    assert captured["memory_repository"] is not None
+    assert captured["memory_promoter"] is not None
+    assert captured["context_builder"] is not None
 
 
 def test_run_cron_task_persists_task_record(tmp_path, monkeypatch):
