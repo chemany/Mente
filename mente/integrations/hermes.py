@@ -83,6 +83,20 @@ def _normalize_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return normalized
 
 
+def _build_conversation_history_fact(history: list[dict[str, Any]]) -> str | None:
+    """Serialize conversation history deterministically for task memory facts."""
+    if not history:
+        return None
+    serialized_history = json.dumps(
+        _normalize_history(history),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return f"Conversation history (JSON):\n{serialized_history}"
+
+
 def build_cron_task(
     *,
     job: dict[str, Any],
@@ -163,15 +177,9 @@ def build_gateway_task(
         memory_facts.append(f"Session context:\n{context_prompt}")
     if channel_prompt:
         memory_facts.append(f"Channel prompt:\n{channel_prompt}")
-    if history:
-        serialized_history = json.dumps(
-            _normalize_history(history),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-        memory_facts.append(f"Conversation history (JSON):\n{serialized_history}")
+    history_fact = _build_conversation_history_fact(history)
+    if history_fact:
+        memory_facts.append(history_fact)
 
     platform = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
     return Task(
@@ -199,6 +207,40 @@ def build_gateway_task(
     )
 
 
+def build_api_server_task(
+    *,
+    user_message: str,
+    conversation_history: list[dict[str, Any]],
+    session_id: str,
+    api_mode: str,
+    workspace: str | None = None,
+) -> Task:
+    """Create a normalized Mente task for an API server request."""
+    resolved_workspace = _resolve_workspace(workspace)
+    memory_facts: list[str] = []
+
+    history_fact = _build_conversation_history_fact(conversation_history)
+    if history_fact:
+        memory_facts.append(history_fact)
+
+    return Task(
+        task_id=f"mente_api_server_{uuid.uuid4().hex}",
+        session_id=session_id,
+        task_type="conversation",
+        objective="Continue the active API conversation and answer the latest user message.",
+        user_request=user_message,
+        workspace=resolved_workspace,
+        memory_facts=memory_facts,
+        acceptance_criteria=[
+            "Respond directly to the latest user message.",
+        ],
+        metadata={
+            "source": "api_server",
+            "api_mode": api_mode,
+        },
+    )
+
+
 def run_gateway_task(
     *,
     message: str,
@@ -219,6 +261,25 @@ def run_gateway_task(
         session_id=session_id,
         session_key=session_key,
         channel_prompt=channel_prompt,
+        workspace=workspace,
+    )
+    return _run_task(task)
+
+
+def run_api_server_task(
+    *,
+    user_message: str,
+    conversation_history: list[dict[str, Any]],
+    session_id: str,
+    api_mode: str,
+    workspace: str | None = None,
+) -> ExecutionResult:
+    """Execute an API server turn through Mente."""
+    task = build_api_server_task(
+        user_message=user_message,
+        conversation_history=conversation_history,
+        session_id=session_id,
+        api_mode=api_mode,
         workspace=workspace,
     )
     return _run_task(task)

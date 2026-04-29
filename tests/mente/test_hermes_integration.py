@@ -3,8 +3,10 @@ from gateway.session import SessionSource
 
 from mente.integrations import hermes as hermes_bridge
 from mente.integrations.hermes import (
+    build_api_server_task,
     build_cron_task,
     build_gateway_task,
+    run_api_server_task,
     run_cron_task,
     run_gateway_task,
 )
@@ -72,6 +74,33 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
         fact for fact in task.memory_facts if fact.startswith("Conversation history (JSON):")
     )
     assert '"role":"user"' in history_fact
+    assert "timestamp" not in history_fact
+
+
+def test_build_api_server_task_sets_api_server_source(tmp_path):
+    task = build_api_server_task(
+        user_message="Remember this preference",
+        conversation_history=[
+            {
+                "role": "assistant",
+                "content": "Prior reply",
+                "timestamp": "2026-04-29T12:00:00Z",
+            }
+        ],
+        session_id="api-session-1",
+        api_mode="chat_completions",
+        workspace=str(tmp_path),
+    )
+
+    assert task.session_id == "api-session-1"
+    assert task.task_type == "conversation"
+    assert task.workspace == str(tmp_path)
+    assert task.metadata["source"] == "api_server"
+    assert task.metadata["api_mode"] == "chat_completions"
+    history_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Conversation history (JSON):")
+    )
+    assert '"role":"assistant"' in history_fact
     assert "timestamp" not in history_fact
 
 
@@ -274,6 +303,39 @@ def test_run_gateway_task_persists_task_record(tmp_path, monkeypatch):
     assert result.status == "success"
     assert stored is not None
     assert stored.metadata["source"] == "gateway"
+    assert stored.status.value == "succeeded"
+
+
+def test_run_api_server_task_persists_task_record(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(db_path))
+
+    class _FakeUuid:
+        hex = "apifixed"
+
+    monkeypatch.setattr("mente.integrations.hermes.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(
+        "mente.integrations.hermes.CodexExecutor.execute",
+        lambda self, request: ExecutionResult(
+            status="success",
+            summary="done",
+            memory_candidates=["User prefers JSON-first replies."],
+        ),
+    )
+
+    result = run_api_server_task(
+        user_message="latest question",
+        conversation_history=[{"role": "assistant", "content": "Prior reply"}],
+        session_id="api-session-1",
+        api_mode="responses",
+        workspace=str(tmp_path),
+    )
+
+    stored = SQLiteTaskRepository(db_path=db_path).get("mente_api_server_apifixed")
+    assert result.status == "success"
+    assert stored is not None
+    assert stored.metadata["source"] == "api_server"
+    assert stored.metadata["api_mode"] == "responses"
     assert stored.status.value == "succeeded"
 
 
