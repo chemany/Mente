@@ -47,6 +47,7 @@ from gateway.platforms.base import (
     SendResult,
     is_network_accessible,
 )
+from mente.integrations.hermes import run_api_server_task
 from mente.memory.memory_query import (
     MemoryQueryError,
     execute_memory_query,
@@ -74,6 +75,13 @@ MAX_REQUEST_BYTES = 1_000_000  # 1 MB default limit for POST bodies
 CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS = 30.0
 MAX_NORMALIZED_TEXT_LENGTH = 65_536  # 64 KB cap for normalized content parts
 MAX_CONTENT_LIST_SIZE = 1_000  # Max items when content is an array
+
+
+def _use_mente_executor(stream: bool) -> bool:
+    """Return True when the API server should route a request through Mente."""
+    if stream:
+        return False
+    return os.getenv("HERMES_API_SERVER_EXECUTOR", "").strip().lower() == "mente"
 
 
 def _normalize_chat_content(
@@ -999,6 +1007,19 @@ class APIServerAdapter(BasePlatformAdapter):
 
         # Non-streaming: run the agent (with optional Idempotency-Key)
         async def _compute_completion():
+            if _use_mente_executor(stream):
+                result = await asyncio.to_thread(
+                    run_api_server_task,
+                    user_message=user_message,
+                    conversation_history=history,
+                    session_id=session_id,
+                    api_mode="chat_completions",
+                )
+                return result, {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                }
             return await self._run_agent(
                 user_message=user_message,
                 conversation_history=history,
@@ -1027,9 +1048,12 @@ class APIServerAdapter(BasePlatformAdapter):
                     status=500,
                 )
 
-        final_response = result.get("final_response", "")
-        if not final_response:
-            final_response = result.get("error", "(No response generated)")
+        if _use_mente_executor(stream):
+            final_response = result.summary or "(No response generated)"
+        else:
+            final_response = result.get("final_response", "")
+            if not final_response:
+                final_response = result.get("error", "(No response generated)")
 
         response_data = {
             "id": completion_id,
@@ -2030,8 +2054,15 @@ class APIServerAdapter(BasePlatformAdapter):
         auth_err = self._check_auth(request)
         if auth_err:
             return auth_err
+        raw_params = dict(request.query)
+        raw_source = (raw_params.get("source") or "").strip().lower()
         try:
-            query = parse_http_task_query(request.query)
+            query_params = raw_params
+            if raw_source == "api_server":
+                query_params = {key: value for key, value in raw_params.items() if key != "source"}
+            query = parse_http_task_query(query_params)
+            if raw_source == "api_server":
+                query["source"] = "api_server"
         except TaskQueryError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -2053,8 +2084,15 @@ class APIServerAdapter(BasePlatformAdapter):
         auth_err = self._check_auth(request)
         if auth_err:
             return auth_err
+        raw_params = dict(request.query)
+        raw_source = (raw_params.get("source") or "").strip().lower()
         try:
-            query = parse_http_memory_query(request.query)
+            query_params = raw_params
+            if raw_source == "api_server":
+                query_params = {key: value for key, value in raw_params.items() if key != "source"}
+            query = parse_http_memory_query(query_params)
+            if raw_source == "api_server":
+                query["source"] = "api_server"
         except MemoryQueryError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 

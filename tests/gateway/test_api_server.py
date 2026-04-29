@@ -33,6 +33,7 @@ from gateway.platforms.api_server import (
     cors_middleware,
     security_headers_middleware,
 )
+from mente.task_core.models import ExecutionResult
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +322,14 @@ def _create_app(adapter: APIServerAdapter) -> web.Application:
     return app
 
 
+def _fake_execution_result(summary: str, *, memory_candidates=None) -> ExecutionResult:
+    return ExecutionResult(
+        status="success",
+        summary=summary,
+        memory_candidates=list(memory_candidates or []),
+    )
+
+
 @pytest.fixture
 def adapter():
     return _make_adapter()
@@ -558,6 +567,71 @@ class TestChatCompletionsEndpoint:
                 assert "data: " in body
                 assert "[DONE]" in body
                 assert "Hello!" in body
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_routes_to_mente_when_enabled(self, monkeypatch, auth_adapter):
+        app = _create_app(auth_adapter)
+        mente_run = MagicMock(return_value=_fake_execution_result("via mente"))
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(auth_adapter, "_run_agent", new_callable=AsyncMock) as mock_run:
+                resp = await cli.post(
+                    "/v1/chat/completions",
+                    headers={
+                        "Authorization": "Bearer sk-secret",
+                        "X-Hermes-Session-Id": "sess-api-1",
+                    },
+                    json={
+                        "model": "hermes-agent",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                    },
+                )
+                data = await resp.json()
+
+        assert resp.status == 200
+        assert data["choices"][0]["message"]["content"] == "via mente"
+        assert resp.headers.get("X-Hermes-Session-Id") == "sess-api-1"
+        assert mente_run.call_args.kwargs["session_id"] == "sess-api-1"
+        assert mente_run.call_args.kwargs["api_mode"] == "chat_completions"
+        assert mente_run.call_args.kwargs["conversation_history"] == []
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_stream_true_stays_legacy_when_mente_enabled(self, monkeypatch, adapter):
+        app = _create_app(adapter)
+        mente_run = MagicMock()
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            async def _mock_run_agent(**kwargs):
+                cb = kwargs.get("stream_delta_callback")
+                if cb:
+                    cb("legacy stream")
+                return (
+                    {"final_response": "legacy stream", "messages": [], "api_calls": 1},
+                    {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                )
+
+            with patch.object(adapter, "_run_agent", side_effect=_mock_run_agent) as mock_run:
+                resp = await cli.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "hermes-agent",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "stream": True,
+                    },
+                )
+                body = await resp.text()
+
+        assert resp.status == 200
+        assert "legacy stream" in body
+        mente_run.assert_not_called()
+        assert mock_run.call_count == 1
 
     @pytest.mark.asyncio
     async def test_stream_sends_keepalive_during_quiet_tool_gap(self, adapter):
