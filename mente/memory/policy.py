@@ -43,6 +43,15 @@ class MemoryPolicyResolver:
                     max_promoted_memories=3,
                     max_chars_per_promoted_fact=160,
                 ),
+                "api_server:conversation": MemoryPolicy(
+                    policy_id="api_server:conversation",
+                    allowed_injection_scopes=["session", "global"],
+                    max_injected_memories=3,
+                    max_chars_per_injected_fact=160,
+                    max_total_injected_chars=480,
+                    max_promoted_memories=3,
+                    max_chars_per_promoted_fact=160,
+                ),
                 "cron:cron": MemoryPolicy(
                     policy_id="cron:cron",
                     allowed_injection_scopes=["task_type", "global"],

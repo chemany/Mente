@@ -34,6 +34,11 @@ def adapter():
     return _make_adapter()
 
 
+@pytest.fixture
+def auth_adapter():
+    return _make_adapter(api_key="sk-secret")
+
+
 class TestDebugMemoriesAPI:
     @pytest.mark.asyncio
     async def test_debug_memories_observes_api_server_bridge_memories(self, adapter, monkeypatch, tmp_path):
@@ -74,6 +79,69 @@ class TestDebugMemoriesAPI:
             data = await resp.json()
             assert data["count"] == 1
             assert data["memories"][0]["source"] == "api_server"
+            assert data["memories"][0]["fact"] == "User prefers concise replies."
+
+    @pytest.mark.asyncio
+    async def test_debug_memories_lists_api_server_session_memories(self, auth_adapter, monkeypatch, tmp_path):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        def _fake_execute(self, request):
+            from mente.task_core.models import ExecutionResult
+
+            if request.user_request == "Remember this preference":
+                return ExecutionResult(
+                    status="success",
+                    summary="first",
+                    memory_candidates=["User prefers concise replies."],
+                )
+            return ExecutionResult(status="success", summary="second")
+
+        monkeypatch.setattr("mente.integrations.hermes.CodexExecutor.execute", _fake_execute)
+
+        app = _create_app(auth_adapter)
+        async with TestClient(TestServer(app)) as cli:
+            first_resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "api-session-1",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "Remember this preference"}],
+                },
+            )
+            second_resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "api-session-1",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "What do I prefer?"}],
+                },
+            )
+
+            assert first_resp.status == 200
+            assert second_resp.status == 200
+
+            resp = await cli.get(
+                "/api/debug/memories?scope=session&session_id=api-session-1"
+                "&source=api_server&task_type=conversation&memory_scope=session&limit=5",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["count"] == 1
+            assert data["memories"][0]["source"] == "api_server"
+            assert data["memories"][0]["scope"] == "session"
+            assert data["memories"][0]["session_id"] == "api-session-1"
             assert data["memories"][0]["fact"] == "User prefers concise replies."
 
     @pytest.mark.asyncio

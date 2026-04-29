@@ -27,7 +27,10 @@ class MemoryPromoter:
     def extract(self, task: Task, result: ExecutionResult) -> list[MemoryRecord]:
         """Extract deterministic memory records from an execution result."""
         source = str(task.metadata.get("source") or "")
-        scope = "session" if task.task_type == "conversation" and source == "gateway" else "task_type"
+        is_conversation_session_source = (
+            task.task_type == "conversation" and source in {"gateway", "api_server"}
+        )
+        scope = "session" if is_conversation_session_source else "task_type"
         policy = self.memory_policy_resolver.resolve(task)
         max_promoted = min(self.max_promoted_memories_per_run, policy.max_promoted_memories)
 

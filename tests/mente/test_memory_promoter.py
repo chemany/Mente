@@ -59,3 +59,26 @@ def test_memory_promoter_applies_policy_caps_and_truncation():
 
     assert len(promoted) == 1
     assert promoted[0].fact == "This fact is far..."
+
+
+def test_memory_promoter_uses_session_scope_for_api_server_conversations():
+    promoter = MemoryPromoter()
+    task = Task(
+        task_id="task_1",
+        session_id="api-session-1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply",
+        metadata={"source": "api_server"},
+    )
+    result = ExecutionResult(
+        status="success",
+        summary="done",
+        memory_candidates=["User prefers JSON-first replies."],
+    )
+
+    promoted = promoter.extract(task, result)
+
+    assert len(promoted) == 1
+    assert promoted[0].scope == "session"
+    assert promoted[0].session_id == "api-session-1"

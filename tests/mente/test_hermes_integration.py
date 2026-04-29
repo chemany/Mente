@@ -10,6 +10,7 @@ from mente.integrations.hermes import (
     run_cron_task,
     run_gateway_task,
 )
+from mente.memory.repository import SQLiteMemoryRepository
 from mente.task_core.models import ExecutionResult
 from mente.task_core.repository import SQLiteTaskRepository
 
@@ -337,6 +338,65 @@ def test_run_api_server_task_persists_task_record(tmp_path, monkeypatch):
     assert stored.metadata["source"] == "api_server"
     assert stored.metadata["api_mode"] == "responses"
     assert stored.status.value == "succeeded"
+
+
+def test_api_server_second_run_selects_session_memory(tmp_path, monkeypatch):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+    class _FakeUuid:
+        def __init__(self, value):
+            self.hex = value
+
+    uuids = iter((_FakeUuid("apifirst"), _FakeUuid("apisecond")))
+    monkeypatch.setattr("mente.integrations.hermes.uuid.uuid4", lambda: next(uuids))
+
+    def _fake_execute(self, request):
+        if request.task_id.endswith("apifirst"):
+            return ExecutionResult(
+                status="success",
+                summary="first",
+                memory_candidates=["User prefers JSON-first replies."],
+            )
+        return ExecutionResult(status="success", summary="second")
+
+    monkeypatch.setattr("mente.integrations.hermes.CodexExecutor.execute", _fake_execute)
+
+    first_result = run_api_server_task(
+        user_message="Remember this preference",
+        conversation_history=[],
+        session_id="api-session-1",
+        api_mode="chat_completions",
+        workspace=str(tmp_path),
+    )
+    second_result = run_api_server_task(
+        user_message="What do I prefer?",
+        conversation_history=[],
+        session_id="api-session-1",
+        api_mode="chat_completions",
+        workspace=str(tmp_path),
+    )
+
+    stored_memory = SQLiteMemoryRepository(db_path=memory_db_path).get(
+        "mente_api_server_apifirst:memory:0"
+    )
+    stored_task = SQLiteTaskRepository(db_path=task_db_path).get("mente_api_server_apisecond")
+
+    assert first_result.metadata["memory_promotion"]["promoted_memory_ids"] == [
+        "mente_api_server_apifirst:memory:0"
+    ]
+    assert stored_memory is not None
+    assert stored_memory.scope == "session"
+    assert stored_memory.session_id == "api-session-1"
+    assert second_result.metadata["memory_context"]["selected"][0]["memory_id"] == (
+        "mente_api_server_apifirst:memory:0"
+    )
+    assert stored_task is not None
+    assert stored_task.metadata["memory_context"]["selected"][0]["memory_id"] == (
+        "mente_api_server_apifirst:memory:0"
+    )
 
 
 def test_run_cron_task_closes_repository(monkeypatch, tmp_path):
