@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
@@ -37,29 +38,40 @@ class CodexExecutor(Executor):
         self,
         request: ExecutionRequest,
         output_last_message: str | None = None,
+        output_schema: str | None = None,
     ) -> list[str]:
         """Build the Codex CLI command for a request."""
-        command = [
-            self.codex_binary,
-            "exec",
-            "--sandbox",
-            self.sandbox,
-            "--ask-for-approval",
-            self.approval_policy,
-            "--skip-git-repo-check",
-            "--color",
-            "never",
-            "--cd",
-            request.workspace,
-        ]
+        command = [self.codex_binary, "exec"]
+        command.extend(self._build_execution_mode_args())
+        command.extend(
+            [
+                "--skip-git-repo-check",
+                "--color",
+                "never",
+                "--cd",
+                request.workspace,
+            ]
+        )
         if output_last_message:
             command.extend(["--output-last-message", output_last_message])
+        if output_schema:
+            command.extend(["--output-schema", output_schema])
         command.append(self.build_prompt(request))
         return command
+
+    def _build_execution_mode_args(self) -> list[str]:
+        """Map legacy sandbox/approval settings onto the current Codex CLI."""
+        if self.approval_policy == "never":
+            if self.sandbox == "danger-full-access":
+                return ["--dangerously-bypass-approvals-and-sandbox"]
+            return ["--sandbox", self.sandbox, "--full-auto"]
+
+        return ["--sandbox", self.sandbox]
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         """Run Codex synchronously and normalize the response."""
         output_path: Path | None = None
+        schema_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
                 prefix="mente-codex-",
@@ -67,10 +79,20 @@ class CodexExecutor(Executor):
                 delete=False,
             ) as handle:
                 output_path = Path(handle.name)
+            with tempfile.NamedTemporaryFile(
+                prefix="mente-codex-schema-",
+                suffix=".json",
+                mode="w",
+                encoding="utf-8",
+                delete=False,
+            ) as handle:
+                json.dump(self._structured_output_schema(), handle)
+                schema_path = Path(handle.name)
 
             command = self.build_command(
                 request,
                 output_last_message=str(output_path),
+                output_schema=str(schema_path),
             )
             try:
                 completed = subprocess.run(
@@ -99,8 +121,20 @@ class CodexExecutor(Executor):
                 )
 
             summary = ""
+            memory_candidates: list[str] = []
+            structured_output = None
             if output_path.exists():
-                summary = output_path.read_text(encoding="utf-8").strip()
+                raw_output = output_path.read_text(encoding="utf-8").strip()
+                structured_output = self._parse_structured_output(raw_output)
+                if structured_output is not None:
+                    summary = structured_output.get("assistant_summary", "").strip()
+                    memory_candidates = [
+                        candidate.strip()
+                        for candidate in structured_output.get("memory_candidates", [])
+                        if isinstance(candidate, str) and candidate.strip()
+                    ]
+                else:
+                    summary = raw_output
             if not summary:
                 summary = (completed.stdout or completed.stderr).strip()
 
@@ -116,11 +150,13 @@ class CodexExecutor(Executor):
                 status=status,
                 summary=summary,
                 commands_run=[shlex.join(command)],
+                memory_candidates=memory_candidates,
                 failure_reason=None if completed.returncode == 0 else f"exit_code:{completed.returncode}",
                 metadata={
                     "returncode": completed.returncode,
                     "stdout": completed.stdout,
                     "stderr": completed.stderr,
+                    "structured_output": structured_output,
                 },
             )
         finally:
@@ -129,3 +165,43 @@ class CodexExecutor(Executor):
                     os.unlink(output_path)
                 except FileNotFoundError:
                     pass
+            if schema_path is not None:
+                try:
+                    os.unlink(schema_path)
+                except FileNotFoundError:
+                    pass
+
+    def _structured_output_schema(self) -> dict[str, object]:
+        """Return the schema used for final structured Codex responses."""
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "assistant_summary": {"type": "string"},
+                "memory_candidates": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["assistant_summary", "memory_candidates"],
+        }
+
+    def _parse_structured_output(self, raw_output: str) -> dict[str, object] | None:
+        """Parse structured Codex output and fall back cleanly on malformed data."""
+        if not raw_output:
+            return None
+
+        try:
+            parsed = json.loads(raw_output)
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(parsed, dict):
+            return None
+
+        if not isinstance(parsed.get("assistant_summary"), str):
+            return None
+        if not isinstance(parsed.get("memory_candidates"), list):
+            return None
+
+        return parsed

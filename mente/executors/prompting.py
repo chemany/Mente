@@ -28,6 +28,14 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
     if request.skill_refs:
         lines.append("Skill References:")
         lines.extend(f"- {item}" for item in request.skill_refs)
+    lines.extend(
+        [
+            "Response Contract:",
+            "- Return a JSON object that matches the provided output schema.",
+            "- assistant_summary: brief final answer for the user.",
+            "- memory_candidates: durable user or task facts worth remembering later.",
+        ]
+    )
 
     return "\n".join(lines)
 
