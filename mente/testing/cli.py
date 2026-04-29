@@ -14,7 +14,13 @@ from mente.memory.repository import InMemoryMemoryRepository
 from mente.orchestrator.service import Orchestrator
 from mente.task_core.models import ExecutionRequest, ExecutionResult
 from mente.task_core.repository import InMemoryTaskRepository
-from mente.testing.benchmark import load_benchmark_suite, run_benchmark_suite
+from mente.testing.benchmark import (
+    compare_benchmark_report_to_baseline,
+    load_benchmark_baseline,
+    load_benchmark_suite,
+    run_benchmark_suite,
+    write_benchmark_baseline,
+)
 from mente.testing.replay import compare_memory_replay, load_replay_fixture, replay_task
 
 
@@ -34,6 +40,10 @@ def build_replay_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compare-memory", action="store_true")
     parser.add_argument("--show-prompt-metrics", action="store_true")
     parser.add_argument("--benchmark-suite")
+    parser.add_argument("--baseline")
+    parser.add_argument("--write-baseline")
+    parser.add_argument("--output-report")
+    parser.add_argument("--fail-on-regression", action="store_true")
     return parser
 
 
@@ -49,7 +59,25 @@ def main(argv: list[str] | None = None) -> int:
             executor_factory=executor_factory,
             workspace=str(Path(args.workspace)),
         )
-        print(json.dumps(report, indent=2, sort_keys=True))
+        if args.write_baseline:
+            write_benchmark_baseline(report, args.write_baseline)
+
+        payload = report
+        if args.baseline:
+            baseline = load_benchmark_baseline(args.baseline)
+            payload = compare_benchmark_report_to_baseline(report, baseline)
+
+        if args.output_report:
+            Path(args.output_report).write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        if args.fail_on_regression and args.baseline:
+            return 1 if payload["summary"]["regression_count"] > 0 else 0
+        if args.write_baseline and not args.baseline:
+            return 0
         return 0 if report["summary"]["fail_count"] == 0 else 1
 
     executor: Executor = executor_factory()
