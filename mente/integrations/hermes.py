@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from mente.context_builder.builder import ContextBuilder
+from mente.executors import CodexKernelAdapter
 from mente.executors.base import Executor
 from mente.executors.codex import CodexExecutor
 from mente.memory.promoter import MemoryPromoter
@@ -32,6 +33,11 @@ def _build_memory_repository() -> SQLiteMemoryRepository:
     return SQLiteMemoryRepository()
 
 
+def _build_kernel_adapter() -> CodexKernelAdapter:
+    """Create the default Codex-backed kernel adapter."""
+    return CodexExecutor()
+
+
 def _build_orchestrator(
     workspace: str,
     repository,
@@ -47,7 +53,7 @@ def _build_orchestrator(
             memory_repository=memory_repository,
             memory_limit=5,
         ),
-        executor=executor or CodexExecutor(),
+        executor=executor or _build_kernel_adapter(),
         memory_repository=memory_repository,
         memory_promoter=MemoryPromoter(),
     )
@@ -86,11 +92,17 @@ def _is_unbacked_prior_claim(candidate: str) -> bool:
     )
 
 
-class _APIServerIsolationExecutor(Executor):
+class _APIServerIsolationExecutor(CodexKernelAdapter):
     """Wrap Codex execution with empty-session isolation for API server turns."""
 
-    def __init__(self, inner: Executor | None = None) -> None:
-        self._inner = inner or CodexExecutor()
+    def __init__(self, inner: CodexKernelAdapter | None = None) -> None:
+        self._inner = inner or _build_kernel_adapter()
+
+    def build_request_payload(self, request: ExecutionRequest) -> dict[str, object]:
+        return self._inner.build_request_payload(request)
+
+    def supports_kernel_sessions(self) -> bool:
+        return self._inner.supports_kernel_sessions()
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         result = self._inner.execute(request)

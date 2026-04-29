@@ -2,6 +2,7 @@ from gateway.config import Platform
 from gateway.session import SessionSource
 
 from mente.integrations import hermes as hermes_bridge
+from mente.executors import CodexKernelAdapter
 from mente.integrations.hermes import (
     build_api_server_task,
     build_cron_task,
@@ -13,6 +14,20 @@ from mente.integrations.hermes import (
 from mente.memory.repository import SQLiteMemoryRepository
 from mente.task_core.models import ExecutionResult
 from mente.task_core.repository import SQLiteTaskRepository
+
+
+class _FakeKernelAdapter(CodexKernelAdapter):
+    def __init__(self, result: ExecutionResult | None = None) -> None:
+        self.result = result or ExecutionResult(status="success", summary="done")
+
+    def build_request_payload(self, request) -> dict[str, object]:
+        return {
+            "prompt": request.user_request,
+            "workspace": request.workspace,
+        }
+
+    def execute(self, request) -> ExecutionResult:
+        return self.result
 
 
 def test_build_cron_task_normalizes_job_into_task(tmp_path):
@@ -119,6 +134,52 @@ def test_build_orchestrator_includes_memory_stack(monkeypatch):
     assert captured["memory_repository"] is not None
     assert captured["memory_promoter"] is not None
     assert captured["context_builder"] is not None
+
+
+def test_build_orchestrator_uses_kernel_adapter_factory(monkeypatch):
+    captured = {}
+    fake_adapter = _FakeKernelAdapter()
+
+    class _FakeOrchestrator:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(hermes_bridge, "Orchestrator", _FakeOrchestrator)
+    monkeypatch.setattr(hermes_bridge, "_build_kernel_adapter", lambda: fake_adapter)
+
+    hermes_bridge._build_orchestrator(".", repository=object())
+
+    assert captured["executor"] is fake_adapter
+
+
+def test_api_server_isolation_executor_preserves_kernel_adapter_contract():
+    request = build_api_server_task(
+        user_message="latest question",
+        conversation_history=[],
+        session_id="api-session-1",
+        api_mode="responses",
+        workspace=".",
+    )
+    inner = _FakeKernelAdapter(
+        result=ExecutionResult(
+            status="success",
+            summary="done",
+            memory_candidates=["User previously said they prefer terse replies."],
+        )
+    )
+
+    executor = hermes_bridge._APIServerIsolationExecutor(inner=inner)
+
+    payload = executor.build_request_payload(request)
+    result = executor.execute(request)
+
+    assert payload == {
+        "prompt": request.user_request,
+        "workspace": request.workspace,
+    }
+    assert executor.supports_kernel_sessions() is False
+    assert result.summary == "done"
+    assert result.memory_candidates == []
 
 
 def test_second_run_receives_first_run_memory(monkeypatch, tmp_path):
