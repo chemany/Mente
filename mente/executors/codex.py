@@ -12,14 +12,14 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-from mente.executors.base import Executor
+from mente.executors.kernel_adapter import CodexKernelAdapter
 from mente.executors.prompting import render_execution_prompt
 from mente.task_core.models import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
 
 
-class CodexExecutor(Executor):
+class CodexExecutor(CodexKernelAdapter):
     """Execute Mente requests through the Codex CLI."""
 
     def __init__(
@@ -36,6 +36,13 @@ class CodexExecutor(Executor):
         """Build a stable textual prompt from an execution request."""
         return render_execution_prompt(request)
 
+    def build_request_payload(self, request: ExecutionRequest) -> dict[str, object]:
+        """Build the stable adapter payload for a prepared execution request."""
+        return {
+            "prompt": self.build_prompt(request),
+            "workspace": request.workspace,
+        }
+
     def build_command(
         self,
         request: ExecutionRequest,
@@ -46,6 +53,7 @@ class CodexExecutor(Executor):
         add_dirs: list[str] | None = None,
     ) -> list[str]:
         """Build the Codex CLI command for a request."""
+        payload = self.build_request_payload(request)
         command = [
             self.codex_binary,
             "exec",
@@ -71,7 +79,7 @@ class CodexExecutor(Executor):
             command.extend(["--output-last-message", output_last_message])
         if output_schema:
             command.extend(["--output-schema", output_schema])
-        command.append(self.build_prompt(request))
+        command.append(str(payload["prompt"]))
         return command
 
     def _build_execution_mode_args(self) -> list[str]:

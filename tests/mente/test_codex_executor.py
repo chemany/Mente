@@ -2,9 +2,42 @@ import json
 import os
 import subprocess
 
+from mente.executors import CodexKernelAdapter
+from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
 from mente.executors.codex import CodexExecutor
 from mente.task_core.models import ExecutionRequest
+
+
+def _build_adapter_payload(adapter: CodexKernelAdapter, request: ExecutionRequest) -> dict[str, object]:
+    """Exercise the adapter seam without importing CLI-specific details."""
+    return adapter.build_request_payload(request)
+
+
+def test_codex_kernel_adapter_contract_exists():
+    assert issubclass(CodexKernelAdapter, Executor)
+
+
+def test_codex_executor_implements_kernel_adapter_contract():
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repository",
+        user_request="inspect repository",
+        workspace=".",
+    )
+
+    payload = _build_adapter_payload(executor, request)
+
+    assert isinstance(executor, CodexKernelAdapter)
+    assert executor.supports_kernel_sessions() is False
+    assert payload["prompt"] == render_execution_prompt(request)
+    assert payload["workspace"] == request.workspace
+    assert "command" not in payload
+    assert "argv" not in payload
+    assert "schema_path" not in payload
 
 
 def test_codex_executor_builds_command():
