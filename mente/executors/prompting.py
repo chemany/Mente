@@ -34,6 +34,7 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
             "- Return a JSON object that matches the provided output schema.",
             "- assistant_summary: brief final answer for the user.",
             "- memory_candidates: durable user or task facts worth remembering later.",
+            "- If no memory facts are provided, do not fabricate prior user preferences or project conventions.",
         ]
     )
 

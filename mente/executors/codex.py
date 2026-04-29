@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -41,7 +42,12 @@ class CodexExecutor(Executor):
         output_schema: str | None = None,
     ) -> list[str]:
         """Build the Codex CLI command for a request."""
-        command = [self.codex_binary, "exec"]
+        command = [
+            self.codex_binary,
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+        ]
         command.extend(self._build_execution_mode_args())
         command.extend(
             [
@@ -72,6 +78,7 @@ class CodexExecutor(Executor):
         """Run Codex synchronously and normalize the response."""
         output_path: Path | None = None
         schema_path: Path | None = None
+        codex_home: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
                 prefix="mente-codex-",
@@ -88,6 +95,9 @@ class CodexExecutor(Executor):
             ) as handle:
                 json.dump(self._structured_output_schema(), handle)
                 schema_path = Path(handle.name)
+            codex_home = Path(
+                tempfile.mkdtemp(prefix="mente-codex-home-")
+            ).resolve()
 
             command = self.build_command(
                 request,
@@ -101,6 +111,7 @@ class CodexExecutor(Executor):
                     text=True,
                     cwd=request.workspace,
                     check=False,
+                    env=self._build_subprocess_env(codex_home),
                 )
             except OSError as exc:
                 logger.error(
@@ -170,6 +181,8 @@ class CodexExecutor(Executor):
                     os.unlink(schema_path)
                 except FileNotFoundError:
                     pass
+            if codex_home is not None:
+                shutil.rmtree(codex_home, ignore_errors=True)
 
     def _structured_output_schema(self) -> dict[str, object]:
         """Return the schema used for final structured Codex responses."""
@@ -205,3 +218,28 @@ class CodexExecutor(Executor):
             return None
 
         return parsed
+
+    def _build_subprocess_env(self, codex_home: Path) -> dict[str, str]:
+        """Construct a minimal subprocess environment for isolated Codex runs."""
+        env: dict[str, str] = {}
+        for key in (
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "PATH",
+            "PYTHONIOENCODING",
+            "PYTHONPATH",
+            "SHELL",
+            "SSL_CERT_DIR",
+            "SSL_CERT_FILE",
+            "SYSTEMROOT",
+            "TERM",
+            "TMP",
+            "TEMP",
+            "TMPDIR",
+        ):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+        env["CODEX_HOME"] = str(codex_home)
+        return env
