@@ -208,3 +208,115 @@ def load_benchmark_baseline(path: str | Path) -> dict[str, Any]:
     return normalize_benchmark_report(
         json.loads(Path(path).read_text(encoding="utf-8"))
     )
+
+
+def _index_benchmark_runs(
+    report: dict[str, Any],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    return {
+        (run["case_id"], run["policy_variant"]): run
+        for run in report.get("runs", [])
+    }
+
+
+def compare_benchmark_report_to_baseline(
+    current: dict[str, Any],
+    baseline: dict[str, Any],
+) -> dict[str, Any]:
+    normalized_current = normalize_benchmark_report(current)
+    normalized_baseline = normalize_benchmark_report(baseline)
+    current_runs = _index_benchmark_runs(normalized_current)
+    baseline_runs = _index_benchmark_runs(normalized_baseline)
+    run_keys = sorted(set(baseline_runs) | set(current_runs))
+    comparison_runs: list[dict[str, Any]] = []
+    regression_count = 0
+    improvement_count = 0
+    missing_run_count = 0
+    new_run_count = 0
+
+    for case_id, policy_variant in run_keys:
+        baseline_run = baseline_runs.get((case_id, policy_variant))
+        current_run = current_runs.get((case_id, policy_variant))
+        reasons: list[str] = []
+
+        if baseline_run and not current_run:
+            reasons.append("missing_run")
+            missing_run_count += 1
+        elif current_run and not baseline_run:
+            reasons.append("new_run")
+            new_run_count += 1
+        else:
+            assert baseline_run is not None
+            assert current_run is not None
+            if baseline_run["status"] == "pass" and current_run["status"] == "fail":
+                reasons.append("status_degraded")
+            elif baseline_run["status"] == "fail" and current_run["status"] == "pass":
+                reasons.append("status_improved")
+
+            if current_run["score"] < baseline_run["score"]:
+                reasons.append("score_decreased")
+            elif current_run["score"] > baseline_run["score"]:
+                reasons.append("score_increased")
+
+        is_regression = any(reason in {"missing_run", "status_degraded", "score_decreased"} for reason in reasons)
+        is_improvement = any(
+            reason in {"status_improved", "score_increased"} for reason in reasons
+        )
+        if is_regression:
+            regression_count += 1
+        if is_improvement:
+            improvement_count += 1
+
+        comparison_runs.append(
+            {
+                "case_id": case_id,
+                "policy_variant": policy_variant,
+                "baseline_status": baseline_run["status"] if baseline_run else None,
+                "current_status": current_run["status"] if current_run else None,
+                "baseline_score": baseline_run["score"] if baseline_run else None,
+                "current_score": current_run["score"] if current_run else None,
+                "is_regression": is_regression,
+                "is_improvement": is_improvement,
+                "reasons": reasons,
+            }
+        )
+
+    summary_reasons: list[str] = []
+    baseline_summary = normalized_baseline.get("summary", {})
+    current_summary = normalized_current.get("summary", {})
+    if current_summary.get("fail_count", 0) > baseline_summary.get("fail_count", 0):
+        summary_reasons.append("fail_count_increased")
+        regression_count += 1
+    elif current_summary.get("fail_count", 0) < baseline_summary.get("fail_count", 0):
+        summary_reasons.append("fail_count_decreased")
+        improvement_count += 1
+
+    if current_summary.get("average_score", 0.0) < baseline_summary.get("average_score", 0.0):
+        summary_reasons.append("average_score_decreased")
+        regression_count += 1
+    elif current_summary.get("average_score", 0.0) > baseline_summary.get("average_score", 0.0):
+        summary_reasons.append("average_score_increased")
+        improvement_count += 1
+
+    status = "unchanged"
+    if regression_count > 0:
+        status = "regression"
+    elif improvement_count > 0:
+        status = "improved"
+
+    return {
+        "suite_id": normalized_current.get(
+            "suite_id", normalized_baseline.get("suite_id")
+        ),
+        "summary": {
+            "baseline_policy_run_count": baseline_summary.get("policy_run_count", 0),
+            "current_policy_run_count": current_summary.get("policy_run_count", 0),
+            "regression_count": regression_count,
+            "improvement_count": improvement_count,
+            "missing_run_count": missing_run_count,
+            "new_run_count": new_run_count,
+            "status": status,
+            "reasons": summary_reasons,
+        },
+        "runs": comparison_runs,
+    }

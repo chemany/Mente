@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from mente.testing.benchmark import (
+    compare_benchmark_report_to_baseline,
     load_benchmark_baseline,
     load_benchmark_suite,
     run_benchmark_suite,
@@ -52,3 +53,76 @@ def test_write_and_load_benchmark_baseline_round_trips(tmp_path):
         (run["case_id"], run["policy_variant"])
         for run in loaded["runs"]
     )
+
+
+def test_compare_benchmark_report_to_baseline_detects_regressions():
+    suite = load_benchmark_suite(
+        Path("tests/mente/fixtures/benchmarks/memory_policy_smoke.json")
+    )
+    current = run_benchmark_suite(suite)
+    baseline = run_benchmark_suite(suite)
+
+    baseline["runs"][0]["status"] = "pass"
+    baseline["runs"][0]["score"] = 1.0
+    current["runs"][0]["status"] = "fail"
+    current["runs"][0]["score"] = 0.5
+
+    comparison = compare_benchmark_report_to_baseline(current, baseline)
+    comparison_run = next(
+        run
+        for run in comparison["runs"]
+        if run["case_id"] == baseline["runs"][0]["case_id"]
+        and run["policy_variant"] == baseline["runs"][0]["policy_variant"]
+    )
+
+    assert comparison["summary"]["regression_count"] >= 1
+    assert comparison["summary"]["status"] == "regression"
+    assert comparison_run["is_regression"] is True
+    assert "status_degraded" in comparison_run["reasons"]
+    assert "score_decreased" in comparison_run["reasons"]
+
+
+def test_compare_benchmark_report_to_baseline_treats_new_runs_as_neutral():
+    baseline = {
+        "suite_id": "suite_1",
+        "summary": {
+            "case_count": 1,
+            "policy_run_count": 1,
+            "pass_count": 1,
+            "fail_count": 0,
+            "average_score": 1.0,
+        },
+        "runs": [
+            {
+                "case_id": "case_1",
+                "policy_variant": "tight",
+                "status": "pass",
+                "score": 1.0,
+                "checks": {},
+                "result": {},
+            }
+        ],
+    }
+    current = {
+        **baseline,
+        "summary": {
+            **baseline["summary"],
+            "policy_run_count": 2,
+        },
+        "runs": [
+            *baseline["runs"],
+            {
+                "case_id": "case_1",
+                "policy_variant": "balanced",
+                "status": "pass",
+                "score": 1.0,
+                "checks": {},
+                "result": {},
+            },
+        ],
+    }
+
+    comparison = compare_benchmark_report_to_baseline(current, baseline)
+
+    assert comparison["summary"]["new_run_count"] == 1
+    assert comparison["summary"]["regression_count"] == 0
