@@ -73,6 +73,25 @@ def test_replay_cli_accepts_benchmark_baseline_flags():
     assert args.fail_on_regression is True
 
 
+def test_replay_cli_accepts_live_eval_flags():
+    parser = build_replay_parser()
+    args = parser.parse_args(
+        [
+            "tests/mente/fixtures/replay/gateway_conversation.json",
+            "--live-eval-suite",
+            "tests/mente/fixtures/live_eval/gateway_memory_smoke.json",
+            "--api-base-url",
+            "http://127.0.0.1:8642",
+            "--api-key",
+            "dev-key",
+        ]
+    )
+
+    assert args.live_eval_suite.endswith("gateway_memory_smoke.json")
+    assert args.api_base_url == "http://127.0.0.1:8642"
+    assert args.api_key == "dev-key"
+
+
 def test_replay_cli_fails_on_benchmark_regression(tmp_path):
     suite_path = Path("tests/mente/fixtures/benchmarks/memory_policy_smoke.json")
     output_path = tmp_path / "comparison.json"
@@ -129,3 +148,86 @@ def test_replay_cli_writes_normalized_benchmark_report(tmp_path):
         (run["case_id"], run["policy_variant"])
         for run in report["runs"]
     )
+
+
+def test_replay_cli_live_eval_prints_json_report(monkeypatch, capsys):
+    seen_requests = []
+
+    class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def _fake_request(method, url, **kwargs):
+        seen_requests.append((method, url, kwargs))
+        if url.endswith("/v1/responses"):
+            return _FakeResponse({"id": f"resp_{len(seen_requests)}"})
+        if url.endswith("/api/debug/tasks"):
+            return _FakeResponse(
+                {
+                    "tasks": [
+                        {
+                            "task_id": "t2",
+                            "task_type": "conversation",
+                            "metadata": {
+                                "source": "gateway",
+                                "memory_policy": {"policy_id": "gateway:conversation"},
+                                "memory_context": {
+                                    "prompt_budget_char_count": 320,
+                                    "selected": [
+                                        {"memory_id": "mem_gateway_preference_1"}
+                                    ],
+                                },
+                                "memory_promotion": {
+                                    "promoted_memory_ids": ["mem_gateway_preference_1"]
+                                },
+                            },
+                        },
+                        {
+                            "task_id": "t1",
+                            "task_type": "conversation",
+                            "metadata": {"source": "gateway"},
+                        },
+                    ]
+                }
+            )
+        if url.endswith("/api/debug/memories"):
+            return _FakeResponse(
+                {
+                    "memories": [
+                        {
+                            "memory_id": "mem_gateway_preference_1",
+                            "source": "gateway",
+                            "scope": "session",
+                        }
+                    ]
+                }
+            )
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    monkeypatch.setattr("mente.testing.live_eval.requests.request", _fake_request)
+
+    exit_code = main(
+        [
+            "tests/mente/fixtures/replay/gateway_conversation.json",
+            "--live-eval-suite",
+            "tests/mente/fixtures/live_eval/gateway_memory_smoke.json",
+            "--api-base-url",
+            "http://127.0.0.1:8642",
+            "--api-key",
+            "dev-key",
+        ]
+    )
+
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert report["suite_id"] == "gateway_memory_smoke"
+    assert report["summary"]["pass_count"] == 1
+    assert report["cases"][0]["status"] == "pass"
+    assert [method for method, _, _ in seen_requests] == ["POST", "POST", "GET", "GET"]

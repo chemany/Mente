@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import requests
 from pydantic import BaseModel
 
 
@@ -140,4 +141,118 @@ def evaluate_live_eval_case(
         "memory_count": len(memories),
         "selected_memory_ids": selected_memory_ids,
         "promoted_memory_ids": promoted_memory_ids,
+    }
+
+
+def _build_auth_headers(api_key: str | None) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _request_json(
+    method: str,
+    url: str,
+    *,
+    api_key: str | None,
+    payload: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    response = requests.request(
+        method,
+        url,
+        headers=_build_auth_headers(api_key),
+        json=payload,
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _extract_execution_trace(task_page: dict[str, Any]) -> dict[str, Any]:
+    tasks = list(task_page.get("tasks", []))
+    latest_task = tasks[0] if tasks else {}
+    metadata = latest_task.get("metadata", {})
+    memory_context = metadata.get("memory_context", {})
+    memory_policy = metadata.get("memory_policy", {})
+    memory_promotion = metadata.get("memory_promotion", {})
+    selected = list(memory_context.get("selected", []))
+
+    return {
+        "policy_id": memory_policy.get("policy_id"),
+        "prompt_budget_char_count": memory_context.get("prompt_budget_char_count"),
+        "selected_memory_ids": [
+            item["memory_id"] for item in selected if isinstance(item, dict) and "memory_id" in item
+        ],
+        "promoted_memory_ids": list(memory_promotion.get("promoted_memory_ids", [])),
+    }
+
+
+def run_live_eval_suite(
+    suite: LiveEvalSuite,
+    *,
+    api_base_url: str,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """Run a live evaluation suite against the API server debug surfaces."""
+    base_url = api_base_url.rstrip("/")
+    case_reports: list[dict[str, Any]] = []
+
+    for case in suite.cases:
+        for turn in case.turns:
+            _request_json(
+                "POST",
+                f"{base_url}/v1/responses",
+                api_key=api_key,
+                payload={
+                    "input": turn.user_message,
+                    "conversation": case.session_id_seed,
+                    "store": True,
+                },
+            )
+
+        task_page = _request_json(
+            "GET",
+            f"{base_url}/api/debug/tasks",
+            api_key=api_key,
+            params={
+                "scope": "session",
+                "session_id": case.session_id_seed,
+                "source": "gateway",
+                "task_type": "conversation",
+                "limit": 20,
+            },
+        )
+        memory_page = _request_json(
+            "GET",
+            f"{base_url}/api/debug/memories",
+            api_key=api_key,
+            params={
+                "scope": "session",
+                "session_id": case.session_id_seed,
+                "source": "gateway",
+                "task_type": "conversation",
+                "limit": 20,
+            },
+        )
+        report = evaluate_live_eval_case(
+            case,
+            task_page,
+            memory_page,
+            _extract_execution_trace(task_page),
+        )
+        case_reports.append(report)
+
+    pass_count = sum(1 for report in case_reports if report["status"] == "pass")
+    fail_count = len(case_reports) - pass_count
+    return {
+        "suite_id": suite.suite_id,
+        "summary": {
+            "case_count": len(case_reports),
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+        },
+        "cases": case_reports,
     }

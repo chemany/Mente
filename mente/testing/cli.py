@@ -22,6 +22,7 @@ from mente.testing.benchmark import (
     run_benchmark_suite,
     write_benchmark_baseline,
 )
+from mente.testing.live_eval import load_live_eval_suite, run_live_eval_suite
 from mente.testing.replay import compare_memory_replay, load_replay_fixture, replay_task
 
 
@@ -45,6 +46,9 @@ def build_replay_parser() -> argparse.ArgumentParser:
     parser.add_argument("--write-baseline")
     parser.add_argument("--output-report")
     parser.add_argument("--fail-on-regression", action="store_true")
+    parser.add_argument("--live-eval-suite")
+    parser.add_argument("--api-base-url")
+    parser.add_argument("--api-key")
     return parser
 
 
@@ -52,6 +56,15 @@ def main(argv: list[str] | None = None) -> int:
     """Run a replay fixture through the Mente orchestrator."""
     args = build_replay_parser().parse_args(argv)
     executor_factory = CodexExecutor if args.executor == "codex" else _MockReplayExecutor
+
+    if args.live_eval_suite:
+        report = run_live_eval_suite(
+            load_live_eval_suite(args.live_eval_suite),
+            api_base_url=str(args.api_base_url or ""),
+            api_key=args.api_key,
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if report["summary"]["fail_count"] == 0 else 1
 
     if args.benchmark_suite:
         suite = load_benchmark_suite(args.benchmark_suite)
