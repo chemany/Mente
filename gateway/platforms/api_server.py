@@ -1891,6 +1891,19 @@ class APIServerAdapter(BasePlatformAdapter):
             )
 
         async def _compute_response():
+            if _use_mente_executor(stream):
+                result = await asyncio.to_thread(
+                    run_api_server_task,
+                    user_message=user_message,
+                    conversation_history=conversation_history,
+                    session_id=session_id,
+                    api_mode="responses",
+                )
+                return result, {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                }
             return await self._run_agent(
                 user_message=user_message,
                 conversation_history=conversation_history,
@@ -1922,9 +1935,12 @@ class APIServerAdapter(BasePlatformAdapter):
                     status=500,
                 )
 
-        final_response = result.get("final_response", "")
-        if not final_response:
-            final_response = result.get("error", "(No response generated)")
+        if _use_mente_executor(stream):
+            final_response = result.summary or "(No response generated)"
+        else:
+            final_response = result.get("final_response", "")
+            if not final_response:
+                final_response = result.get("error", "(No response generated)")
 
         response_id = f"resp_{uuid.uuid4().hex[:28]}"
         created_at = int(time.time())
@@ -1934,14 +1950,31 @@ class APIServerAdapter(BasePlatformAdapter):
         full_history = list(conversation_history)
         full_history.append({"role": "user", "content": user_message})
         # Add agent's internal messages if available
-        agent_messages = result.get("messages", [])
-        if agent_messages:
-            full_history.extend(agent_messages)
-        else:
+        if _use_mente_executor(stream):
             full_history.append({"role": "assistant", "content": final_response})
+        else:
+            agent_messages = result.get("messages", [])
+            if agent_messages:
+                full_history.extend(agent_messages)
+            else:
+                full_history.append({"role": "assistant", "content": final_response})
 
         # Build output items (includes tool calls + final message)
-        output_items = self._extract_output_items(result)
+        if _use_mente_executor(stream):
+            output_items = [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": final_response,
+                        }
+                    ],
+                }
+            ]
+        else:
+            output_items = self._extract_output_items(result)
 
         response_data = {
             "id": response_id,

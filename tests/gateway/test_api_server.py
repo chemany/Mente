@@ -1135,6 +1135,34 @@ class TestResponsesEndpoint:
             assert call_kwargs["ephemeral_system_prompt"] == "Talk like a pirate."
 
     @pytest.mark.asyncio
+    async def test_responses_routes_to_mente_when_enabled(self, monkeypatch, adapter):
+        app = _create_app(adapter)
+        mente_run = MagicMock(return_value=_fake_execution_result("via mente responses"))
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_run_agent", new_callable=AsyncMock) as mock_run:
+                resp = await cli.post(
+                    "/v1/responses",
+                    json={
+                        "model": "hermes-agent",
+                        "input": "Hello",
+                        "conversation": "resp-session-1",
+                        "store": True,
+                    },
+                )
+                data = await resp.json()
+
+        assert resp.status == 200
+        assert data["object"] == "response"
+        assert data["output"][-1]["content"][0]["text"] == "via mente responses"
+        assert mente_run.call_args.kwargs["api_mode"] == "responses"
+        assert mente_run.call_args.kwargs["conversation_history"] == []
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_previous_response_id_chaining(self, adapter):
         """Test that responses can be chained via previous_response_id."""
         mock_result_1 = {
@@ -1352,6 +1380,37 @@ class TestResponsesStreaming:
                 assert '"logprobs": []' in body
                 assert "Hello" in body
                 assert " world" in body
+
+    @pytest.mark.asyncio
+    async def test_stream_true_stays_legacy_when_mente_enabled(self, monkeypatch, adapter):
+        app = _create_app(adapter)
+        mente_run = MagicMock()
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            async def _mock_run_agent(**kwargs):
+                cb = kwargs.get("stream_delta_callback")
+                if cb:
+                    cb("legacy responses")
+                return (
+                    {"final_response": "legacy responses", "messages": [], "api_calls": 1},
+                    {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                )
+
+            with patch.object(adapter, "_run_agent", side_effect=_mock_run_agent) as mock_run:
+                resp = await cli.post(
+                    "/v1/responses",
+                    json={"model": "hermes-agent", "input": "hi", "stream": True},
+                )
+                body = await resp.text()
+
+        assert resp.status == 200
+        assert "legacy responses" in body
+        assert "event: response.completed" in body
+        mente_run.assert_not_called()
+        assert mock_run.call_count == 1
 
     @pytest.mark.asyncio
     async def test_stream_emits_function_call_and_output_items(self, adapter):
