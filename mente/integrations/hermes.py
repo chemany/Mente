@@ -8,11 +8,12 @@ import uuid
 from typing import Any
 
 from mente.context_builder.builder import ContextBuilder
+from mente.executors.base import Executor
 from mente.executors.codex import CodexExecutor
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import SQLiteMemoryRepository
 from mente.orchestrator.service import Orchestrator
-from mente.task_core.models import ExecutionResult, Task
+from mente.task_core.models import ExecutionRequest, ExecutionResult, Task
 from mente.task_core.repository import SQLiteTaskRepository
 
 
@@ -35,6 +36,7 @@ def _build_orchestrator(
     workspace: str,
     repository,
     memory_repository: SQLiteMemoryRepository | None = None,
+    executor: Executor | None = None,
 ) -> Orchestrator:
     """Create the default Phase 2 orchestrator stack."""
     memory_repository = memory_repository or _build_memory_repository()
@@ -45,7 +47,7 @@ def _build_orchestrator(
             memory_repository=memory_repository,
             memory_limit=5,
         ),
-        executor=CodexExecutor(),
+        executor=executor or CodexExecutor(),
         memory_repository=memory_repository,
         memory_promoter=MemoryPromoter(),
     )
@@ -66,6 +68,41 @@ def _run_task(task: Task) -> ExecutionResult:
             close = getattr(repo, "close", None)
             if callable(close):
                 close()
+
+
+def _is_unbacked_prior_claim(candidate: str) -> bool:
+    """Return True when a candidate claims prior preferences without provided memory."""
+    normalized = " ".join(candidate.lower().split())
+    return any(
+        phrase in normalized
+        for phrase in (
+            "earlier",
+            "previously",
+            "previous ",
+            "prior ",
+            "before",
+            "already mentioned",
+        )
+    )
+
+
+class _APIServerIsolationExecutor(Executor):
+    """Wrap Codex execution with empty-session isolation for API server turns."""
+
+    def __init__(self, inner: Executor | None = None) -> None:
+        self._inner = inner or CodexExecutor()
+
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        result = self._inner.execute(request)
+        if request.memory_facts:
+            return result
+
+        result.memory_candidates = [
+            candidate
+            for candidate in result.memory_candidates
+            if not _is_unbacked_prior_claim(candidate)
+        ]
+        return result
 
 
 def _normalize_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -282,4 +319,17 @@ def run_api_server_task(
         api_mode=api_mode,
         workspace=workspace,
     )
-    return _run_task(task)
+    repository = _build_task_repository()
+    memory_repository = _build_memory_repository()
+    try:
+        return _build_orchestrator(
+            task.workspace or ".",
+            repository,
+            memory_repository,
+            executor=_APIServerIsolationExecutor(),
+        ).run(task)
+    finally:
+        for repo in (memory_repository, repository):
+            close = getattr(repo, "close", None)
+            if callable(close):
+                close()

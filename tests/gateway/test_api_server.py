@@ -319,6 +319,8 @@ def _create_app(adapter: APIServerAdapter) -> web.Application:
     app.router.add_post("/v1/responses", adapter._handle_responses)
     app.router.add_get("/v1/responses/{response_id}", adapter._handle_get_response)
     app.router.add_delete("/v1/responses/{response_id}", adapter._handle_delete_response)
+    app.router.add_get("/api/debug/tasks", adapter._handle_debug_tasks)
+    app.router.add_get("/api/debug/memories", adapter._handle_debug_memories)
     return app
 
 
@@ -598,6 +600,51 @@ class TestChatCompletionsEndpoint:
         assert mente_run.call_args.kwargs["api_mode"] == "chat_completions"
         assert mente_run.call_args.kwargs["conversation_history"] == []
         mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_fresh_session_persists_empty_selected_memory_context(
+        self, monkeypatch, auth_adapter, tmp_path
+    ):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        app = _create_app(auth_adapter)
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        def _fake_execute(self, request):
+            return ExecutionResult(
+                status="success",
+                summary="I do not have any prior preferences for this session.",
+                memory_candidates=[],
+            )
+
+        monkeypatch.setattr("mente.integrations.hermes.CodexExecutor.execute", _fake_execute)
+
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "fresh-api-session",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "What preferences did I mention earlier?"}],
+                },
+            )
+            tasks_resp = await cli.get(
+                "/api/debug/tasks?scope=session&session_id=fresh-api-session"
+                "&source=api_server&limit=1",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            data = await tasks_resp.json()
+
+        assert resp.status == 200
+        assert tasks_resp.status == 200
+        assert data["count"] == 1
+        assert data["tasks"][0]["metadata"]["memory_context"]["selected"] == []
 
     @pytest.mark.asyncio
     async def test_chat_completions_stream_true_stays_legacy_when_mente_enabled(self, monkeypatch, adapter):

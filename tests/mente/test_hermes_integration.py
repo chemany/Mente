@@ -399,6 +399,49 @@ def test_api_server_second_run_selects_session_memory(tmp_path, monkeypatch):
     )
 
 
+def test_api_server_fresh_session_does_not_promote_fabricated_prior_preferences(tmp_path, monkeypatch):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+    class _FakeUuid:
+        hex = "apiisolated"
+
+    monkeypatch.setattr("mente.integrations.hermes.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(
+        "mente.integrations.hermes.CodexExecutor.execute",
+        lambda self, request: ExecutionResult(
+            status="success",
+            summary="You mentioned earlier that you prefer terse replies.",
+            memory_candidates=["User previously said they prefer terse replies."],
+        ),
+    )
+
+    result = run_api_server_task(
+        user_message="What preferences did I mention earlier?",
+        conversation_history=[],
+        session_id="api-session-empty",
+        api_mode="chat_completions",
+        workspace=str(tmp_path),
+    )
+
+    stored_task = SQLiteTaskRepository(db_path=task_db_path).get("mente_api_server_apiisolated")
+    session_memories = SQLiteMemoryRepository(db_path=memory_db_path).list_by_session(
+        "api-session-empty",
+        source="api_server",
+        task_type="conversation",
+        memory_scope="session",
+    )
+
+    assert result.metadata["memory_context"]["selected"] == []
+    assert result.metadata["memory_promotion"]["promoted_memory_ids"] == []
+    assert stored_task is not None
+    assert stored_task.metadata["memory_context"]["selected"] == []
+    assert stored_task.metadata["memory_promotion"]["promoted_memory_ids"] == []
+    assert session_memories == []
+
+
 def test_run_cron_task_closes_repository(monkeypatch, tmp_path):
     class _FakeRepo:
         def __init__(self):

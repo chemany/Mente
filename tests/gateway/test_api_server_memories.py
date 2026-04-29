@@ -11,6 +11,7 @@ from gateway.platforms.api_server import (
     security_headers_middleware,
 )
 from mente.memory.models import MemoryRecord
+from mente.task_core.models import ExecutionResult
 
 
 def _make_adapter(api_key: str = "") -> APIServerAdapter:
@@ -25,6 +26,7 @@ def _create_app(adapter: APIServerAdapter) -> web.Application:
     app = web.Application(middlewares=mws)
     app["api_server_adapter"] = adapter
     app.router.add_post("/v1/chat/completions", adapter._handle_chat_completions)
+    app.router.add_get("/api/debug/tasks", adapter._handle_debug_tasks)
     app.router.add_get("/api/debug/memories", adapter._handle_debug_memories)
     return app
 
@@ -143,6 +145,60 @@ class TestDebugMemoriesAPI:
             assert data["memories"][0]["scope"] == "session"
             assert data["memories"][0]["session_id"] == "api-session-1"
             assert data["memories"][0]["fact"] == "User prefers concise replies."
+
+    @pytest.mark.asyncio
+    async def test_debug_memories_does_not_promote_fabricated_prior_preferences_for_empty_api_session(
+        self, auth_adapter, monkeypatch, tmp_path
+    ):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        def _fake_execute(self, request):
+            return ExecutionResult(
+                status="success",
+                summary="You mentioned earlier that you prefer terse replies.",
+                memory_candidates=["User previously said they prefer terse replies."],
+            )
+
+        monkeypatch.setattr("mente.integrations.hermes.CodexExecutor.execute", _fake_execute)
+
+        app = _create_app(auth_adapter)
+        async with TestClient(TestServer(app)) as cli:
+            chat_resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "api-isolation-1",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "What preferences did I mention earlier?"}],
+                },
+            )
+            tasks_resp = await cli.get(
+                "/api/debug/tasks?scope=session&session_id=api-isolation-1"
+                "&source=api_server&limit=1",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            memories_resp = await cli.get(
+                "/api/debug/memories?scope=session&session_id=api-isolation-1"
+                "&source=api_server&task_type=conversation&memory_scope=session&limit=5",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            task_data = await tasks_resp.json()
+            memory_data = await memories_resp.json()
+
+        assert chat_resp.status == 200
+        assert tasks_resp.status == 200
+        assert memories_resp.status == 200
+
+        assert task_data["count"] == 1
+        assert task_data["tasks"][0]["metadata"]["memory_context"]["selected"] == []
+        assert memory_data["count"] == 0
+        assert memory_data["memories"] == []
 
     @pytest.mark.asyncio
     async def test_debug_memories_returns_recent_filtered_memories(self, adapter, monkeypatch):
