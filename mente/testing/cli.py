@@ -18,6 +18,7 @@ from mente.testing.benchmark import (
     compare_benchmark_report_to_baseline,
     load_benchmark_baseline,
     load_benchmark_suite,
+    normalize_benchmark_report,
     run_benchmark_suite,
     write_benchmark_baseline,
 )
@@ -62,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.write_baseline:
             write_benchmark_baseline(report, args.write_baseline)
 
-        payload = report
+        payload = normalize_benchmark_report(report)
         if args.baseline:
             baseline = load_benchmark_baseline(args.baseline)
             payload = compare_benchmark_report_to_baseline(report, baseline)

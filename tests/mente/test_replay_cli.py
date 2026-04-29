@@ -101,3 +101,31 @@ def test_replay_cli_fails_on_benchmark_regression(tmp_path):
 
     assert exit_code == 1
     assert report["summary"]["regression_count"] >= 1
+
+
+def test_replay_cli_writes_normalized_benchmark_report(tmp_path):
+    suite_path = Path("tests/mente/fixtures/benchmarks/memory_policy_smoke.json")
+    output_path = tmp_path / "report.json"
+
+    exit_code = main(
+        [
+            "tests/mente/fixtures/replay/gateway_conversation.json",
+            "--benchmark-suite",
+            str(suite_path),
+            "--output-report",
+            str(output_path),
+        ]
+    )
+
+    raw_output = output_path.read_text(encoding="utf-8")
+    report = json.loads(raw_output)
+
+    assert exit_code == 0
+    assert raw_output.endswith("\n")
+    assert [
+        (run["case_id"], run["policy_variant"])
+        for run in report["runs"]
+    ] == sorted(
+        (run["case_id"], run["policy_variant"])
+        for run in report["runs"]
+    )

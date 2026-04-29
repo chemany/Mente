@@ -126,3 +126,18 @@ def test_compare_benchmark_report_to_baseline_treats_new_runs_as_neutral():
 
     assert comparison["summary"]["new_run_count"] == 1
     assert comparison["summary"]["regression_count"] == 0
+
+
+def test_benchmark_baseline_round_trip_matches_compare_path(tmp_path):
+    suite = load_benchmark_suite(
+        Path("tests/mente/fixtures/benchmarks/memory_policy_smoke.json")
+    )
+    report = run_benchmark_suite(suite)
+    baseline_path = tmp_path / "baseline.json"
+    write_benchmark_baseline(report, baseline_path)
+
+    loaded = load_benchmark_baseline(baseline_path)
+    comparison = compare_benchmark_report_to_baseline(report, loaded)
+
+    assert comparison["summary"]["regression_count"] == 0
+    assert comparison["summary"]["status"] == "unchanged"
