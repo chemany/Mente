@@ -182,3 +182,29 @@ def run_benchmark_suite(
         },
         "runs": runs,
     }
+
+
+def _sorted_benchmark_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        [dict(run) for run in runs],
+        key=lambda item: (item["case_id"], item["policy_variant"]),
+    )
+
+
+def normalize_benchmark_report(report: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(report)
+    normalized["runs"] = _sorted_benchmark_runs(report.get("runs", []))
+    return normalized
+
+
+def write_benchmark_baseline(report: dict[str, Any], path: str | Path) -> None:
+    Path(path).write_text(
+        json.dumps(normalize_benchmark_report(report), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_benchmark_baseline(path: str | Path) -> dict[str, Any]:
+    return normalize_benchmark_report(
+        json.loads(Path(path).read_text(encoding="utf-8"))
+    )
