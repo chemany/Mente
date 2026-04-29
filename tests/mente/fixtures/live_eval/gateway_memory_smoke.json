@@ -1,0 +1,29 @@
+{
+  "suite_id": "gateway_memory_smoke",
+  "notes": "Minimal stable live gateway memory scenario.",
+  "cases": [
+    {
+      "case_id": "session_preference_roundtrip",
+      "session_id_seed": "live_eval_gateway_session_1",
+      "turns": [
+        {
+          "user_message": "Remember that I prefer short weekly summaries."
+        },
+        {
+          "user_message": "What preference did I mention earlier?"
+        }
+      ],
+      "acceptance": {
+        "min_task_count": 2,
+        "expected_task_source": "gateway",
+        "expected_task_type": "conversation",
+        "min_promoted_memory_count": 1,
+        "selected_memory_ids_present": [
+          "mem_gateway_preference_1"
+        ],
+        "policy_id": "gateway:conversation",
+        "max_prompt_budget_char_count": 1200
+      }
+    }
+  ]
+}
