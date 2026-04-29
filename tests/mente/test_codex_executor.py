@@ -40,6 +40,25 @@ def test_codex_executor_implements_kernel_adapter_contract():
     assert "schema_path" not in payload
 
 
+def test_codex_executor_adapter_payload_stays_stateless():
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repository",
+        user_request="inspect repository",
+        workspace=".",
+        resume_token="resume-123",
+    )
+
+    payload = executor.build_request_payload(request)
+
+    assert executor.supports_kernel_sessions() is False
+    assert "session_id" not in payload
+    assert "resume_token" not in payload
+
+
 def test_codex_executor_builds_command():
     executor = CodexExecutor(codex_binary="codex")
     request = ExecutionRequest(
