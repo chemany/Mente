@@ -91,10 +91,48 @@ def test_kernel_transport_contract_stays_transport_neutral_and_separates_io_type
     assert not isinstance(response, KernelExecutionResult)
 
 
-def test_kernel_runner_uses_cli_transport_backend_by_default():
-    runner = KernelRunner(codex_binary="codex")
+def test_kernel_runner_uses_bridge_front_door_by_default(monkeypatch, tmp_path):
+    runtime_workdir = tmp_path / "isolated-workdir"
+    runtime_workdir.mkdir()
+    captured: dict[str, object] = {}
 
-    assert isinstance(runner.transport, CliKernelTransport)
+    def fake_invoke_vendored_front_door(**kwargs):
+        captured.update(kwargs)
+        return type("_BridgeResult", (), {
+            "command": ["/vendored/codex", "exec", "--ephemeral"],
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "raw_output": '{"assistant_summary":"vendored summary","memory_candidates":[]}',
+            "backend_failure": None,
+        })()
+
+    monkeypatch.setattr(
+        "kernel.codex.runtime.runner.prepare_isolated_workspace",
+        lambda: runtime_workdir,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "kernel.codex.runtime.runner.invoke_vendored_front_door",
+        fake_invoke_vendored_front_door,
+        raising=False,
+    )
+
+    runner = KernelRunner()
+    result = runner.run(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+    )
+
+    assert captured["session"].mode is KernelSessionMode.STATELESS
+    assert captured["workdir"] == str(runtime_workdir)
+    assert result.commands_run == ["/vendored/codex exec --ephemeral"]
+    assert result.assistant_summary == "vendored summary"
 
 
 def test_kernel_runner_normalizes_stateless_transport_output(monkeypatch, tmp_path):

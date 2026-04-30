@@ -147,3 +147,29 @@ def test_phase_c3_snapshot_manifest_declares_upstream_source_and_patch_boundary(
 
     for statement in required_statements:
         assert statement in content
+
+
+
+def test_phase_c4_cutover_manifest_declares_bridge_switch_and_deferred_boundaries():
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-phase-c4-cutover-manifest.md"
+    )
+
+    assert manifest_path.exists()
+
+    content = manifest_path.read_text(encoding="utf-8").lower()
+
+    required_statements = [
+        "vendored codex bridge is now the main execution path",
+        "codexkerneladapter remains the only upper-layer handoff seam",
+        "public `codex` binary no longer defines the architectural control plane",
+        "selected front door",
+        "deferred",
+        "tools",
+        "plugins",
+        "skills",
+    ]
+
+    for statement in required_statements:
+        assert statement in content

@@ -112,3 +112,22 @@ def test_phase_c2_manifest_declares_adapter_seam_remains_the_only_upper_layer_bo
     assert "runner + CLI transport backend + result normalization" in document
     assert "runtime config resolution" in document
     assert "private runtime home" in document
+
+
+
+def test_kernel_adapter_contract_hides_bridge_front_door_details_from_upper_layers():
+    adapter = _FakeKernelAdapter()
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repo",
+        user_request="Inspect repo",
+        workspace=".",
+    )
+
+    payload = adapter.build_request_payload(request)
+
+    assert "front_door_mode" not in payload
+    assert "runtime_binary_path" not in payload
+    assert "app_server_root" not in payload

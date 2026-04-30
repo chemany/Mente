@@ -701,3 +701,19 @@ def test_run_gateway_task_closes_repository(monkeypatch, tmp_path):
     )
 
     assert fake_repo.closed is True
+
+
+
+def test_hermes_cutover_manifest_records_bridge_owned_boundary():
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-phase-c4-cutover-manifest.md"
+    )
+
+    assert manifest_path.exists()
+
+    content = manifest_path.read_text(encoding="utf-8").lower()
+
+    assert "vendored codex bridge is now the main execution path" in content
+    assert "selected front door" in content
+    assert "tools/plugins/skills migration remains deferred" in content

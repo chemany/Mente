@@ -10,10 +10,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from kernel.codex.bridge.entrypoints import invoke_vendored_front_door
 from kernel.codex.runtime.protocol import build_structured_output_schema, parse_structured_output
 from kernel.codex.runtime.result import KernelExecutionResult
-from kernel.codex.runtime.transport import KernelTransport, KernelTransportRequest
-from kernel.codex.runtime.transports.cli import CliKernelTransport
+from kernel.codex.runtime.transport import KernelTransport, KernelTransportRequest, KernelTransportResponse
 from kernel.codex.sandbox.workspace import prepare_isolated_workspace
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
 
@@ -25,11 +25,12 @@ class KernelRunner:
         self,
         transport: KernelTransport | None = None,
         *,
-        codex_binary: str = "codex",
+        codex_binary: str | None = None,
         sandbox: str = "workspace-write",
         approval_policy: str = "never",
     ) -> None:
-        self.transport = transport or CliKernelTransport(codex_binary=codex_binary)
+        self.transport = transport
+        self.codex_binary = codex_binary
         self.sandbox = sandbox
         self.approval_policy = approval_policy
 
@@ -69,8 +70,23 @@ class KernelRunner:
                 schema_path = Path(handle.name)
 
             runtime_workdir = prepare_isolated_workspace()
-            response = self.transport.execute(
-                KernelTransportRequest(
+            if self.transport is not None:
+                response = self.transport.execute(
+                    KernelTransportRequest(
+                        payload=payload,
+                        session=session,
+                        runtime_config=runtime_config,
+                        sandbox=self.sandbox,
+                        approval_policy=self.approval_policy,
+                        cwd=payload.workspace,
+                        workdir=str(runtime_workdir),
+                        output_last_message=str(output_path),
+                        output_schema=str(schema_path),
+                        add_dirs=[str(Path(payload.workspace).resolve())],
+                    )
+                )
+            else:
+                bridge_result = invoke_vendored_front_door(
                     payload=payload,
                     session=session,
                     runtime_config=runtime_config,
@@ -81,8 +97,16 @@ class KernelRunner:
                     output_last_message=str(output_path),
                     output_schema=str(schema_path),
                     add_dirs=[str(Path(payload.workspace).resolve())],
+                    codex_binary_override=self.codex_binary,
                 )
-            )
+                response = KernelTransportResponse(
+                    command=list(bridge_result.command),
+                    returncode=bridge_result.returncode,
+                    stdout=bridge_result.stdout,
+                    stderr=bridge_result.stderr,
+                    raw_output=bridge_result.raw_output,
+                    backend_failure=bridge_result.backend_failure,
+                )
             return self._normalize_transport_response(response)
         finally:
             if output_path is not None:

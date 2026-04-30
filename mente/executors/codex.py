@@ -9,7 +9,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from kernel.codex.runtime.launcher import build_private_runtime_env, build_stateless_command
+from kernel.codex.bridge.entrypoints import build_vendored_command
+from kernel.codex.runtime.launcher import build_private_runtime_env
 from kernel.codex.runtime.protocol import KernelExecutionPayload
 from kernel.codex.runtime.result import KernelExecutionResult
 from kernel.codex.runtime.runner import KernelRunner
@@ -27,7 +28,7 @@ class CodexExecutor(CodexKernelAdapter):
 
     def __init__(
         self,
-        codex_binary: str = "codex",
+        codex_binary: str | None = None,
         sandbox: str = "workspace-write",
         approval_policy: str = "never",
         runtime_config: RuntimeConfig | None = None,
@@ -63,7 +64,7 @@ class CodexExecutor(CodexKernelAdapter):
         add_dirs: list[str] | None = None,
         runtime_config: RuntimeConfig | None = None,
     ) -> list[str]:
-        """Build the Codex CLI command for a request through the vendored launcher."""
+        """Build the bridge-owned vendored command for a request."""
         resolved_runtime_config = runtime_config or self._resolve_runtime_config(request.workspace)
         if config_overrides is not None:
             resolved_runtime_config = RuntimeConfig(
@@ -72,8 +73,7 @@ class CodexExecutor(CodexKernelAdapter):
                 ignore_rules=resolved_runtime_config.ignore_rules,
                 codex_config=resolved_runtime_config.codex_config,
             )
-        return build_stateless_command(
-            codex_binary=self.codex_binary,
+        return build_vendored_command(
             payload=self._build_kernel_payload(request),
             session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
             sandbox=self.sandbox,
@@ -83,6 +83,7 @@ class CodexExecutor(CodexKernelAdapter):
             output_schema=output_schema,
             workdir=workdir or request.workspace,
             add_dirs=add_dirs or [],
+            codex_binary_override=self.codex_binary,
         )
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:

@@ -459,15 +459,63 @@ def test_codex_executor_build_command_delegates_to_vendored_launcher(monkeypatch
     )
     captured: dict[str, object] = {}
 
-    def fake_build_stateless_command(**kwargs):
+    def fake_build_vendored_command(**kwargs):
         captured.update(kwargs)
         return ["codex", "exec", "--ephemeral", "Reply"]
 
-    monkeypatch.setattr("mente.executors.codex.build_stateless_command", fake_build_stateless_command)
+    monkeypatch.setattr("mente.executors.codex.build_vendored_command", fake_build_vendored_command)
 
     command = executor.build_command(request, output_schema="schema.json")
 
     assert command == ["codex", "exec", "--ephemeral", "Reply"]
+    assert isinstance(captured["payload"], KernelExecutionPayload)
+    assert captured["session"].mode is KernelSessionMode.STATELESS
+    assert captured["output_schema"] == "schema.json"
+
+
+
+def test_codex_executor_default_command_uses_vendored_bridge_front_door():
+    executor = CodexExecutor()
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repository",
+        user_request="inspect repository",
+        workspace=".",
+    )
+
+    cmd = executor.build_command(request, output_schema="schema.json")
+
+    assert cmd[0].endswith("kernel/codex/upstream/sdk/python-runtime/src/codex_cli_bin/bin/codex")
+    assert cmd[0] != "codex"
+
+
+def test_codex_executor_build_command_delegates_to_bridge_call_contract(monkeypatch):
+    executor = CodexExecutor()
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=".",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_build_vendored_command(**kwargs):
+        captured.update(kwargs)
+        return ["/vendored/codex", "exec", "--ephemeral", "Reply"]
+
+    monkeypatch.setattr(
+        "mente.executors.codex.build_vendored_command",
+        fake_build_vendored_command,
+        raising=False,
+    )
+
+    command = executor.build_command(request, output_schema="schema.json")
+
+    assert command == ["/vendored/codex", "exec", "--ephemeral", "Reply"]
     assert isinstance(captured["payload"], KernelExecutionPayload)
     assert captured["session"].mode is KernelSessionMode.STATELESS
     assert captured["output_schema"] == "schema.json"
