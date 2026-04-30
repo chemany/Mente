@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from mente.context_builder.builder import ContextBuilder
-from mente.executors import CodexKernelAdapter
+from mente.executors import CodexKernelAdapter, ToolExposurePolicy
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import InMemoryMemoryRepository
 from mente.orchestrator.service import Orchestrator
@@ -66,6 +66,33 @@ def test_kernel_adapter_session_capability_flag_is_optional():
 
     assert stateless.supports_kernel_sessions() is False
     assert session_capable.supports_kernel_sessions() is True
+
+
+def test_kernel_adapter_exposes_resolved_tool_policy_from_request():
+    adapter = _FakeKernelAdapter()
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repo",
+        user_request="Inspect repo",
+        workspace=".",
+        tool_policy=ToolExposurePolicy(
+            policy_id="gateway:engineering",
+            source="gateway",
+            native_tools=["shell"],
+            bridge_tools=[],
+            session_capable=False,
+        ),
+    )
+
+    assert adapter.resolve_tool_policy(request) == {
+        "policy_id": "gateway:engineering",
+        "source": "gateway",
+        "native_tools": ["shell"],
+        "bridge_tools": [],
+        "session_capable": False,
+    }
 
 
 def test_native_runtime_design_declares_adapter_handoff_boundary():

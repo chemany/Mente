@@ -24,10 +24,14 @@ class _ExecutorWithMemory(Executor):
 
 
 class _KernelStyleExecutor(CodexKernelAdapter):
+    def __init__(self) -> None:
+        self.last_request = None
+
     def build_request_payload(self, request: ExecutionRequest) -> dict[str, object]:
         raise AssertionError("Orchestrator should not inspect adapter payload internals")
 
     def execute(self, request):
+        self.last_request = request
         return ExecutionResult(
             status="success",
             summary="ok",
@@ -153,3 +157,47 @@ def test_orchestrator_runs_with_kernel_adapter_without_cli_details():
     assert result.status == "success"
     assert result.memory_candidates == ["Repository uses uv for Python commands."]
     assert result.metadata["promoted_memory_count"] == 1
+
+
+def test_orchestrator_threads_tool_policy_into_request_and_observability():
+    task_repo = InMemoryTaskRepository()
+    executor = _KernelStyleExecutor()
+    orchestrator = Orchestrator(
+        repository=task_repo,
+        context_builder=ContextBuilder(),
+        executor=executor,
+        memory_repository=InMemoryMemoryRepository(),
+        memory_promoter=MemoryPromoter(),
+    )
+    task = Task(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply",
+        metadata={
+            "source": "gateway",
+            "tool_policy": {
+                "policy_id": "gateway:conversation",
+                "source": "gateway",
+                "native_tools": [],
+                "bridge_tools": ["mente_memory_query"],
+                "session_capable": False,
+            },
+        },
+    )
+
+    result = orchestrator.run(task)
+    persisted = task_repo.get("task_1")
+
+    assert executor.last_request is not None
+    assert executor.last_request.tool_policy == {
+        "policy_id": "gateway:conversation",
+        "source": "gateway",
+        "native_tools": [],
+        "bridge_tools": ["mente_memory_query"],
+        "session_capable": False,
+    }
+    assert result.metadata["tool_policy"] == executor.last_request.tool_policy
+    assert persisted is not None
+    assert persisted.metadata["tool_policy"] == executor.last_request.tool_policy

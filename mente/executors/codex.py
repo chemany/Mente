@@ -43,10 +43,14 @@ class CodexExecutor(CodexKernelAdapter):
 
     def build_request_payload(self, request: ExecutionRequest) -> dict[str, object]:
         """Build the stable adapter payload for a prepared execution request."""
-        return {
+        payload: dict[str, object] = {
             "prompt": self.build_prompt(request),
             "workspace": request.workspace,
         }
+        tool_policy = self.resolve_tool_policy(request)
+        if tool_policy is not None:
+            payload["tool_policy"] = tool_policy
+        return payload
 
     def build_command(
         self,

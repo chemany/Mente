@@ -52,6 +52,13 @@ def test_build_cron_task_normalizes_job_into_task(tmp_path):
     assert task.user_request == "sync the repo"
     assert task.workspace == str(tmp_path)
     assert task.metadata["source"] == "cron"
+    assert task.metadata["tool_policy"] == {
+        "policy_id": "cron:cron",
+        "source": "cron",
+        "native_tools": [],
+        "bridge_tools": [],
+        "session_capable": False,
+    }
     assert "Cron job ID: job-1" in task.constraints
 
 
@@ -87,6 +94,13 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     assert task.workspace == str(tmp_path)
     assert task.metadata["source"] == "gateway"
     assert task.metadata["platform"] == "local"
+    assert task.metadata["tool_policy"] == {
+        "policy_id": "gateway:conversation",
+        "source": "gateway",
+        "native_tools": [],
+        "bridge_tools": [],
+        "session_capable": False,
+    }
     assert any("Session context:" in fact for fact in task.memory_facts)
     assert any("Channel prompt:" in fact for fact in task.memory_facts)
     history_fact = next(
@@ -116,6 +130,13 @@ def test_build_api_server_task_sets_api_server_source(tmp_path):
     assert task.workspace == str(tmp_path)
     assert task.metadata["source"] == "api_server"
     assert task.metadata["api_mode"] == "chat_completions"
+    assert task.metadata["tool_policy"] == {
+        "policy_id": "api_server:conversation",
+        "source": "api_server",
+        "native_tools": [],
+        "bridge_tools": [],
+        "session_capable": False,
+    }
     history_fact = next(
         fact for fact in task.memory_facts if fact.startswith("Conversation history (JSON):")
     )

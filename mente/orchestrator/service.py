@@ -42,6 +42,7 @@ class Orchestrator:
         self.repository.save(task)
 
         request, trace = self.context_builder.build_with_trace(task)
+        self._persist_tool_policy_on_request(task, request)
         self._persist_memory_context(task, trace)
         self._persist_memory_policy(task, trace)
         task.status = TaskStatus.CONTEXT_PREPARED
@@ -50,6 +51,8 @@ class Orchestrator:
         task.status = TaskStatus.EXECUTING
         self.repository.save(task)
         result = self.executor.execute(request)
+        self._persist_tool_policy_metadata(task, request.tool_policy)
+        self._persist_tool_policy_metadata(result, request.tool_policy)
         self._persist_memory_context(result, trace)
         self._persist_memory_policy(result, trace, task)
         self._persist_promoted_memory(task, result)
@@ -72,6 +75,28 @@ class Orchestrator:
         )
 
         return result
+
+    def _persist_tool_policy_on_request(self, task: Task, request) -> None:
+        try:
+            if request.tool_policy is None:
+                policy = task.metadata.get("tool_policy")
+                if isinstance(policy, dict):
+                    request.tool_policy = dict(policy)
+        except Exception:
+            logger.exception("failed to thread tool policy onto execution request")
+
+    def _persist_tool_policy_metadata(
+        self,
+        target: Task | ExecutionResult,
+        tool_policy: dict[str, Any] | None,
+    ) -> None:
+        if tool_policy is None:
+            return
+
+        try:
+            target.metadata["tool_policy"] = dict(tool_policy)
+        except Exception:
+            logger.exception("failed to serialize tool policy diagnostics")
 
     def _persist_memory_context(
         self,
