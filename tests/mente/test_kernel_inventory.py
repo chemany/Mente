@@ -173,3 +173,26 @@ def test_phase_c4_cutover_manifest_declares_bridge_switch_and_deferred_boundarie
 
     for statement in required_statements:
         assert statement in content
+
+
+def test_phase_c5_boundary_manifest_declares_capability_ownership_split():
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-phase-c5-capability-boundary-manifest.md"
+    )
+
+    assert manifest_path.exists()
+
+    content = manifest_path.read_text(encoding="utf-8").lower()
+
+    required_statements = [
+        "vendored codex native capability surface is active",
+        "mente bridge tools remain outside kernel",
+        "plugin hooks belong to codex",
+        "skill loading hooks belong to codex",
+        "product integration remains in `mente/`",
+        "codexkerneladapter remains the only upper-layer handoff seam",
+    ]
+
+    for statement in required_statements:
+        assert statement in content
