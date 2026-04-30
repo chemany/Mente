@@ -45,3 +45,24 @@ def test_kernel_boundary_map_declares_runtime_and_kernel_ownership_rules():
 
     for statement in required_statements:
         assert statement in content
+
+
+def test_phase_c_migration_sequence_declares_slice_order_and_rollback_boundary():
+    migration_sequence_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-phase-c-migration-sequence.md"
+    )
+
+    assert migration_sequence_path.exists()
+
+    content = migration_sequence_path.read_text(encoding="utf-8").lower()
+
+    required_statements = [
+        "ingestion order",
+        "first vendoring slice",
+        "validation gates after each slice",
+        "rollback boundary",
+    ]
+
+    for statement in required_statements:
+        assert statement in content
