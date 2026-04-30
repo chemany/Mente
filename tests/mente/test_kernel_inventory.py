@@ -121,3 +121,29 @@ def test_phase_c2_manifest_declares_runner_transport_and_deferred_boundaries():
 
     for statement in required_statements:
         assert statement in content
+
+
+def test_phase_c3_snapshot_manifest_declares_upstream_source_and_patch_boundary():
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-codex-upstream-snapshot-manifest.md"
+    )
+
+    assert manifest_path.exists()
+
+    content = manifest_path.read_text(encoding="utf-8").lower()
+
+    required_statements = [
+        "upstream codex repository source",
+        "pinned snapshot identifier",
+        "ingestion date",
+        "local edits inside the vendored snapshot",
+        "kernel/codex/upstream/",
+        "kernel/codex/bridge/",
+        "kernel/codex/patches/",
+        "source of truth",
+        "pristine as possible",
+    ]
+
+    for statement in required_statements:
+        assert statement in content
