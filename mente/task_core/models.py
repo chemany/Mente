@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TaskStatus(StrEnum):
@@ -63,7 +63,15 @@ class ExecutionRequest(BaseModel):
     budget: dict[str, Any] = Field(default_factory=dict)
     execution_mode: str | None = None
     resume_token: str | None = None
+    tool_policy: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("tool_policy", mode="before")
+    @classmethod
+    def _serialize_tool_policy(cls, value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
+        return value
 
 
 class ExecutionResult(BaseModel):

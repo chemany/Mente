@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 
-from mente.executors import CodexKernelAdapter, resolve_runtime_home
+from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_runtime_home
 from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
 from mente.executors.codex import CodexExecutor
@@ -57,6 +57,38 @@ def test_codex_executor_adapter_payload_stays_stateless():
     assert executor.supports_kernel_sessions() is False
     assert "session_id" not in payload
     assert "resume_token" not in payload
+
+
+def test_execution_request_can_carry_tool_policy_without_cli_details():
+    policy = ToolExposurePolicy(
+        policy_id="gateway:engineering",
+        source="gateway",
+        native_tools=["shell"],
+        bridge_tools=["mente_memory_query"],
+        session_capable=False,
+    )
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repository",
+        user_request="inspect repository",
+        workspace=".",
+        tool_policy=policy,
+    )
+
+    payload = request.model_dump(mode="json")
+
+    assert payload["tool_policy"] == {
+        "policy_id": "gateway:engineering",
+        "source": "gateway",
+        "native_tools": ["shell"],
+        "bridge_tools": ["mente_memory_query"],
+        "session_capable": False,
+    }
+    assert "command" not in payload
+    assert "argv" not in payload
+    assert "schema_path" not in payload
 
 
 def test_codex_executor_builds_command():
