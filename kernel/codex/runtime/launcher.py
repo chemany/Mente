@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from kernel.codex.runtime.protocol import KernelExecutionPayload
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
-from mente.executors.runtime_config import RuntimeConfig
+
+if TYPE_CHECKING:
+    from mente.executors.runtime_config import RuntimeConfig
 
 
 def build_stateless_command(
