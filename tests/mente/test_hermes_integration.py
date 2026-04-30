@@ -1,8 +1,11 @@
+from pathlib import Path
+
 from gateway.config import Platform
 from gateway.session import SessionSource
 
 from mente.integrations import hermes as hermes_bridge
 from mente.executors import CodexKernelAdapter
+from mente.executors.runtime_config import RuntimeConfig
 from mente.integrations.hermes import (
     build_api_server_task,
     build_cron_task,
@@ -145,11 +148,67 @@ def test_build_orchestrator_uses_kernel_adapter_factory(monkeypatch):
             captured.update(kwargs)
 
     monkeypatch.setattr(hermes_bridge, "Orchestrator", _FakeOrchestrator)
-    monkeypatch.setattr(hermes_bridge, "_build_kernel_adapter", lambda: fake_adapter)
+    monkeypatch.setattr(
+        hermes_bridge,
+        "_build_kernel_adapter",
+        lambda workspace, runtime_config=None: fake_adapter,
+    )
 
     hermes_bridge._build_orchestrator(".", repository=object())
 
     assert captured["executor"] is fake_adapter
+
+
+def test_build_kernel_adapter_resolves_private_runtime_config(monkeypatch, tmp_path):
+    captured = {}
+    runtime_config = RuntimeConfig(runtime_home=tmp_path / "private-runtime-home")
+
+    class _FakeExecutor:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        hermes_bridge,
+        "_resolve_runtime_config_for_workspace",
+        lambda workspace: runtime_config,
+    )
+    monkeypatch.setattr(hermes_bridge, "CodexExecutor", _FakeExecutor)
+
+    adapter = hermes_bridge._build_kernel_adapter(str(tmp_path))
+
+    assert adapter is not None
+    assert captured["runtime_config"] is runtime_config
+
+
+def test_run_api_server_task_uses_private_runtime_config_provider(monkeypatch, tmp_path):
+    db_path = tmp_path / "state.db"
+    runtime_config = RuntimeConfig(runtime_home=tmp_path / "private-runtime-home")
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(db_path))
+    captured = {}
+
+    monkeypatch.setattr(
+        hermes_bridge,
+        "_resolve_runtime_config_for_workspace",
+        lambda workspace: runtime_config,
+    )
+
+    def _fake_execute(self, request):
+        captured["runtime_config"] = self._runtime_config
+        return ExecutionResult(status="success", summary="done")
+
+    monkeypatch.setattr("mente.integrations.hermes.CodexExecutor.execute", _fake_execute)
+
+    result = run_api_server_task(
+        user_message="latest question",
+        conversation_history=[],
+        session_id="api-session-1",
+        api_mode="responses",
+        workspace=str(tmp_path),
+    )
+
+    assert result.status == "success"
+    assert captured["runtime_config"] is runtime_config
+    assert captured["runtime_config"].runtime_home == tmp_path / "private-runtime-home"
 
 
 def test_api_server_isolation_executor_preserves_kernel_adapter_contract():

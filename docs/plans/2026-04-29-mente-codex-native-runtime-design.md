@@ -143,6 +143,12 @@ The adapter becomes responsible for:
 - session lifecycle control
 - tool policy application
 - isolation defaults
+- resolved private runtime ownership inputs from Mente
+
+In the transitional external-CLI phase, this means Mente should resolve the
+private runtime home and merged config model before adapter execution, then
+pass that explicit runtime ownership into the executor instead of relying on
+public `~/.codex` state at execution time.
 
 Recommended modes:
 

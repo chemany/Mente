@@ -14,8 +14,10 @@ Tests cover:
 
 import asyncio
 import json
+import os
 import time
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,6 +35,7 @@ from gateway.platforms.api_server import (
     cors_middleware,
     security_headers_middleware,
 )
+from mente.executors.runtime_config import RuntimeConfig
 from mente.task_core.models import ExecutionResult
 
 
@@ -645,6 +648,47 @@ class TestChatCompletionsEndpoint:
         assert tasks_resp.status == 200
         assert data["count"] == 1
         assert data["tasks"][0]["metadata"]["memory_context"]["selected"] == []
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_uses_private_runtime_config_provider(
+        self, monkeypatch, auth_adapter, tmp_path
+    ):
+        app = _create_app(auth_adapter)
+        runtime_config = RuntimeConfig(runtime_home=tmp_path / "private-runtime-home")
+        public_codex_home = tmp_path / "public-codex-home"
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
+        captured = {}
+
+        monkeypatch.setattr(
+            "mente.integrations.hermes._resolve_runtime_config_for_workspace",
+            lambda workspace: runtime_config,
+        )
+
+        def _fake_execute(self, request):
+            captured["runtime_config"] = self._runtime_config
+            return ExecutionResult(status="success", summary="via mente")
+
+        monkeypatch.setattr("mente.integrations.hermes.CodexExecutor.execute", _fake_execute)
+
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "sess-api-runtime",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+            data = await resp.json()
+
+        assert resp.status == 200
+        assert data["choices"][0]["message"]["content"] == "via mente"
+        assert captured["runtime_config"] is runtime_config
+        assert captured["runtime_config"].runtime_home != Path(os.environ["CODEX_HOME"])
 
     @pytest.mark.asyncio
     async def test_chat_completions_stream_true_stays_legacy_when_mente_enabled(self, monkeypatch, adapter):

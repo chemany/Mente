@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import logging
 import os
@@ -27,10 +28,14 @@ class CodexExecutor(CodexKernelAdapter):
         codex_binary: str = "codex",
         sandbox: str = "workspace-write",
         approval_policy: str = "never",
+        runtime_config: RuntimeConfig | None = None,
+        runtime_config_resolver: Callable[[str | Path], RuntimeConfig] | None = None,
     ) -> None:
         self.codex_binary = codex_binary
         self.sandbox = sandbox
         self.approval_policy = approval_policy
+        self._runtime_config = runtime_config
+        self._runtime_config_resolver = runtime_config_resolver or resolve_runtime_config
 
     def build_prompt(self, request: ExecutionRequest) -> str:
         """Build a stable textual prompt from an execution request."""
@@ -55,7 +60,7 @@ class CodexExecutor(CodexKernelAdapter):
     ) -> list[str]:
         """Build the Codex CLI command for a request."""
         payload = self.build_request_payload(request)
-        runtime_config = runtime_config or resolve_runtime_config(request.workspace)
+        runtime_config = runtime_config or self._resolve_runtime_config(request.workspace)
         command = [
             self.codex_binary,
             "exec",
@@ -116,7 +121,7 @@ class CodexExecutor(CodexKernelAdapter):
             ) as handle:
                 json.dump(self._structured_output_schema(), handle)
                 schema_path = Path(handle.name)
-            runtime_config = resolve_runtime_config(request.workspace)
+            runtime_config = self._resolve_runtime_config(request.workspace)
             codex_home = runtime_config.runtime_home
             codex_home.mkdir(parents=True, exist_ok=True)
             runtime_workdir = Path(
@@ -290,3 +295,9 @@ class CodexExecutor(CodexKernelAdapter):
         if configured:
             return Path(configured).expanduser()
         return Path.home() / ".codex"
+
+    def _resolve_runtime_config(self, workspace: str | Path) -> RuntimeConfig:
+        """Resolve the private runtime config for this executor instance."""
+        if self._runtime_config is not None:
+            return self._runtime_config
+        return self._runtime_config_resolver(workspace)

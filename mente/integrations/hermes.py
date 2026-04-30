@@ -11,6 +11,7 @@ from mente.context_builder.builder import ContextBuilder
 from mente.executors import CodexKernelAdapter
 from mente.executors.base import Executor
 from mente.executors.codex import CodexExecutor
+from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import SQLiteMemoryRepository
 from mente.orchestrator.service import Orchestrator
@@ -33,9 +34,19 @@ def _build_memory_repository() -> SQLiteMemoryRepository:
     return SQLiteMemoryRepository()
 
 
-def _build_kernel_adapter() -> CodexKernelAdapter:
+def _resolve_runtime_config_for_workspace(workspace: str) -> RuntimeConfig:
+    """Resolve the private runtime config for a Mente workspace."""
+    return resolve_runtime_config(workspace)
+
+
+def _build_kernel_adapter(
+    workspace: str,
+    runtime_config: RuntimeConfig | None = None,
+) -> CodexKernelAdapter:
     """Create the default Codex-backed kernel adapter."""
-    return CodexExecutor()
+    return CodexExecutor(
+        runtime_config=runtime_config or _resolve_runtime_config_for_workspace(workspace)
+    )
 
 
 def _build_orchestrator(
@@ -53,7 +64,7 @@ def _build_orchestrator(
             memory_repository=memory_repository,
             memory_limit=5,
         ),
-        executor=executor or _build_kernel_adapter(),
+        executor=executor or _build_kernel_adapter(workspace),
         memory_repository=memory_repository,
         memory_promoter=MemoryPromoter(),
     )
@@ -95,8 +106,16 @@ def _is_unbacked_prior_claim(candidate: str) -> bool:
 class _APIServerIsolationExecutor(CodexKernelAdapter):
     """Wrap Codex execution with empty-session isolation for API server turns."""
 
-    def __init__(self, inner: CodexKernelAdapter | None = None) -> None:
-        self._inner = inner or _build_kernel_adapter()
+    def __init__(
+        self,
+        inner: CodexKernelAdapter | None = None,
+        workspace: str | None = None,
+        runtime_config: RuntimeConfig | None = None,
+    ) -> None:
+        self._inner = inner or _build_kernel_adapter(
+            workspace or ".",
+            runtime_config=runtime_config,
+        )
 
     def build_request_payload(self, request: ExecutionRequest) -> dict[str, object]:
         return self._inner.build_request_payload(request)
@@ -334,11 +353,15 @@ def run_api_server_task(
     repository = _build_task_repository()
     memory_repository = _build_memory_repository()
     try:
+        runtime_config = _resolve_runtime_config_for_workspace(task.workspace or ".")
         return _build_orchestrator(
             task.workspace or ".",
             repository,
             memory_repository,
-            executor=_APIServerIsolationExecutor(),
+            executor=_APIServerIsolationExecutor(
+                workspace=task.workspace or ".",
+                runtime_config=runtime_config,
+            ),
         ).run(task)
     finally:
         for repo in (memory_repository, repository):
