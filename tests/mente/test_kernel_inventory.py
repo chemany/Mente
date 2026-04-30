@@ -93,3 +93,31 @@ def test_phase_c1_manifest_declares_vendored_slice_boundary():
 
     for statement in required_statements:
         assert statement in content
+
+
+def test_phase_c2_manifest_declares_runner_transport_and_deferred_boundaries():
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-phase-c2-kernel-runner-manifest.md"
+    )
+
+    assert manifest_path.exists()
+
+    content = manifest_path.read_text(encoding="utf-8").lower()
+
+    required_statements = [
+        "runner",
+        "cli transport backend",
+        "result normalization",
+        "stays in `mente/`",
+        "runtime config resolution",
+        "private runtime home",
+        "bridge-tool policy",
+        "deferred",
+        "real sessionful execution path",
+        "plugins",
+        "skills",
+    ]
+
+    for statement in required_statements:
+        assert statement in content

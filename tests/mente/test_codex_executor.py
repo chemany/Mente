@@ -1,10 +1,11 @@
 import json
 import os
-import subprocess
 from pathlib import Path
 
 from kernel.codex.runtime.launcher import build_private_runtime_env, build_stateless_command
-from kernel.codex.runtime.protocol import KernelExecutionPayload, KernelStructuredOutput
+from kernel.codex.runtime.protocol import KernelExecutionPayload
+from kernel.codex.runtime.result import KernelExecutionResult
+from kernel.codex.runtime.runner import KernelRunner
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
 from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_runtime_home
 from mente.executors.base import Executor
@@ -230,56 +231,22 @@ def test_codex_executor_uses_dangerous_bypass_for_full_access():
 
 
 def test_codex_executor_execute_uses_private_codex_home(monkeypatch, tmp_path):
-    executor = CodexExecutor(codex_binary="codex")
-    request = ExecutionRequest(
-        task_id="task_1",
-        session_id="session_1",
-        task_type="conversation",
-        objective="Reply",
-        user_request="Reply to the user",
-        workspace=str(tmp_path),
-    )
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "public-codex-home"))
     captured: dict[str, object] = {}
 
-    def fake_run(command, capture_output, text, cwd, check, env):
-        output_path = command[command.index("--output-last-message") + 1]
-        captured["env"] = env
-        captured["cwd"] = cwd
-        captured["command"] = command
-        captured["codex_home_exists_during_run"] = os.path.isdir(env["CODEX_HOME"])
-        with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump(
-                {
-                    "assistant_summary": "ok",
-                    "memory_candidates": [],
-                },
-                handle,
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            captured["payload"] = payload
+            captured["session"] = session
+            captured["runtime_config"] = runtime_config
+            captured["runtime_home_exists"] = runtime_config.runtime_home.is_dir()
+            return KernelExecutionResult(
+                status="success",
+                assistant_summary="ok",
             )
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("mente.executors.codex.subprocess.run", fake_run)
-
-    result = executor.execute(request)
-
-    assert result.status == "success"
-    env = captured["env"]
-    assert isinstance(env, dict)
-    assert env["CODEX_HOME"] != os.environ["CODEX_HOME"]
-    assert env["CODEX_HOME"] == str(resolve_runtime_home())
-    assert env["HOME"] == env["CODEX_HOME"]
-    assert captured["codex_home_exists_during_run"] is True
-    assert captured["cwd"] == str(tmp_path)
-    command = captured["command"]
-    isolated_workdir = command[command.index("--cd") + 1]
-    assert isolated_workdir != str(tmp_path)
-    assert os.path.basename(isolated_workdir).startswith("mente-codex-workdir-")
-    assert command[command.index("--add-dir") + 1] == str(tmp_path)
-
-
-def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypatch, tmp_path):
-    executor = CodexExecutor(codex_binary="codex")
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
     request = ExecutionRequest(
         task_id="task_1",
         session_id="session_1",
@@ -288,37 +255,49 @@ def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypa
         user_request="Reply to the user",
         workspace=str(tmp_path),
     )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert result.summary == "ok"
+    runtime_config = captured["runtime_config"]
+    assert isinstance(runtime_config, RuntimeConfig)
+    assert runtime_config.runtime_home == resolve_runtime_home()
+    assert captured["runtime_home_exists"] is True
+    assert captured["payload"].workspace == str(tmp_path)
+    assert captured["session"].mode is KernelSessionMode.STATELESS
+
+
+def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypatch, tmp_path):
     public_codex_home = tmp_path / "public-codex-home"
     public_codex_home.mkdir()
     (public_codex_home / "auth.json").write_text(
         json.dumps({"OPENAI_API_KEY": "test-openai-key"}),
         encoding="utf-8",
     )
-    (public_codex_home / "config.toml").write_text("model = \"gpt-5\"", encoding="utf-8")
+    (public_codex_home / "config.toml").write_text('model = "gpt-5"', encoding="utf-8")
     (public_codex_home / "rules").mkdir()
     (public_codex_home / "rules" / "default.rules").write_text("never share", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
     captured: dict[str, object] = {}
 
-    def fake_run(command, capture_output, text, cwd, check, env):
-        isolated_home = os.path.realpath(env["CODEX_HOME"])
-        output_path = command[command.index("--output-last-message") + 1]
-        captured["auth_payload"] = json.loads(
-            open(os.path.join(isolated_home, "auth.json"), encoding="utf-8").read()
-        )
-        captured["config_exists"] = os.path.exists(os.path.join(isolated_home, "config.toml"))
-        captured["rules_exist"] = os.path.exists(os.path.join(isolated_home, "rules", "default.rules"))
-        with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump(
-                {
-                    "assistant_summary": "ok",
-                    "memory_candidates": [],
-                },
-                handle,
-            )
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            isolated_home = runtime_config.runtime_home
+            captured["auth_payload"] = json.loads((isolated_home / "auth.json").read_text(encoding="utf-8"))
+            captured["config_exists"] = (isolated_home / "config.toml").exists()
+            captured["rules_exist"] = (isolated_home / "rules" / "default.rules").exists()
+            return KernelExecutionResult(status="success", assistant_summary="ok")
 
-    monkeypatch.setattr("mente.executors.codex.subprocess.run", fake_run)
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
 
     result = executor.execute(request)
 
@@ -331,15 +310,6 @@ def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypa
 def test_codex_executor_execute_passes_minimal_provider_overrides_without_copying_config(
     monkeypatch, tmp_path
 ):
-    executor = CodexExecutor(codex_binary="codex")
-    request = ExecutionRequest(
-        task_id="task_1",
-        session_id="session_1",
-        task_type="conversation",
-        objective="Reply",
-        user_request="Reply to the user",
-        workspace=str(tmp_path),
-    )
     hermes_home = tmp_path / ".hermes"
     profile_config = hermes_home / "mente" / "config.toml"
     workspace_config = tmp_path / ".mente" / "codex.toml"
@@ -374,115 +344,13 @@ def test_codex_executor_execute_passes_minimal_provider_overrides_without_copyin
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "public-codex-home"))
     captured: dict[str, object] = {}
 
-    def fake_run(command, capture_output, text, cwd, check, env):
-        isolated_home = os.path.realpath(env["CODEX_HOME"])
-        output_path = command[command.index("--output-last-message") + 1]
-        captured["command"] = command
-        captured["config_exists"] = os.path.exists(os.path.join(isolated_home, "config.toml"))
-        with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump(
-                {
-                    "assistant_summary": "ok",
-                    "memory_candidates": [],
-                },
-                handle,
-            )
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            captured["overrides"] = runtime_config.to_codex_overrides()
+            captured["config_exists"] = (runtime_config.runtime_home / "config.toml").exists()
+            return KernelExecutionResult(status="success", assistant_summary="ok")
 
-    monkeypatch.setattr("mente.executors.codex.subprocess.run", fake_run)
-
-    result = executor.execute(request)
-
-    assert result.status == "success"
-    assert captured["config_exists"] is False
-    command = captured["command"]
-    assert "-c" in command
-    config_args = [
-        command[index + 1]
-        for index, part in enumerate(command[:-1])
-        if part == "-c"
-    ]
-    assert 'model_provider="profile"' in config_args
-    assert 'model="gpt-5.5"' in config_args
-    assert 'model_providers.profile.name="vipnewapi"' in config_args
-    assert 'model_providers.profile.base_url="https://profile.invalid/v1"' in config_args
-    assert 'model_providers.profile.wire_api="responses"' in config_args
-    assert "model_providers.profile.requires_openai_auth=true" in config_args
-
-
-def test_codex_executor_execute_parses_structured_memory_candidate_output(monkeypatch):
-    executor = CodexExecutor(codex_binary="codex")
-    request = ExecutionRequest(
-        task_id="task_1",
-        session_id="session_1",
-        task_type="conversation",
-        objective="Reply",
-        user_request="Reply to the user",
-        workspace=".",
-    )
-
-    def fake_run(command, capture_output, text, cwd, check, env):
-        output_path = command[command.index("--output-last-message") + 1]
-        schema_path = command[command.index("--output-schema") + 1]
-        schema = json.loads(open(schema_path, encoding="utf-8").read())
-
-        assert schema["type"] == "object"
-        assert "assistant_summary" in schema["properties"]
-        assert "memory_candidates" in schema["properties"]
-
-        with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump(
-                {
-                    "assistant_summary": "User prefers concise replies.",
-                    "memory_candidates": [
-                        "User prefers concise replies.",
-                        "User works in Python.",
-                    ],
-                },
-                handle,
-            )
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("mente.executors.codex.subprocess.run", fake_run)
-
-    result = executor.execute(request)
-
-    assert result.status == "success"
-    assert result.summary == "User prefers concise replies."
-    assert result.memory_candidates == [
-        "User prefers concise replies.",
-        "User works in Python.",
-    ]
-
-
-def test_codex_executor_execute_falls_back_when_structured_output_is_not_json(monkeypatch):
-    executor = CodexExecutor(codex_binary="codex")
-    request = ExecutionRequest(
-        task_id="task_1",
-        session_id="session_1",
-        task_type="conversation",
-        objective="Reply",
-        user_request="Reply to the user",
-        workspace=".",
-    )
-
-    def fake_run(command, capture_output, text, cwd, check, env):
-        output_path = command[command.index("--output-last-message") + 1]
-        with open(output_path, "w", encoding="utf-8") as handle:
-            handle.write("plain text fallback")
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("mente.executors.codex.subprocess.run", fake_run)
-
-    result = executor.execute(request)
-
-    assert result.status == "success"
-    assert result.summary == "plain text fallback"
-    assert result.memory_candidates == []
-
-
-def test_codex_executor_execute_delegates_to_vendored_kernel_helpers(monkeypatch, tmp_path):
-    executor = CodexExecutor(codex_binary="codex")
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
     request = ExecutionRequest(
         task_id="task_1",
         session_id="session_1",
@@ -491,73 +359,115 @@ def test_codex_executor_execute_delegates_to_vendored_kernel_helpers(monkeypatch
         user_request="Reply to the user",
         workspace=str(tmp_path),
     )
-    runtime_workdir = tmp_path / "isolated-workdir"
-    runtime_workdir.mkdir()
-    captured: dict[str, object] = {}
-
-    def fake_prepare_isolated_workspace():
-        captured["workspace_helper_called"] = True
-        return runtime_workdir
-
-    def fake_build_stateless_command(**kwargs):
-        captured["launcher_kwargs"] = kwargs
-        return [
-            "codex",
-            "exec",
-            "--cd",
-            str(runtime_workdir),
-            "--output-last-message",
-            kwargs["output_last_message"],
-        ]
-
-    def fake_build_private_runtime_env(codex_home):
-        captured["env_home"] = codex_home
-        return {
-            "HOME": str(codex_home),
-            "CODEX_HOME": str(codex_home),
-        }
-
-    def fake_parse_structured_output(raw_output):
-        captured["parsed_output"] = raw_output
-        return KernelStructuredOutput(
-            assistant_summary="vendored summary",
-            memory_candidates=["persist this"],
-        )
-
-    def fake_run(command, capture_output, text, cwd, check, env):
-        output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text('{"assistant_summary":"ignored","memory_candidates":[]}', encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(
-        "mente.executors.codex.prepare_isolated_workspace",
-        fake_prepare_isolated_workspace,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "mente.executors.codex.build_stateless_command",
-        fake_build_stateless_command,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "mente.executors.codex.build_private_runtime_env",
-        fake_build_private_runtime_env,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "mente.executors.codex.parse_structured_output",
-        fake_parse_structured_output,
-        raising=False,
-    )
-    monkeypatch.setattr("mente.executors.codex.subprocess.run", fake_run)
 
     result = executor.execute(request)
 
-    assert captured["workspace_helper_called"] is True
-    launcher_kwargs = captured["launcher_kwargs"]
-    assert isinstance(launcher_kwargs["payload"], KernelExecutionPayload)
-    assert launcher_kwargs["session"].mode is KernelSessionMode.STATELESS
-    assert launcher_kwargs["session"].session_id is None
-    assert captured["parsed_output"] == '{"assistant_summary":"ignored","memory_candidates":[]}'
+    assert result.status == "success"
+    assert captured["config_exists"] is False
+    assert 'model_provider="profile"' in captured["overrides"]
+    assert 'model="gpt-5.5"' in captured["overrides"]
+    assert 'model_providers.profile.name="vipnewapi"' in captured["overrides"]
+    assert 'model_providers.profile.base_url="https://profile.invalid/v1"' in captured["overrides"]
+    assert 'model_providers.profile.wire_api="responses"' in captured["overrides"]
+    assert "model_providers.profile.requires_openai_auth=true" in captured["overrides"]
+
+
+def test_codex_executor_execute_delegates_to_kernel_runner(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            captured["payload"] = payload
+            captured["session"] = session
+            captured["runtime_config"] = runtime_config
+            return KernelExecutionResult(
+                status="success",
+                assistant_summary="vendored summary",
+                memory_candidates=["persist this"],
+                commands_run=["codex exec --ephemeral"],
+                debug={"returncode": 0, "structured_output": {"assistant_summary": "vendored summary"}},
+            )
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert isinstance(executor._runner, object)
+    assert isinstance(captured["payload"], KernelExecutionPayload)
+    assert captured["payload"].prompt == executor.build_prompt(request)
+    assert captured["session"].mode is KernelSessionMode.STATELESS
+    assert captured["session"].session_id is None
+    assert isinstance(captured["runtime_config"], RuntimeConfig)
+    assert result.status == "success"
     assert result.summary == "vendored summary"
     assert result.memory_candidates == ["persist this"]
+    assert result.commands_run == ["codex exec --ephemeral"]
+    assert result.metadata["returncode"] == 0
+
+
+def test_codex_executor_execute_translates_kernel_failures(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            return KernelExecutionResult(
+                status="failed",
+                assistant_summary="Kernel session mode is recognized but not enabled for production execution yet.",
+                commands_run=["codex exec --ephemeral"],
+                debug={"session_mode": "session"},
+                backend_failure="unsupported_session_mode",
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+        execution_mode="session",
+        resume_token="resume-123",
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "failed"
+    assert result.summary.startswith("Kernel session mode")
+    assert result.failure_reason == "unsupported_session_mode"
+    assert result.metadata["session_mode"] == "session"
+
+
+def test_codex_executor_build_command_delegates_to_vendored_launcher(monkeypatch):
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=".",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_build_stateless_command(**kwargs):
+        captured.update(kwargs)
+        return ["codex", "exec", "--ephemeral", "Reply"]
+
+    monkeypatch.setattr("mente.executors.codex.build_stateless_command", fake_build_stateless_command)
+
+    command = executor.build_command(request, output_schema="schema.json")
+
+    assert command == ["codex", "exec", "--ephemeral", "Reply"]
+    assert isinstance(captured["payload"], KernelExecutionPayload)
+    assert captured["session"].mode is KernelSessionMode.STATELESS
+    assert captured["output_schema"] == "schema.json"

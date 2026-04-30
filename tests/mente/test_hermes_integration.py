@@ -234,6 +234,8 @@ def test_build_kernel_adapter_preserves_adapter_only_handoff_after_vendoring(mon
     payload = adapter.build_request_payload(request)
 
     assert isinstance(adapter, CodexKernelAdapter)
+    assert type(adapter).__name__ == "CodexExecutor"
+    assert hasattr(adapter, "_runner")
     assert adapter.supports_kernel_sessions() is False
     assert payload["workspace"] == str(tmp_path)
     assert "command" not in payload

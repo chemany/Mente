@@ -1,7 +1,8 @@
 """Executor backends for Mente.
 
 The vendored kernel slice remains internal; upper layers still hand off through
-`CodexKernelAdapter` and `CodexExecutor`.
+`CodexKernelAdapter` and `CodexExecutor`. `KernelRunner` stays inside
+`kernel/codex/` and is not part of the public executor surface.
 """
 
 from mente.executors.codex import CodexExecutor

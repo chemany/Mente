@@ -100,3 +100,15 @@ def test_native_runtime_design_declares_adapter_handoff_boundary():
 
     assert "CodexKernelAdapter is the supported handoff point for the future controlled fork." in document
     assert "Upper layers should not grow new direct dependencies on CLI-specific details." in document
+
+
+def test_phase_c2_manifest_declares_adapter_seam_remains_the_only_upper_layer_boundary():
+    document = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-phase-c2-kernel-runner-manifest.md"
+    ).read_text(encoding="utf-8")
+
+    assert "CodexKernelAdapter remains the only upper-layer handoff seam." in document
+    assert "runner + CLI transport backend + result normalization" in document
+    assert "runtime config resolution" in document
+    assert "private runtime home" in document
