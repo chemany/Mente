@@ -15,7 +15,7 @@ from mente.integrations.hermes import (
     run_gateway_task,
 )
 from mente.memory.repository import SQLiteMemoryRepository
-from mente.task_core.models import ExecutionResult
+from mente.task_core.models import ExecutionRequest, ExecutionResult
 from mente.task_core.repository import SQLiteTaskRepository
 
 
@@ -199,6 +199,45 @@ def test_build_kernel_adapter_resolves_private_runtime_config(monkeypatch, tmp_p
 
     assert adapter is not None
     assert captured["runtime_config"] is runtime_config
+
+
+def test_build_kernel_adapter_preserves_adapter_only_handoff_after_vendoring(monkeypatch, tmp_path):
+    runtime_config = RuntimeConfig(runtime_home=tmp_path / "private-runtime-home")
+
+    monkeypatch.setattr(
+        hermes_bridge,
+        "_resolve_runtime_config_for_workspace",
+        lambda workspace: runtime_config,
+    )
+
+    adapter = hermes_bridge._build_kernel_adapter(str(tmp_path))
+    task = build_api_server_task(
+        user_message="latest question",
+        conversation_history=[],
+        session_id="api-session-1",
+        api_mode="responses",
+        workspace=str(tmp_path),
+    )
+    request = ExecutionRequest(
+        task_id=task.task_id,
+        session_id=task.session_id,
+        task_type=task.task_type,
+        objective=task.objective,
+        user_request=task.user_request,
+        workspace=task.workspace or str(tmp_path),
+        constraints=task.constraints,
+        memory_facts=task.memory_facts,
+        tool_policy=task.metadata["tool_policy"],
+        metadata=task.metadata,
+    )
+
+    payload = adapter.build_request_payload(request)
+
+    assert isinstance(adapter, CodexKernelAdapter)
+    assert adapter.supports_kernel_sessions() is False
+    assert payload["workspace"] == str(tmp_path)
+    assert "command" not in payload
+    assert "argv" not in payload
 
 
 def test_run_api_server_task_uses_private_runtime_config_provider(monkeypatch, tmp_path):

@@ -1,4 +1,8 @@
-"""Executor backends for Mente."""
+"""Executor backends for Mente.
+
+The vendored kernel slice remains internal; upper layers still hand off through
+`CodexKernelAdapter` and `CodexExecutor`.
+"""
 
 from mente.executors.codex import CodexExecutor
 from mente.executors.kernel_adapter import CodexKernelAdapter

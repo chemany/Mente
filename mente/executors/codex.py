@@ -12,6 +12,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from kernel.codex.runtime.launcher import build_private_runtime_env, build_stateless_command
+from kernel.codex.runtime.protocol import (
+    KernelExecutionPayload,
+    build_structured_output_schema,
+    parse_structured_output,
+)
+from kernel.codex.session.protocol import KernelSessionRequest
+from kernel.codex.sandbox.workspace import prepare_isolated_workspace
 from mente.executors.kernel_adapter import CodexKernelAdapter
 from mente.executors.prompting import render_execution_prompt
 from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
@@ -43,14 +51,7 @@ class CodexExecutor(CodexKernelAdapter):
 
     def build_request_payload(self, request: ExecutionRequest) -> dict[str, object]:
         """Build the stable adapter payload for a prepared execution request."""
-        payload: dict[str, object] = {
-            "prompt": self.build_prompt(request),
-            "workspace": request.workspace,
-        }
-        tool_policy = self.resolve_tool_policy(request)
-        if tool_policy is not None:
-            payload["tool_policy"] = tool_policy
-        return payload
+        return self._build_kernel_payload(request).model_dump(mode="json")
 
     def build_command(
         self,
@@ -123,25 +124,24 @@ class CodexExecutor(CodexKernelAdapter):
                 encoding="utf-8",
                 delete=False,
             ) as handle:
-                json.dump(self._structured_output_schema(), handle)
+                json.dump(build_structured_output_schema(), handle)
                 schema_path = Path(handle.name)
             runtime_config = self._resolve_runtime_config(request.workspace)
             codex_home = runtime_config.runtime_home
             codex_home.mkdir(parents=True, exist_ok=True)
-            runtime_workdir = Path(
-                tempfile.mkdtemp(prefix="mente-codex-workdir-")
-            ).resolve()
+            runtime_workdir = prepare_isolated_workspace()
             self._seed_auth_into_isolated_home(codex_home)
-            config_overrides = runtime_config.to_codex_overrides()
-
-            command = self.build_command(
-                request,
+            command = build_stateless_command(
+                codex_binary=self.codex_binary,
+                payload=self._build_kernel_payload(request),
+                session=self._build_session_request(),
+                sandbox=self.sandbox,
+                approval_policy=self.approval_policy,
+                runtime_config=runtime_config,
                 output_last_message=str(output_path),
                 output_schema=str(schema_path),
-                config_overrides=config_overrides,
                 workdir=str(runtime_workdir),
                 add_dirs=[str(Path(request.workspace).resolve())],
-                runtime_config=runtime_config,
             )
             try:
                 completed = subprocess.run(
@@ -150,7 +150,7 @@ class CodexExecutor(CodexKernelAdapter):
                     text=True,
                     cwd=request.workspace,
                     check=False,
-                    env=self._build_subprocess_env(codex_home),
+                    env=build_private_runtime_env(codex_home),
                 )
             except OSError as exc:
                 logger.error(
@@ -175,13 +175,18 @@ class CodexExecutor(CodexKernelAdapter):
             structured_output = None
             if output_path.exists():
                 raw_output = output_path.read_text(encoding="utf-8").strip()
-                structured_output = self._parse_structured_output(raw_output)
+                parsed_output = parse_structured_output(raw_output)
+                structured_output = (
+                    parsed_output.model_dump(mode="json")
+                    if parsed_output is not None
+                    else None
+                )
                 if structured_output is not None:
-                    summary = structured_output.get("assistant_summary", "").strip()
+                    summary = parsed_output.assistant_summary.strip()
                     memory_candidates = [
                         candidate.strip()
-                        for candidate in structured_output.get("memory_candidates", [])
-                        if isinstance(candidate, str) and candidate.strip()
+                        for candidate in parsed_output.memory_candidates
+                        if candidate.strip()
                     ]
                 else:
                     summary = raw_output
@@ -223,66 +228,21 @@ class CodexExecutor(CodexKernelAdapter):
             if runtime_workdir is not None:
                 shutil.rmtree(runtime_workdir, ignore_errors=True)
 
-    def _structured_output_schema(self) -> dict[str, object]:
-        """Return the schema used for final structured Codex responses."""
-        return {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "assistant_summary": {"type": "string"},
-                "memory_candidates": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-            },
-            "required": ["assistant_summary", "memory_candidates"],
-        }
+    def _build_kernel_payload(self, request: ExecutionRequest) -> KernelExecutionPayload:
+        """Translate the executor request into the vendored kernel payload."""
+        return KernelExecutionPayload(
+            prompt=self.build_prompt(request),
+            workspace=request.workspace,
+            tool_policy=self.resolve_tool_policy(request),
+        )
 
-    def _parse_structured_output(self, raw_output: str) -> dict[str, object] | None:
-        """Parse structured Codex output and fall back cleanly on malformed data."""
-        if not raw_output:
-            return None
-
-        try:
-            parsed = json.loads(raw_output)
-        except json.JSONDecodeError:
-            return None
-
-        if not isinstance(parsed, dict):
-            return None
-
-        if not isinstance(parsed.get("assistant_summary"), str):
-            return None
-        if not isinstance(parsed.get("memory_candidates"), list):
-            return None
-
-        return parsed
+    def _build_session_request(self) -> KernelSessionRequest:
+        """C1 keeps production execution stateless while using the vendored session envelope."""
+        return KernelSessionRequest()
 
     def _build_subprocess_env(self, codex_home: Path) -> dict[str, str]:
         """Construct a minimal subprocess environment for isolated Codex runs."""
-        env: dict[str, str] = {}
-        for key in (
-            "LANG",
-            "LC_ALL",
-            "OPENAI_API_KEY",
-            "PATH",
-            "PYTHONIOENCODING",
-            "PYTHONPATH",
-            "SHELL",
-            "SSL_CERT_DIR",
-            "SSL_CERT_FILE",
-            "SYSTEMROOT",
-            "TERM",
-            "TMP",
-            "TEMP",
-            "TMPDIR",
-        ):
-            value = os.environ.get(key)
-            if value:
-                env[key] = value
-        env["HOME"] = str(codex_home)
-        env["CODEX_HOME"] = str(codex_home)
-        return env
+        return build_private_runtime_env(codex_home)
 
     def _seed_auth_into_isolated_home(self, codex_home: Path) -> None:
         """Copy only Codex auth material into the isolated runtime home."""

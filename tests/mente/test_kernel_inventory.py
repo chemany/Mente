@@ -66,3 +66,30 @@ def test_phase_c_migration_sequence_declares_slice_order_and_rollback_boundary()
 
     for statement in required_statements:
         assert statement in content
+
+
+def test_phase_c1_manifest_declares_vendored_slice_boundary():
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-phase-c1-kernel-slice-manifest.md"
+    )
+
+    assert manifest_path.exists()
+
+    content = manifest_path.read_text(encoding="utf-8").lower()
+
+    required_statements = [
+        "runtime protocol",
+        "minimal session protocol",
+        "launcher",
+        "sandbox workspace helpers",
+        "stays in `mente/`",
+        "bridge-tool policy",
+        "public `codex` cli is still the transport backend",
+        "deferred",
+        "plugins",
+        "skills",
+    ]
+
+    for statement in required_statements:
+        assert statement in content

@@ -4,8 +4,8 @@ import subprocess
 from pathlib import Path
 
 from kernel.codex.runtime.launcher import build_private_runtime_env, build_stateless_command
-from kernel.codex.runtime.protocol import KernelExecutionPayload
-from kernel.codex.session.protocol import KernelSessionRequest
+from kernel.codex.runtime.protocol import KernelExecutionPayload, KernelStructuredOutput
+from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
 from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_runtime_home
 from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
@@ -479,3 +479,85 @@ def test_codex_executor_execute_falls_back_when_structured_output_is_not_json(mo
     assert result.status == "success"
     assert result.summary == "plain text fallback"
     assert result.memory_candidates == []
+
+
+def test_codex_executor_execute_delegates_to_vendored_kernel_helpers(monkeypatch, tmp_path):
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
+    runtime_workdir = tmp_path / "isolated-workdir"
+    runtime_workdir.mkdir()
+    captured: dict[str, object] = {}
+
+    def fake_prepare_isolated_workspace():
+        captured["workspace_helper_called"] = True
+        return runtime_workdir
+
+    def fake_build_stateless_command(**kwargs):
+        captured["launcher_kwargs"] = kwargs
+        return [
+            "codex",
+            "exec",
+            "--cd",
+            str(runtime_workdir),
+            "--output-last-message",
+            kwargs["output_last_message"],
+        ]
+
+    def fake_build_private_runtime_env(codex_home):
+        captured["env_home"] = codex_home
+        return {
+            "HOME": str(codex_home),
+            "CODEX_HOME": str(codex_home),
+        }
+
+    def fake_parse_structured_output(raw_output):
+        captured["parsed_output"] = raw_output
+        return KernelStructuredOutput(
+            assistant_summary="vendored summary",
+            memory_candidates=["persist this"],
+        )
+
+    def fake_run(command, capture_output, text, cwd, check, env):
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text('{"assistant_summary":"ignored","memory_candidates":[]}', encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "mente.executors.codex.prepare_isolated_workspace",
+        fake_prepare_isolated_workspace,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "mente.executors.codex.build_stateless_command",
+        fake_build_stateless_command,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "mente.executors.codex.build_private_runtime_env",
+        fake_build_private_runtime_env,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "mente.executors.codex.parse_structured_output",
+        fake_parse_structured_output,
+        raising=False,
+    )
+    monkeypatch.setattr("mente.executors.codex.subprocess.run", fake_run)
+
+    result = executor.execute(request)
+
+    assert captured["workspace_helper_called"] is True
+    launcher_kwargs = captured["launcher_kwargs"]
+    assert isinstance(launcher_kwargs["payload"], KernelExecutionPayload)
+    assert launcher_kwargs["session"].mode is KernelSessionMode.STATELESS
+    assert launcher_kwargs["session"].session_id is None
+    assert captured["parsed_output"] == '{"assistant_summary":"ignored","memory_candidates":[]}'
+    assert result.summary == "vendored summary"
+    assert result.memory_candidates == ["persist this"]
