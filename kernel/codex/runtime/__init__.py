@@ -6,13 +6,16 @@ from .protocol import (
     build_structured_output_schema,
     parse_structured_output,
 )
-from .launcher import build_private_runtime_env, build_stateless_command
+from .result import KernelExecutionResult
+from .transport import KernelTransport, KernelTransportRequest, KernelTransportResponse
 
 __all__ = [
     "KernelExecutionPayload",
+    "KernelExecutionResult",
     "KernelStructuredOutput",
-    "build_private_runtime_env",
-    "build_stateless_command",
+    "KernelTransport",
+    "KernelTransportRequest",
+    "KernelTransportResponse",
     "build_structured_output_schema",
     "parse_structured_output",
 ]
