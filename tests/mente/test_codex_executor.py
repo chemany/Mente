@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 
-from mente.executors import CodexKernelAdapter
+from mente.executors import CodexKernelAdapter, resolve_runtime_home
 from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
 from mente.executors.codex import CodexExecutor
@@ -154,6 +154,7 @@ def test_codex_executor_execute_uses_private_codex_home(monkeypatch, tmp_path):
         user_request="Reply to the user",
         workspace=str(tmp_path),
     )
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "public-codex-home"))
     captured: dict[str, object] = {}
 
@@ -181,7 +182,7 @@ def test_codex_executor_execute_uses_private_codex_home(monkeypatch, tmp_path):
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["CODEX_HOME"] != os.environ["CODEX_HOME"]
-    assert os.path.basename(env["CODEX_HOME"]).startswith("mente-codex-home-")
+    assert env["CODEX_HOME"] == str(resolve_runtime_home())
     assert env["HOME"] == env["CODEX_HOME"]
     assert captured["codex_home_exists_during_run"] is True
     assert captured["cwd"] == str(tmp_path)

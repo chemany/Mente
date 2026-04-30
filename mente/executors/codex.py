@@ -14,6 +14,7 @@ from pathlib import Path
 
 from mente.executors.kernel_adapter import CodexKernelAdapter
 from mente.executors.prompting import render_execution_prompt
+from mente.executors.runtime_home import resolve_runtime_home
 from mente.task_core.models import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,6 @@ class CodexExecutor(CodexKernelAdapter):
         """Run Codex synchronously and normalize the response."""
         output_path: Path | None = None
         schema_path: Path | None = None
-        codex_home: Path | None = None
         runtime_workdir: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -113,9 +113,8 @@ class CodexExecutor(CodexKernelAdapter):
             ) as handle:
                 json.dump(self._structured_output_schema(), handle)
                 schema_path = Path(handle.name)
-            codex_home = Path(
-                tempfile.mkdtemp(prefix="mente-codex-home-")
-            ).resolve()
+            codex_home = resolve_runtime_home()
+            codex_home.mkdir(parents=True, exist_ok=True)
             runtime_workdir = Path(
                 tempfile.mkdtemp(prefix="mente-codex-workdir-")
             ).resolve()
@@ -207,8 +206,6 @@ class CodexExecutor(CodexKernelAdapter):
                     os.unlink(schema_path)
                 except FileNotFoundError:
                     pass
-            if codex_home is not None:
-                shutil.rmtree(codex_home, ignore_errors=True)
             if runtime_workdir is not None:
                 shutil.rmtree(runtime_workdir, ignore_errors=True)
 
