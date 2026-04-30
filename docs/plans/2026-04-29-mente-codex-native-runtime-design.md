@@ -57,6 +57,11 @@ Mente should be designed as two explicit layers:
 
 This is intentionally not "Mente as a thin Codex wrapper". It is "Codex as the execution kernel, Mente as the runtime and product layer".
 
+See also:
+
+- [Mente Codex Fork Ingestion Inventory](./2026-04-30-mente-codex-ingestion-inventory.md)
+- [Mente Kernel Boundary And Ownership Map](./2026-04-30-mente-kernel-boundary-map.md)
+
 ## Recommended Fork Strategy
 
 Adopt a controlled full fork.
