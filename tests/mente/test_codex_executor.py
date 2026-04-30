@@ -1,10 +1,15 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 
+from kernel.codex.runtime.launcher import build_private_runtime_env, build_stateless_command
+from kernel.codex.runtime.protocol import KernelExecutionPayload
+from kernel.codex.session.protocol import KernelSessionRequest
 from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_runtime_home
 from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
+from mente.executors.runtime_config import RuntimeConfig
 from mente.executors.codex import CodexExecutor
 from mente.task_core.models import ExecutionRequest
 
@@ -114,6 +119,54 @@ def test_codex_executor_builds_command():
 
     schema_arg = cmd[cmd.index("--output-schema") + 1]
     assert schema_arg.endswith(".json")
+
+
+def test_vendored_launcher_matches_codex_executor_command_and_env():
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repository",
+        user_request="inspect repository",
+        workspace="/workspace/repo",
+    )
+    runtime_config = RuntimeConfig(
+        runtime_home=Path("/private/codex-home"),
+        codex_config={"model": "gpt-5.5"},
+    )
+    payload = KernelExecutionPayload(
+        prompt=executor.build_prompt(request),
+        workspace=request.workspace,
+        tool_policy=None,
+    )
+
+    vendored_command = build_stateless_command(
+        codex_binary="codex",
+        payload=payload,
+        session=KernelSessionRequest(),
+        sandbox="workspace-write",
+        approval_policy="never",
+        runtime_config=runtime_config,
+        output_last_message="/tmp/out.txt",
+        output_schema="/tmp/schema.json",
+        workdir="/tmp/mente-codex-workdir-123",
+        add_dirs=["/workspace/repo"],
+    )
+    executor_command = executor.build_command(
+        request,
+        output_last_message="/tmp/out.txt",
+        output_schema="/tmp/schema.json",
+        config_overrides=runtime_config.to_codex_overrides(),
+        workdir="/tmp/mente-codex-workdir-123",
+        add_dirs=["/workspace/repo"],
+        runtime_config=runtime_config,
+    )
+
+    assert vendored_command == executor_command
+    assert build_private_runtime_env(Path("/private/codex-home")) == executor._build_subprocess_env(
+        Path("/private/codex-home")
+    )
 
 
 def test_render_execution_prompt_and_fingerprint_are_stable():
