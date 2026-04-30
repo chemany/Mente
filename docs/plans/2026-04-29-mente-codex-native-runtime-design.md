@@ -205,6 +205,10 @@ Design three layers:
 - `mente_gateway_send`
 - `mente_session_notify`
 
+The pre-fork bridge surface contract lives in `mente/executors/bridge_tools.py`.
+Mente-owned tool exposure policy resolves against this deterministic registry
+before any future forked kernel exposes live implementations.
+
 `Policy Filter Layer` is built by Mente for each task using:
 
 - task type
