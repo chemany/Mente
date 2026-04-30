@@ -8,11 +8,12 @@ The vendored kernel slice remains internal; upper layers still hand off through
 from mente.executors.codex import CodexExecutor
 from mente.executors.kernel_adapter import CodexKernelAdapter
 from mente.executors.runtime_home import resolve_runtime_home
-from mente.executors.tool_policy import ToolExposurePolicy
+from mente.executors.tool_policy import ToolExposurePolicy, resolve_tool_exposure_policy
 
 __all__ = [
     "CodexExecutor",
     "CodexKernelAdapter",
     "ToolExposurePolicy",
+    "resolve_tool_exposure_policy",
     "resolve_runtime_home",
 ]

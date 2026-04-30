@@ -2,6 +2,7 @@ from pathlib import Path
 
 from mente.executors.bridge_tools import get_bridge_tool_names
 from kernel.codex.bridge.tool_surface import (
+    filter_vendored_native_tools,
     get_vendored_capability_surface,
     get_vendored_native_tool_names,
 )
@@ -41,6 +42,17 @@ def test_vendored_capability_surface_is_traceable_to_vendored_sources():
     assert "kernel/codex/upstream/sdk/python/src/codex_app_server/__init__.py" in surface.app_server_touchpoints
     assert "exec_command" in surface.native_tools.names
     assert "apply_patch" in surface.native_tools.names
+
+
+def test_filtered_native_surface_preserves_vendored_order_and_excludes_bridge_tools():
+    filtered = filter_vendored_native_tools([
+        "write_stdin",
+        "mente_memory_query",
+        "exec_command",
+        "apply_patch",
+    ])
+
+    assert filtered == ["apply_patch", "exec_command", "write_stdin"]
 
 
 def test_bridge_tool_names_are_explicitly_excluded_from_vendored_native_surface():

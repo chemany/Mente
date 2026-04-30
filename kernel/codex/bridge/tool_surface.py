@@ -18,7 +18,7 @@ _CODEX_PROTOCOL_MODELS_RS = _REPO_ROOT / "kernel/codex/upstream/codex-rs/protoco
 
 _TOOL_NAME_PATTERN = re.compile(r'name:\s*"([^"]+)"\.to_string\(\)')
 _TOOL_SPEC_NAME_PATTERN = re.compile(r'=>\s*"([^"]+)"')
-_TOOL_CONST_PATTERN = re.compile(r'pub const [A-Z0-9_]*TOOL_NAME: &str = \"([^\"]+)\";')
+_TOOL_CONST_PATTERN = re.compile(r'pub const [A-Z0-9_]*TOOL_NAME: &str = "([^"]+)";')
 _PUB_USE_PATTERN = re.compile(r"pub use [^:]+::([A-Za-z0-9_]+);")
 _PUB_FN_PATTERN = re.compile(r"pub fn ([A-Za-z0-9_]+)")
 _PUB_STRUCT_PATTERN = re.compile(r"pub struct ([A-Za-z0-9_]+)")
@@ -53,6 +53,7 @@ class VendoredCapabilitySurface:
     app_server_exports: tuple[str, ...]
 
 
+
 def _relative(path: Path) -> str:
     return str(path.relative_to(_REPO_ROOT))
 
@@ -78,7 +79,10 @@ def _parse_native_tool_names() -> tuple[str, ...]:
 
     tool_spec_content = (_TOOLS_LIB_RS.parent / "tool_spec.rs").read_text(encoding="utf-8")
     protocol_models_content = _CODEX_PROTOCOL_MODELS_RS.read_text(encoding="utf-8")
-    view_image_match = re.search(r'pub const VIEW_IMAGE_TOOL_NAME: &str = "([^"]+)";', protocol_models_content)
+    view_image_match = re.search(
+        r'pub const VIEW_IMAGE_TOOL_NAME: &str = "([^"]+)";',
+        protocol_models_content,
+    )
     names.update(
         name
         for name in _TOOL_SPEC_NAME_PATTERN.findall(tool_spec_content)
@@ -146,7 +150,16 @@ def get_vendored_capability_surface() -> VendoredCapabilitySurface:
     )
 
 
+
 def get_vendored_native_tool_names() -> list[str]:
     """Return vendored native tool names without mixing in Mente bridge tools."""
 
     return list(get_vendored_capability_surface().native_tools.names)
+
+
+
+def filter_vendored_native_tools(allowed_names: list[str] | tuple[str, ...]) -> list[str]:
+    """Filter native tools by vendored upstream order and membership only."""
+
+    allowed = set(allowed_names)
+    return [name for name in get_vendored_native_tool_names() if name in allowed]

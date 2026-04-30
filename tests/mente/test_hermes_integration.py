@@ -4,7 +4,7 @@ from gateway.config import Platform
 from gateway.session import SessionSource
 
 from mente.integrations import hermes as hermes_bridge
-from mente.executors import CodexKernelAdapter
+from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_tool_exposure_policy
 from mente.executors.runtime_config import RuntimeConfig
 from mente.integrations.hermes import (
     build_api_server_task,
@@ -52,13 +52,9 @@ def test_build_cron_task_normalizes_job_into_task(tmp_path):
     assert task.user_request == "sync the repo"
     assert task.workspace == str(tmp_path)
     assert task.metadata["source"] == "cron"
-    assert task.metadata["tool_policy"] == {
-        "policy_id": "cron:cron",
-        "source": "cron",
-        "native_tools": [],
-        "bridge_tools": [],
-        "session_capable": False,
-    }
+    assert task.metadata["tool_policy"] == resolve_tool_exposure_policy(
+        source="cron", task_type="cron"
+    ).as_metadata()
     assert "Cron job ID: job-1" in task.constraints
 
 
@@ -94,13 +90,9 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     assert task.workspace == str(tmp_path)
     assert task.metadata["source"] == "gateway"
     assert task.metadata["platform"] == "local"
-    assert task.metadata["tool_policy"] == {
-        "policy_id": "gateway:conversation",
-        "source": "gateway",
-        "native_tools": [],
-        "bridge_tools": [],
-        "session_capable": False,
-    }
+    assert task.metadata["tool_policy"] == resolve_tool_exposure_policy(
+        source="gateway", task_type="conversation"
+    ).as_metadata()
     assert any("Session context:" in fact for fact in task.memory_facts)
     assert any("Channel prompt:" in fact for fact in task.memory_facts)
     history_fact = next(
@@ -130,13 +122,9 @@ def test_build_api_server_task_sets_api_server_source(tmp_path):
     assert task.workspace == str(tmp_path)
     assert task.metadata["source"] == "api_server"
     assert task.metadata["api_mode"] == "chat_completions"
-    assert task.metadata["tool_policy"] == {
-        "policy_id": "api_server:conversation",
-        "source": "api_server",
-        "native_tools": [],
-        "bridge_tools": [],
-        "session_capable": False,
-    }
+    assert task.metadata["tool_policy"] == resolve_tool_exposure_policy(
+        source="api_server", task_type="conversation"
+    ).as_metadata()
     history_fact = next(
         fact for fact in task.memory_facts if fact.startswith("Conversation history (JSON):")
     )
@@ -717,3 +705,42 @@ def test_hermes_cutover_manifest_records_bridge_owned_boundary():
     assert "vendored codex bridge is now the main execution path" in content
     assert "selected front door" in content
     assert "tools/plugins/skills migration remains deferred" in content
+
+
+def test_gateway_task_resolves_policy_in_mente_ingress(monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake_resolve(*, source: str, task_type: str) -> ToolExposurePolicy:
+        captured["source"] = source
+        captured["task_type"] = task_type
+        return ToolExposurePolicy(
+            policy_id=f"{source}:{task_type}",
+            source=source,
+            native_tools=["exec_command"],
+            bridge_tools=["mente_memory_query"],
+            session_capable=False,
+            native_tool_source="kernel/codex/upstream/codex-rs/tools/src/lib.rs",
+            bridge_tool_source="mente/executors/bridge_tools.py",
+        )
+
+    monkeypatch.setattr(hermes_bridge, "resolve_tool_exposure_policy", _fake_resolve)
+
+    task = build_gateway_task(
+        message="latest question",
+        context_prompt="session summary",
+        history=[],
+        source=SessionSource(
+            platform=Platform.LOCAL,
+            chat_id="cli",
+            chat_name="CLI",
+            chat_type="dm",
+            user_id="user-1",
+        ),
+        session_id="session-1",
+        workspace=str(tmp_path),
+    )
+
+    assert captured == {"source": "gateway", "task_type": "conversation"}
+    assert task.metadata["tool_policy"] == _fake_resolve(
+        source="gateway", task_type="conversation"
+    ).as_metadata()

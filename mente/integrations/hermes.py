@@ -8,7 +8,7 @@ import uuid
 from typing import Any
 
 from mente.context_builder.builder import ContextBuilder
-from mente.executors import CodexKernelAdapter, ToolExposurePolicy
+from mente.executors import CodexKernelAdapter, resolve_tool_exposure_policy
 from mente.executors.base import Executor
 from mente.executors.codex import CodexExecutor
 from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
@@ -26,13 +26,7 @@ def _resolve_workspace(workspace: str | None) -> str:
 
 def _resolve_tool_policy(*, source: str, task_type: str) -> dict[str, object]:
     """Resolve a deterministic Mente-owned tool exposure policy."""
-    return ToolExposurePolicy(
-        policy_id=f"{source}:{task_type}",
-        source=source,
-        native_tools=[],
-        bridge_tools=[],
-        session_capable=False,
-    ).as_metadata()
+    return resolve_tool_exposure_policy(source=source, task_type=task_type).as_metadata()
 
 
 def _build_task_repository() -> SQLiteTaskRepository:
