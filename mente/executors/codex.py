@@ -9,12 +9,11 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-import tomllib
 from pathlib import Path
 
 from mente.executors.kernel_adapter import CodexKernelAdapter
 from mente.executors.prompting import render_execution_prompt
-from mente.executors.runtime_home import resolve_runtime_home
+from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
 from mente.task_core.models import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -52,16 +51,20 @@ class CodexExecutor(CodexKernelAdapter):
         config_overrides: list[str] | None = None,
         workdir: str | None = None,
         add_dirs: list[str] | None = None,
+        runtime_config: RuntimeConfig | None = None,
     ) -> list[str]:
         """Build the Codex CLI command for a request."""
         payload = self.build_request_payload(request)
+        runtime_config = runtime_config or resolve_runtime_config(request.workspace)
         command = [
             self.codex_binary,
             "exec",
             "--ephemeral",
-            "--ignore-user-config",
-            "--ignore-rules",
         ]
+        if runtime_config.ignore_user_config:
+            command.append("--ignore-user-config")
+        if runtime_config.ignore_rules:
+            command.append("--ignore-rules")
         for override in config_overrides or []:
             command.extend(["-c", override])
         command.extend(self._build_execution_mode_args())
@@ -113,13 +116,14 @@ class CodexExecutor(CodexKernelAdapter):
             ) as handle:
                 json.dump(self._structured_output_schema(), handle)
                 schema_path = Path(handle.name)
-            codex_home = resolve_runtime_home()
+            runtime_config = resolve_runtime_config(request.workspace)
+            codex_home = runtime_config.runtime_home
             codex_home.mkdir(parents=True, exist_ok=True)
             runtime_workdir = Path(
                 tempfile.mkdtemp(prefix="mente-codex-workdir-")
             ).resolve()
             self._seed_auth_into_isolated_home(codex_home)
-            config_overrides = self._build_runtime_config_overrides()
+            config_overrides = runtime_config.to_codex_overrides()
 
             command = self.build_command(
                 request,
@@ -128,6 +132,7 @@ class CodexExecutor(CodexKernelAdapter):
                 config_overrides=config_overrides,
                 workdir=str(runtime_workdir),
                 add_dirs=[str(Path(request.workspace).resolve())],
+                runtime_config=runtime_config,
             )
             try:
                 completed = subprocess.run(
@@ -285,57 +290,3 @@ class CodexExecutor(CodexKernelAdapter):
         if configured:
             return Path(configured).expanduser()
         return Path.home() / ".codex"
-
-    def _build_runtime_config_overrides(self) -> list[str]:
-        """Extract the minimum provider routing config needed for isolated runs."""
-        source_config = self._resolve_public_codex_home() / "config.toml"
-        if not source_config.exists():
-            return []
-
-        try:
-            parsed = tomllib.loads(source_config.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError):
-            return []
-
-        provider = parsed.get("model_provider")
-        if not isinstance(provider, str) or not provider.strip():
-            return []
-
-        overrides = [self._format_config_override("model_provider", provider)]
-        model = parsed.get("model")
-        if isinstance(model, str) and model.strip():
-            overrides.append(self._format_config_override("model", model))
-
-        provider_config = parsed.get("model_providers", {}).get(provider)
-        if isinstance(provider_config, dict):
-            overrides.extend(
-                self._flatten_config_overrides(
-                    f"model_providers.{provider}",
-                    provider_config,
-                )
-            )
-        return overrides
-
-    def _flatten_config_overrides(self, prefix: str, value: object) -> list[str]:
-        """Flatten nested config data into dotted Codex `-c key=value` overrides."""
-        if isinstance(value, dict):
-            overrides: list[str] = []
-            for key in sorted(value):
-                if not isinstance(key, str):
-                    continue
-                overrides.extend(
-                    self._flatten_config_overrides(
-                        f"{prefix}.{key}",
-                        value[key],
-                    )
-                )
-            return overrides
-        if isinstance(value, list):
-            return [self._format_config_override(prefix, value)]
-        if isinstance(value, (str, bool, int, float)):
-            return [self._format_config_override(prefix, value)]
-        return []
-
-    def _format_config_override(self, key: str, value: object) -> str:
-        """Render a stable TOML-compatible `key=value` override string."""
-        return f"{key}={json.dumps(value, ensure_ascii=True)}"

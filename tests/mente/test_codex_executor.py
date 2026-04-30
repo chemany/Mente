@@ -255,28 +255,38 @@ def test_codex_executor_execute_passes_minimal_provider_overrides_without_copyin
         user_request="Reply to the user",
         workspace=str(tmp_path),
     )
-    public_codex_home = tmp_path / "public-codex-home"
-    public_codex_home.mkdir()
-    (public_codex_home / "auth.json").write_text(
-        json.dumps({"OPENAI_API_KEY": "test-openai-key"}),
-        encoding="utf-8",
-    )
-    (public_codex_home / "config.toml").write_text(
+    hermes_home = tmp_path / ".hermes"
+    profile_config = hermes_home / "mente" / "config.toml"
+    workspace_config = tmp_path / ".mente" / "codex.toml"
+    profile_config.parent.mkdir(parents=True, exist_ok=True)
+    workspace_config.parent.mkdir(parents=True, exist_ok=True)
+    profile_config.write_text(
         "\n".join(
             [
-                'model_provider = "custom"',
+                'model_provider = "profile"',
                 'model = "gpt-5.4"',
                 "",
-                "[model_providers.custom]",
+                "[model_providers.profile]",
                 'name = "vipnewapi"',
-                'base_url = "https://example.invalid/v1"',
+                'base_url = "https://profile.invalid/v1"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workspace_config.write_text(
+        "\n".join(
+            [
+                'model = "gpt-5.5"',
+                "",
+                "[model_providers.profile]",
                 'wire_api = "responses"',
                 "requires_openai_auth = true",
             ]
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "public-codex-home"))
     captured: dict[str, object] = {}
 
     def fake_run(command, capture_output, text, cwd, check, env):
@@ -307,12 +317,12 @@ def test_codex_executor_execute_passes_minimal_provider_overrides_without_copyin
         for index, part in enumerate(command[:-1])
         if part == "-c"
     ]
-    assert 'model_provider="custom"' in config_args
-    assert 'model="gpt-5.4"' in config_args
-    assert 'model_providers.custom.name="vipnewapi"' in config_args
-    assert 'model_providers.custom.base_url="https://example.invalid/v1"' in config_args
-    assert 'model_providers.custom.wire_api="responses"' in config_args
-    assert "model_providers.custom.requires_openai_auth=true" in config_args
+    assert 'model_provider="profile"' in config_args
+    assert 'model="gpt-5.5"' in config_args
+    assert 'model_providers.profile.name="vipnewapi"' in config_args
+    assert 'model_providers.profile.base_url="https://profile.invalid/v1"' in config_args
+    assert 'model_providers.profile.wire_api="responses"' in config_args
+    assert "model_providers.profile.requires_openai_auth=true" in config_args
 
 
 def test_codex_executor_execute_parses_structured_memory_candidate_output(monkeypatch):
