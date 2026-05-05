@@ -30,14 +30,16 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), [Open
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --release latest
 ```
 
-Works on Linux, macOS, WSL2, and Android via Termux. The installer handles the platform-specific setup for you.
+Works on Linux, macOS, WSL2, and Android via Termux. The one-click installer is release-pinned by default and can also bootstrap a matching vendored Codex runtime from local/offline assets via `--runtime-artifact-manifest` and `--runtime-wheel`.
 
 > **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
 >
 > **Windows:** Native Windows is not supported. Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and run the command above.
+>
+> **Developers / source checkouts:** use `./setup-hermes.sh` after cloning the repo manually. That path is for editable development, not the frozen end-user release install.
 
 After installation:
 
@@ -58,7 +60,7 @@ hermes config set   # Set individual config values
 hermes gateway      # Start the messaging gateway (Telegram, Discord, etc.)
 hermes setup        # Run the full setup wizard (configures everything at once)
 hermes claw migrate # Migrate from OpenClaw (if coming from OpenClaw)
-hermes update       # Update to the latest version
+hermes update       # Update to the latest release (or use your package manager on managed installs)
 hermes doctor       # Diagnose any issues
 ```
 

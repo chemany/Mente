@@ -83,6 +83,8 @@ def test_kernel_adapter_exposes_resolved_tool_policy_from_request():
             native_tools=["shell"],
             bridge_tools=[],
             session_capable=False,
+            native_tool_source="kernel/codex/upstream/codex-rs/tools/src/lib.rs",
+            bridge_tool_source="mente/executors/bridge_tools.py",
         ),
     )
 
@@ -92,6 +94,8 @@ def test_kernel_adapter_exposes_resolved_tool_policy_from_request():
         "native_tools": ["shell"],
         "bridge_tools": [],
         "session_capable": False,
+        "native_tool_source": "kernel/codex/upstream/codex-rs/tools/src/lib.rs",
+        "bridge_tool_source": "mente/executors/bridge_tools.py",
     }
 
 

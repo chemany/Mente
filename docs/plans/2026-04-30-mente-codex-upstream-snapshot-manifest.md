@@ -25,3 +25,11 @@ This manifest follows `docs/plans/2026-04-30-mente-controlled-codex-fork-roadmap
 - vendored source stays recognizable
 - local compatibility changes stay outside the upstream tree unless absolutely necessary
 - C3 adds manifesting, vendoring, and a thin bridge scaffold only
+
+
+## C6 Freeze Carry-Forward
+
+This snapshot remains pinned for the C6 release-freeze boundary. Any future
+change to the pinned snapshot identifier is a new upstream snapshot upgrade, not
+a same-snapshot patch, and must follow
+`docs/plans/2026-04-30-mente-codex-upgrade-policy.md`.

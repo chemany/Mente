@@ -25,7 +25,7 @@ def test_codex_executor_maps_spawn_failure(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _raise)
     result = executor.execute(request)
     assert result.status == "failed"
-    assert result.failure_reason == "spawn_error"
+    assert result.failure_reason.startswith("spawn_error:")
 
 
 class _FailingExecutor(Executor):

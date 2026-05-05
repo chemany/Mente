@@ -1,11 +1,13 @@
 import json
 import os
 from pathlib import Path
+import pytest
 
 from kernel.codex.runtime.launcher import build_private_runtime_env, build_stateless_command
 from kernel.codex.runtime.protocol import KernelExecutionPayload
 from kernel.codex.runtime.result import KernelExecutionResult
 from kernel.codex.runtime.runner import KernelRunner
+from kernel.codex.release.runtime import RuntimeNotBootstrappedError
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
 from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_runtime_home
 from mente.executors.base import Executor
@@ -91,6 +93,8 @@ def test_execution_request_can_carry_tool_policy_without_cli_details():
         "native_tools": ["shell"],
         "bridge_tools": ["mente_memory_query"],
         "session_capable": False,
+        "native_tool_source": None,
+        "bridge_tool_source": None,
     }
     assert "command" not in payload
     assert "argv" not in payload
@@ -474,7 +478,7 @@ def test_codex_executor_build_command_delegates_to_vendored_launcher(monkeypatch
 
 
 
-def test_codex_executor_default_command_uses_vendored_bridge_front_door():
+def test_codex_executor_default_command_requires_bootstrapped_runtime():
     executor = CodexExecutor()
     request = ExecutionRequest(
         task_id="task_1",
@@ -485,9 +489,30 @@ def test_codex_executor_default_command_uses_vendored_bridge_front_door():
         workspace=".",
     )
 
+    with pytest.raises(RuntimeNotBootstrappedError):
+        executor.build_command(request, output_schema="schema.json")
+
+
+def test_codex_executor_default_command_uses_release_runtime_override(monkeypatch, tmp_path):
+    fake_runtime = tmp_path / "release-runtime" / "codex"
+    fake_runtime.parent.mkdir(parents=True)
+    fake_runtime.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_runtime.chmod(0o755)
+    monkeypatch.setenv("MENTE_CODEX_RUNTIME_BIN", str(fake_runtime))
+
+    executor = CodexExecutor()
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repository",
+        user_request="inspect repository",
+        workspace=str(tmp_path),
+    )
+
     cmd = executor.build_command(request, output_schema="schema.json")
 
-    assert cmd[0].endswith("kernel/codex/upstream/sdk/python-runtime/src/codex_cli_bin/bin/codex")
+    assert cmd[0] == str(fake_runtime)
     assert cmd[0] != "codex"
 
 

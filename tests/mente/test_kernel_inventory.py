@@ -196,3 +196,51 @@ def test_phase_c5_boundary_manifest_declares_capability_ownership_split():
 
     for statement in required_statements:
         assert statement in content
+
+
+def test_c6_upgrade_policy_doc_declares_release_and_snapshot_rules():
+    policy_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-codex-upgrade-policy.md"
+    )
+
+    assert policy_path.exists()
+
+    content = policy_path.read_text(encoding="utf-8").lower()
+
+    required_statements = [
+        "same-snapshot mente release",
+        "new upstream snapshot upgrade",
+        "c3/c4/c5/c6 re-verification pass",
+        ".mente-install.json",
+        "git_tag_release",
+        "mente_codex_runtime_bin",
+        "artifact_manifest_and_runtime_wheel",
+    ]
+
+    for statement in required_statements:
+        assert statement in content
+
+
+def test_c6_verification_and_rollback_doc_declares_release_frozen_rollback_inputs():
+    policy_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/2026-04-30-mente-c6-verification-and-rollback.md"
+    )
+
+    assert policy_path.exists()
+
+    content = policy_path.read_text(encoding="utf-8").lower()
+
+    required_statements = [
+        "public `codex` fallback is disabled",
+        ".mente-install.json",
+        "prior release id",
+        "prior runtime artifact manifest",
+        "prior runtime wheel",
+        "mente_codex_runtime_bin",
+        "runtime_not_bootstrapped",
+    ]
+
+    for statement in required_statements:
+        assert statement in content

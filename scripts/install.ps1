@@ -8,14 +8,18 @@
 #   irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex
 #
 # Or download and run with options:
-#   .\install.ps1 -NoVenv -SkipSetup
+#   .\install.ps1 -Release latest -NoVenv -SkipSetup
 #
 # ============================================================================
 
 param(
     [switch]$NoVenv,
     [switch]$SkipSetup,
+    [string]$Release = "latest",
     [string]$Branch = "main",
+    [string]$InstallMode = "release",
+    [string]$RuntimeArtifactManifest = "",
+    [string]$RuntimeWheel = "",
     [string]$HermesHome = "$env:LOCALAPPDATA\hermes",
     [string]$InstallDir = "$env:LOCALAPPDATA\hermes\hermes-agent"
 )
@@ -409,6 +413,53 @@ function Install-SystemPackages {
 # Installation
 # ============================================================================
 
+function Resolve-TargetReleaseRef {
+    param([string]$Requested = "latest")
+    if ($Requested -ne "latest") { return $Requested }
+    $tag = git -c windows.appendAtomically=false tag --sort=-creatordate | Select-Object -First 1
+    if (-not $tag) { throw "Could not resolve latest release tag" }
+    return $tag.Trim()
+}
+
+function Write-InstallManifest {
+    $releaseRef = if ($script:CurrentReleaseRef) { $script:CurrentReleaseRef } else { "" }
+    $policy = if ($InstallMode -eq "release") { "release_pinned" } else { "source_checkout" }
+    $updatePolicy = if ($InstallMode -eq "release") { "git_tag_release" } else { "git_branch_source" }
+    $payload = @{
+        install_mode = $InstallMode
+        release_ref = $releaseRef
+        source_branch = $Branch
+        runtime_artifact_manifest = $RuntimeArtifactManifest
+        runtime_wheel = $RuntimeWheel
+        update_policy = $updatePolicy
+        runtime_bootstrap_policy = "artifact_manifest_and_runtime_wheel"
+        developer_setup_path = "./setup-hermes.sh"
+        one_click_install_policy = $policy
+    } | ConvertTo-Json -Depth 4
+    Set-Content -Path (Join-Path $InstallDir ".mente-install.json") -Value $payload
+}
+
+function Install-VendoredRuntime {
+    if (-not $RuntimeWheel) {
+        if ($RuntimeArtifactManifest) {
+            Write-Info "Runtime artifact manifest recorded: $RuntimeArtifactManifest"
+        }
+        return
+    }
+
+    Write-Info "Bootstrapping vendored Codex runtime wheel..."
+    Push-Location $InstallDir
+    try {
+        & $UvCmd pip install $RuntimeWheel 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install runtime wheel"
+        }
+        Write-Success "Vendored Codex runtime wheel installed"
+    } finally {
+        Pop-Location
+    }
+}
+
 function Install-Repository {
     Write-Info "Installing to $InstallDir..."
     
@@ -416,9 +467,15 @@ function Install-Repository {
         if (Test-Path "$InstallDir\.git") {
             Write-Info "Existing installation found, updating..."
             Push-Location $InstallDir
-            git -c windows.appendAtomically=false fetch origin
-            git -c windows.appendAtomically=false checkout $Branch
-            git -c windows.appendAtomically=false pull origin $Branch
+            if ($InstallMode -eq "release") {
+                git -c windows.appendAtomically=false fetch origin --tags
+                $script:CurrentReleaseRef = Resolve-TargetReleaseRef $Release
+                git -c windows.appendAtomically=false checkout $script:CurrentReleaseRef
+            } else {
+                git -c windows.appendAtomically=false fetch origin
+                git -c windows.appendAtomically=false checkout $Branch
+                git -c windows.appendAtomically=false pull origin $Branch
+            }
             Pop-Location
         } else {
             Write-Err "Directory exists but is not a git repository: $InstallDir"
@@ -442,7 +499,11 @@ function Install-Repository {
         Write-Info "Trying SSH clone..."
         $env:GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=5"
         try {
-            git -c windows.appendAtomically=false clone --branch $Branch --recurse-submodules $RepoUrlSsh $InstallDir
+            if ($InstallMode -eq "release") {
+                git -c windows.appendAtomically=false clone --recurse-submodules $RepoUrlSsh $InstallDir
+            } else {
+                git -c windows.appendAtomically=false clone --branch $Branch --recurse-submodules $RepoUrlSsh $InstallDir
+            }
             if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
         } catch { }
         $env:GIT_SSH_COMMAND = $null
@@ -451,7 +512,11 @@ function Install-Repository {
             if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue }
             Write-Info "SSH failed, trying HTTPS..."
             try {
-                git -c windows.appendAtomically=false clone --branch $Branch --recurse-submodules $RepoUrlHttps $InstallDir
+                if ($InstallMode -eq "release") {
+                    git -c windows.appendAtomically=false clone --recurse-submodules $RepoUrlHttps $InstallDir
+                } else {
+                    git -c windows.appendAtomically=false clone --branch $Branch --recurse-submodules $RepoUrlHttps $InstallDir
+                }
                 if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
             } catch { }
         }
@@ -512,6 +577,11 @@ function Install-Repository {
     } else {
         Write-Success "Submodules ready"
     }
+    if ($InstallMode -eq "release") {
+        $script:CurrentReleaseRef = Resolve-TargetReleaseRef $Release
+        git -c windows.appendAtomically=false checkout $script:CurrentReleaseRef 2>$null
+    }
+    Write-InstallManifest
     Pop-Location
     
     Write-Success "Repository ready"
@@ -896,6 +966,7 @@ function Main {
     Install-Repository
     Install-Venv
     Install-Dependencies
+    Install-VendoredRuntime
     Install-NodeDeps
     Set-PathVariable
     Copy-ConfigTemplates

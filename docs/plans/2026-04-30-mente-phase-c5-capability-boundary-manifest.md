@@ -56,3 +56,11 @@ Still deferred beyond this boundary freeze:
 - product-specific plugin behavior inside `kernel/codex/upstream/`
 - product-specific skill behavior inside `kernel/codex/upstream/`
 - broader app-server product workflow adoption beyond the mapped touchpoints
+
+
+## C6 Carry-Forward
+
+C6 freeze preserves the C5 ownership split while introducing release-frozen
+runtime artifacts, upgrade policy, and rollback policy. Product integration
+continues to live in `mente/`, while Codex-native capabilities remain sourced
+from the vendored snapshot.

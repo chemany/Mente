@@ -214,3 +214,40 @@ def test_kernel_runner_rejects_session_mode_until_future_slice(tmp_path):
     assert result.status == "failed"
     assert result.backend_failure == "unsupported_session_mode"
     assert "session mode" in result.assistant_summary.lower()
+
+
+def test_kernel_runner_fails_closed_without_bootstrapped_runtime_or_public_codex_fallback(
+    monkeypatch, tmp_path
+):
+    runtime_workdir = tmp_path / "isolated-workdir"
+    runtime_workdir.mkdir()
+    public_bin = tmp_path / "public-bin"
+    public_bin.mkdir()
+    public_codex = public_bin / "codex"
+    public_codex.write_text("#!/bin/sh\n", encoding="utf-8")
+    public_codex.chmod(0o755)
+
+    monkeypatch.delenv("MENTE_CODEX_RUNTIME_BIN", raising=False)
+    monkeypatch.setenv("PATH", str(public_bin))
+    monkeypatch.setattr(
+        "kernel.codex.runtime.runner.prepare_isolated_workspace",
+        lambda: runtime_workdir,
+        raising=False,
+    )
+
+    runner = KernelRunner()
+    result = runner.run(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+    )
+
+    assert result.status == "failed"
+    assert result.commands_run == []
+    assert result.backend_failure is not None
+    assert result.backend_failure.startswith("runtime_not_bootstrapped:")
+    assert "public codex fallback is disabled" in result.backend_failure

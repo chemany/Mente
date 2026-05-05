@@ -700,6 +700,53 @@ def build_release_artifacts(semver: str) -> list[Path]:
     return matching
 
 
+def build_codex_runtime_artifacts(
+    semver: str,
+    *,
+    runtime_binary: str | None = None,
+    platform_tag: str | None = None,
+) -> list[Path]:
+    """Build Mente-owned vendored Codex runtime artifacts when a runtime binary is provided."""
+    if not runtime_binary:
+        print("  • Skipping vendored Codex runtime artifacts (no --codex-runtime-binary provided).")
+        return []
+
+    builder_script = REPO_ROOT / "scripts" / "build_mente_codex_runtime_artifacts.py"
+    output_dir = REPO_ROOT / "dist" / "codex-runtime"
+    shutil.rmtree(output_dir, ignore_errors=True)
+
+    cmd = [
+        sys.executable,
+        str(builder_script),
+        "--mente-release",
+        semver,
+        "--runtime-binary",
+        runtime_binary,
+        "--output-dir",
+        str(output_dir),
+    ]
+    if platform_tag:
+        cmd.extend(["--platform-tag", platform_tag])
+
+    result = subprocess.run(
+        cmd,
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print("  ⚠ Could not build vendored Codex runtime artifacts.")
+        stderr = result.stderr.strip()
+        stdout = result.stdout.strip()
+        if stderr:
+            print(f"    {stderr.splitlines()[-1]}")
+        elif stdout:
+            print(f"    {stdout.splitlines()[-1]}")
+        return []
+
+    return sorted(p for p in output_dir.iterdir() if p.is_file())
+
+
 def resolve_author(name: str, email: str) -> str:
     """Resolve a git author to a GitHub @mention."""
     # Try email lookup first
@@ -965,6 +1012,16 @@ def main():
                         help="Mark as first release (no previous tag expected)")
     parser.add_argument("--output", type=str,
                         help="Write changelog to file instead of stdout")
+    parser.add_argument(
+        "--codex-runtime-binary",
+        type=str,
+        help="Path to a compiled vendored Codex runtime binary for frozen release artifact packaging.",
+    )
+    parser.add_argument(
+        "--codex-runtime-platform-tag",
+        type=str,
+        help="Optional platform tag override for vendored Codex runtime artifacts.",
+    )
     args = parser.parse_args()
 
     # Determine CalVer date
@@ -1075,6 +1132,16 @@ def main():
             print("  ✓ Built release artifacts:")
             for artifact in artifacts:
                 print(f"    - {artifact.relative_to(REPO_ROOT)}")
+        runtime_artifacts = build_codex_runtime_artifacts(
+            new_version,
+            runtime_binary=args.codex_runtime_binary,
+            platform_tag=args.codex_runtime_platform_tag,
+        )
+        if runtime_artifacts:
+            print("  ✓ Built vendored Codex runtime artifacts:")
+            for artifact in runtime_artifacts:
+                print(f"    - {artifact.relative_to(REPO_ROOT)}")
+            artifacts.extend(runtime_artifacts)
 
         # Create GitHub release
         changelog_file = REPO_ROOT / ".release_notes.md"

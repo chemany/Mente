@@ -21,3 +21,10 @@ It is **not Mente-authored kernel code**.
 - This snapshot stays recognizable as upstream Codex source.
 - Thin Mente bridge code belongs outside this tree.
 - Mente product/runtime concerns remain in `mente/`.
+
+## Runtime Artifact Policy
+
+- Mente release packaging must reuse `sdk/python/scripts/update_sdk_artifacts.py`
+  to stage vendored runtime artifacts.
+- Mente-owned release wrappers and artifact manifests live outside this tree.
+- Do not add product logic or installer policy inside `kernel/codex/upstream/`.

@@ -3,6 +3,7 @@
 # Hermes Agent Setup Script
 # ============================================================================
 # Quick setup for developers who cloned the repo manually.
+# This is the developer/source-checkout path, not the release-pinned end-user installer.
 # Uses uv for desktop/server setup and Python's stdlib venv + pip on Termux.
 #
 # Usage:

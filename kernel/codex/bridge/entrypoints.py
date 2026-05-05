@@ -12,6 +12,11 @@ from pathlib import Path
 import subprocess
 from typing import TYPE_CHECKING, Any
 
+from kernel.codex.release.runtime import (
+    RuntimeNotBootstrappedError,
+    expected_vendored_runtime_binary_path,
+    resolve_vendored_runtime_binary,
+)
 from kernel.codex.runtime.launcher import build_private_runtime_env, build_stateless_command
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
 
@@ -36,7 +41,7 @@ class CodexSnapshotBridgeSurface:
     adapter_seam: str = "CodexKernelAdapter"
     selected_front_door: str = "vendored_runtime_binary"
     bootstrap_owner: str = "kernel.codex.bridge"
-    runtime_locator_policy: str = "vendored_python_runtime_locator"
+    runtime_locator_policy: str = "mente_release_freeze_manifest"
     requires_sys_path_injection: bool = False
     uses_ambient_codex_discovery: bool = False
     uses_public_codex_binary: bool = False
@@ -71,9 +76,8 @@ def get_codex_handoff_surface() -> CodexSnapshotBridgeSurface:
         rust_exec_entrypoint=upstream_root / "codex-rs/exec/src/main.rs",
         python_sdk_root=upstream_root / "sdk/python/src",
         app_server_root=upstream_root / "sdk/python/src/codex_app_server",
-        runtime_locator_module=upstream_root
-        / "sdk/python-runtime/src/codex_cli_bin/__init__.py",
-        runtime_binary_path=upstream_root / "sdk/python-runtime/src/codex_cli_bin/bin/codex",
+        runtime_locator_module=repo_root / "kernel/codex/release/runtime.py",
+        runtime_binary_path=expected_vendored_runtime_binary_path(repo_root),
     )
 
 
@@ -92,7 +96,7 @@ def build_vendored_command(
 ) -> list[str]:
     """Build the bridge-owned vendored front-door command for one stateless call."""
 
-    command_path = codex_binary_override or get_codex_handoff_surface().runtime_binary_path
+    command_path = codex_binary_override or resolve_vendored_runtime_binary()
     return build_stateless_command(
         codex_binary=str(command_path),
         payload=payload,
@@ -127,18 +131,23 @@ def invoke_vendored_front_door(
     if session.mode is not KernelSessionMode.STATELESS:
         return CodexBridgeInvocationResult(backend_failure="unsupported_session_mode")
 
-    command = build_vendored_command(
-        payload=payload,
-        session=session,
-        runtime_config=runtime_config,
-        sandbox=sandbox,
-        approval_policy=approval_policy,
-        output_last_message=output_last_message,
-        output_schema=output_schema,
-        workdir=workdir,
-        add_dirs=add_dirs,
-        codex_binary_override=codex_binary_override,
-    )
+    try:
+        command = build_vendored_command(
+            payload=payload,
+            session=session,
+            runtime_config=runtime_config,
+            sandbox=sandbox,
+            approval_policy=approval_policy,
+            output_last_message=output_last_message,
+            output_schema=output_schema,
+            workdir=workdir,
+            add_dirs=add_dirs,
+            codex_binary_override=codex_binary_override,
+        )
+    except RuntimeNotBootstrappedError as exc:
+        return CodexBridgeInvocationResult(
+            backend_failure=f"runtime_not_bootstrapped:{exc}",
+        )
     try:
         completed = subprocess_run(
             command,

@@ -38,3 +38,11 @@ Deferred items for post-C4:
 ## Notes
 
 The selected front door for C4 is the vendored runtime binary path described by the vendored python runtime locator policy. This keeps a process boundary without relying on ambient public binary discovery as the main control surface.
+
+
+## C6 Carry-Forward
+
+C6 keeps the C4 seam unchanged: `CodexKernelAdapter` remains the only
+upper-layer seam and the selected front door stays vendored. Release installs
+and rollback drills must not revive ambient public `codex` as a control-plane
+dependency.
