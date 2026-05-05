@@ -18,6 +18,7 @@ import dataclasses
 import json
 import logging
 import os
+import queue
 import re
 import sys
 import signal
@@ -112,7 +113,7 @@ def _run_mente_gateway_turn(
     channel_prompt: str | None = None,
 ) -> Dict[str, Any]:
     """Run a gateway turn through the Mente task bridge."""
-    from mente.integrations.hermes import run_gateway_task
+    from mente.integrations.bridge import run_gateway_task
 
     result = run_gateway_task(
         message=message,
@@ -146,7 +147,161 @@ def _run_mente_gateway_turn(
         "model": None,
         "session_id": session_id,
         "response_previewed": False,
+        "mente_task_id": result.metadata.get("task_id"),
     }
+
+
+def _run_mente_post_turn_memory_review(task_id: str) -> Dict[str, Any]:
+    """Run the Mente-owned persisted memory review worker."""
+    from mente.integrations.bridge import run_post_turn_memory_review
+
+    return run_post_turn_memory_review(task_id=task_id)
+
+
+def _run_mente_post_turn_skill_review(task_id: str) -> Dict[str, Any]:
+    """Run the Mente-owned persisted skill review worker."""
+    from mente.integrations.bridge import run_post_turn_skill_review
+
+    return run_post_turn_skill_review(task_id=task_id)
+
+
+def _format_mente_memory_review_outcome(outcome: Dict[str, Any]) -> str | None:
+    """Render a compact follow-up message for post-turn memory review."""
+    status = str(outcome.get("status") or "").strip().lower()
+    if status == "persisted":
+        persisted_count = int(outcome.get("persisted_count") or 0)
+        return f"💾 记忆复盘已保存（{persisted_count} 条）"
+    if status == "noop":
+        return "🧠 记忆复盘完成，无新增记忆"
+    if status == "skipped":
+        reason = str(outcome.get("reason") or "").strip()
+        if reason in {"disabled", "unsupported_source", "unsupported_task_type", "missing_source"}:
+            return None
+        if not reason:
+            return "🧠 记忆复盘已跳过"
+        return f"🧠 记忆复盘已跳过：{reason}"
+    return None
+
+
+def _format_mente_skill_review_outcome(outcome: Dict[str, Any]) -> str | None:
+    """Render a compact follow-up message for post-turn skill review."""
+    status = str(outcome.get("status") or "").strip().lower()
+    if status == "suggested":
+        target_skill = str(outcome.get("target_skill") or "").strip()
+        if not target_skill:
+            return "🛠️ 技能复盘已生成建议"
+        return f"🛠️ 技能复盘已生成建议：{target_skill}"
+    if status == "patched":
+        target_skill = str(outcome.get("target_skill") or "").strip()
+        if not target_skill:
+            return "🛠️ 技能复盘已更新"
+        return f"🛠️ 技能复盘已更新：{target_skill}"
+    if status == "skipped":
+        reason = str(outcome.get("reason") or "").strip()
+        if reason in {
+            "disabled",
+            "unsupported_source",
+            "unsupported_task_type",
+            "missing_source",
+            "unsupported_mode",
+            "patch_not_allowed",
+            "create_deferred",
+        }:
+            return None
+        if not reason:
+            return "🛠️ 技能复盘已跳过"
+        return f"🛠️ 技能复盘已跳过：{reason}"
+    return None
+
+
+def _register_mente_post_delivery_reviews(
+    *,
+    adapter,
+    source,
+    session_key: str | None,
+    run_generation: int | None,
+    event_message_id: str | None,
+    mente_task_id: str | None,
+) -> None:
+    """Register one narrow post-delivery callback for persisted Mente reviews."""
+    if not mente_task_id or adapter is None or not session_key:
+        return
+
+    try:
+        if not hasattr(adapter, "_post_delivery_callbacks"):
+            adapter._post_delivery_callbacks = {}
+
+        platform_value = (
+            source.platform.value
+            if hasattr(source.platform, "value")
+            else str(source.platform)
+        )
+        if platform_value == "slack":
+            thread_id = source.thread_id or event_message_id
+        else:
+            thread_id = source.thread_id
+        review_metadata = {"thread_id": thread_id} if thread_id else None
+
+        async def _deliver_compact_review_message(
+            *,
+            review_runner,
+            formatter,
+            review_label: str,
+        ) -> None:
+            try:
+                outcome = await asyncio.to_thread(
+                    review_runner,
+                    mente_task_id,
+                )
+                message = formatter(outcome)
+                if not message:
+                    return
+                await adapter.send(
+                    chat_id=source.chat_id,
+                    content=message,
+                    metadata=review_metadata,
+                )
+            except Exception:
+                logger.exception(
+                    "post-turn %s review failed for task %s",
+                    review_label,
+                    mente_task_id,
+                )
+
+        async def _deliver_reviews() -> None:
+            await _deliver_compact_review_message(
+                review_runner=_run_mente_post_turn_memory_review,
+                formatter=_format_mente_memory_review_outcome,
+                review_label="memory",
+            )
+            await _deliver_compact_review_message(
+                review_runner=_run_mente_post_turn_skill_review,
+                formatter=_format_mente_skill_review_outcome,
+                review_label="skill",
+            )
+
+        def _schedule_reviews() -> None:
+            try:
+                asyncio.create_task(_deliver_reviews())
+            except RuntimeError:
+                logger.debug(
+                    "event loop already closed before post-turn reviews for %s",
+                    mente_task_id,
+                )
+
+        if getattr(type(adapter), "register_post_delivery_callback", None) is not None:
+            adapter.register_post_delivery_callback(
+                session_key,
+                _schedule_reviews,
+                generation=run_generation,
+            )
+        else:
+            adapter._post_delivery_callbacks[session_key] = _schedule_reviews
+    except Exception:
+        logger.exception(
+            "failed to register post-turn review callback for task %s",
+            mente_task_id,
+        )
 
 
 def _load_mente_task_history(session_id: str, limit: int = 6):
@@ -9747,6 +9902,11 @@ class GatewayRunner:
         This is run in a thread pool to not block the event loop.
         Supports interruption via new messages.
         """
+        def _run_still_current() -> bool:
+            if run_generation is None or not session_key:
+                return True
+            return self._is_session_run_current(session_key, run_generation)
+
         # ---- Proxy mode: delegate to remote API server ----
         if self._get_proxy_url():
             return await self._run_agent_via_proxy(
@@ -9761,7 +9921,7 @@ class GatewayRunner:
             )
 
         if os.getenv("HERMES_GATEWAY_EXECUTOR", "").strip().lower() == "mente":
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 _run_mente_gateway_turn,
                 message=message,
                 context_prompt=context_prompt,
@@ -9771,14 +9931,17 @@ class GatewayRunner:
                 session_key=session_key,
                 channel_prompt=channel_prompt,
             )
+            _register_mente_post_delivery_reviews(
+                adapter=self.adapters.get(source.platform),
+                source=source,
+                session_key=session_key,
+                run_generation=run_generation,
+                event_message_id=event_message_id,
+                mente_task_id=result.get("mente_task_id"),
+            )
+            return result
 
         from run_agent import AIAgent
-        import queue
-
-        def _run_still_current() -> bool:
-            if run_generation is None or not session_key:
-                return True
-            return self._is_session_run_current(session_key, run_generation)
         
         user_config = _load_gateway_config()
         platform_key = _platform_config_key(source.platform)

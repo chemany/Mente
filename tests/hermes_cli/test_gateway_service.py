@@ -118,6 +118,37 @@ class TestGeneratedSystemdUnits:
         # systemd doesn't SIGKILL the cgroup before post-interrupt cleanup
         # (tool subprocess kill, adapter disconnect) runs — issue #8202.
         assert "TimeoutStopSec=90" in unit
+
+    def test_user_unit_exports_mente_home_alongside_hermes_home(self, monkeypatch, tmp_path):
+        mente_home = tmp_path / ".mente"
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+
+        unit = gateway_cli.generate_systemd_unit(system=False)
+
+        assert f'Environment="MENTE_HOME={mente_home.resolve()}"' in unit
+        assert f'Environment="HERMES_HOME={mente_home.resolve()}"' in unit
+
+    def test_system_unit_remaps_mente_home_to_target_user(self, monkeypatch):
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/root")))
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setenv("MENTE_HOME", "/root/.mente")
+        monkeypatch.setattr(
+            gateway_cli,
+            "_system_service_identity",
+            lambda run_as_user=None: ("alice", "alice", "/home/alice"),
+        )
+        monkeypatch.setattr(
+            gateway_cli,
+            "_build_user_local_paths",
+            lambda home, existing: [],
+        )
+
+        unit = gateway_cli.generate_systemd_unit(system=True, run_as_user="alice")
+
+        assert 'Environment="MENTE_HOME=/home/alice/.mente"' in unit
+        assert 'Environment="HERMES_HOME=/home/alice/.mente"' in unit
+        assert "/root/.mente" not in unit
         assert "WantedBy=multi-user.target" in unit
 
 
@@ -842,6 +873,7 @@ class TestSystemUnitHermesHome:
         # Simulate sudo: Path.home() returns /root, target user is alice
         monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/root")))
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setattr(
             gateway_cli, "_system_service_identity",
             lambda run_as_user=None: ("alice", "alice", "/home/alice"),
@@ -859,6 +891,7 @@ class TestSystemUnitHermesHome:
     def test_system_unit_remaps_profile_to_target_user(self, monkeypatch):
         # Simulate sudo with a profile: HERMES_HOME was resolved under root
         monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/root")))
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", "/root/.hermes/profiles/coder")
         monkeypatch.setattr(
             gateway_cli, "_system_service_identity",
@@ -877,6 +910,7 @@ class TestSystemUnitHermesHome:
     def test_system_unit_preserves_custom_hermes_home(self, monkeypatch):
         # Custom HERMES_HOME not under any user's home — keep as-is
         monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/root")))
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", "/opt/hermes-shared")
         monkeypatch.setattr(
             gateway_cli, "_system_service_identity",
@@ -905,12 +939,22 @@ class TestHermesHomeForTargetUser:
     def test_remaps_default_home(self, monkeypatch):
         monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/root")))
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
 
         result = gateway_cli._hermes_home_for_target_user("/home/alice")
         assert result == "/home/alice/.hermes"
 
+    def test_remaps_default_mente_home(self, monkeypatch):
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/root")))
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setenv("MENTE_HOME", "/root/.mente")
+
+        result = gateway_cli._hermes_home_for_target_user("/home/alice")
+        assert result == "/home/alice/.mente"
+
     def test_remaps_profile_path(self, monkeypatch):
         monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/root")))
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", "/root/.hermes/profiles/coder")
 
         result = gateway_cli._hermes_home_for_target_user("/home/alice")
@@ -918,6 +962,7 @@ class TestHermesHomeForTargetUser:
 
     def test_keeps_custom_path(self, monkeypatch):
         monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/root")))
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", "/opt/hermes")
 
         result = gateway_cli._hermes_home_for_target_user("/home/alice")
@@ -926,6 +971,7 @@ class TestHermesHomeForTargetUser:
     def test_noop_when_same_user(self, monkeypatch):
         monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/home/alice")))
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
 
         result = gateway_cli._hermes_home_for_target_user("/home/alice")
         assert result == "/home/alice/.hermes"

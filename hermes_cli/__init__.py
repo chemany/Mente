@@ -1,14 +1,14 @@
 """
-Hermes CLI - Unified command-line interface for Hermes Agent.
+Mente CLI - Unified command-line interface for Mente Agent.
 
 Provides subcommands for:
-- hermes chat          - Interactive chat (same as ./hermes)
-- hermes gateway       - Run gateway in foreground
-- hermes gateway start - Start gateway service
-- hermes gateway stop  - Stop gateway service  
-- hermes setup         - Interactive setup wizard
-- hermes status        - Show status of all components
-- hermes cron          - Manage cron jobs
+- mente chat           - Interactive chat (same as ./mente)
+- mente gateway        - Run gateway in foreground
+- mente gateway start  - Start gateway service
+- mente gateway stop   - Stop gateway service
+- mente setup          - Interactive setup wizard
+- mente status         - Show status of all components
+- mente cron           - Manage cron jobs
 """
 
 __version__ = "0.11.0"

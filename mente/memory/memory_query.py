@@ -23,6 +23,7 @@ def parse_http_memory_query(params: Mapping[str, str]) -> dict[str, Any]:
         "source": None,
         "task_type": None,
         "memory_scope": None,
+        "include_superseded": False,
         "limit": 20,
         "offset": 0,
     }
@@ -53,6 +54,7 @@ def execute_memory_query(
                 source=query["source"],
                 task_type=query["task_type"],
                 memory_scope=query["memory_scope"],
+                include_inactive=query["include_superseded"],
             )
         else:
             records = repo.list_by_session(
@@ -62,6 +64,7 @@ def execute_memory_query(
                 source=query["source"],
                 task_type=query["task_type"],
                 memory_scope=query["memory_scope"],
+                include_inactive=query["include_superseded"],
             )
     finally:
         try:
@@ -94,6 +97,7 @@ def serialize_memory_query(query: dict[str, Any]) -> dict[str, Any]:
         "source": query["source"],
         "task_type": query["task_type"],
         "memory_scope": query["memory_scope"],
+        "include_superseded": query["include_superseded"],
         "limit": query["limit"],
         "offset": query["offset"],
     }
@@ -152,6 +156,16 @@ def _apply_query_pair(query: dict[str, Any], key: str, value: str | None) -> Non
         query["memory_scope"] = normalized_scope
         return
 
+    if lower_key == "include_superseded":
+        normalized = raw_value.lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            query["include_superseded"] = True
+            return
+        if normalized in {"0", "false", "no", "off", ""}:
+            query["include_superseded"] = False
+            return
+        raise MemoryQueryError("Invalid include_superseded. Use `include_superseded=1` or `include_superseded=0`.")
+
     if lower_key in {"session_id", "session"}:
         if not raw_value:
             raise MemoryQueryError("Invalid session filter. Use `session_id=<id>`.")
@@ -161,5 +175,5 @@ def _apply_query_pair(query: dict[str, Any], key: str, value: str | None) -> Non
 
     raise MemoryQueryError(
         "Unknown memory filter. Use `scope=...`, `session_id=...`, `source=...`, "
-        "`task_type=...`, `memory_scope=...`, `offset=...`, or `limit=...`."
+        "`task_type=...`, `memory_scope=...`, `include_superseded=...`, `offset=...`, or `limit=...`."
     )

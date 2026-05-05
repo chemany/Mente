@@ -45,6 +45,19 @@ class TestRegisterCredentialFiles:
         assert mounts[0]["host_path"] == str(hermes_home / "token.json")
         assert mounts[0]["container_path"] == "/root/.hermes/token.json"
 
+    def test_skills_directory_mount_uses_mente_home(self, tmp_path):
+        mente_home = tmp_path / ".mente"
+        skills_dir = mente_home / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "wechat-publisher").mkdir()
+        (skills_dir / "wechat-publisher" / "SKILL.md").write_text("# wechat")
+
+        with patch.dict(os.environ, {"MENTE_HOME": str(mente_home)}):
+            mounts = get_skills_directory_mount()
+
+        assert any(m["host_path"] == str(skills_dir) for m in mounts)
+        assert any(m["container_path"] == "/root/.hermes/skills" for m in mounts)
+
     def test_dict_with_name_key_fallback(self, tmp_path):
         """Skills use 'name' instead of 'path' — both should work."""
         hermes_home = tmp_path / ".hermes"
@@ -103,13 +116,13 @@ class TestRegisterCredentialFiles:
 
 class TestSkillsDirectoryMount:
     def test_returns_mount_when_skills_dir_exists(self, tmp_path):
-        hermes_home = tmp_path / ".hermes"
-        skills_dir = hermes_home / "skills"
+        mente_home = tmp_path / ".mente"
+        skills_dir = mente_home / "skills"
         skills_dir.mkdir(parents=True)
         (skills_dir / "test-skill").mkdir()
         (skills_dir / "test-skill" / "SKILL.md").write_text("# test")
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+        with patch.dict(os.environ, {"MENTE_HOME": str(mente_home)}):
             mounts = get_skills_directory_mount()
 
         assert len(mounts) >= 1
@@ -117,10 +130,10 @@ class TestSkillsDirectoryMount:
         assert mounts[0]["container_path"] == "/root/.hermes/skills"
 
     def test_returns_none_when_no_skills_dir(self, tmp_path):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
+        mente_home = tmp_path / ".mente"
+        mente_home.mkdir()
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+        with patch.dict(os.environ, {"MENTE_HOME": str(mente_home)}):
             mounts = get_skills_directory_mount()
 
         # No local skills dir → no local mount (external dirs may still appear)
@@ -128,18 +141,18 @@ class TestSkillsDirectoryMount:
         assert local_mounts == []
 
     def test_custom_container_base(self, tmp_path):
-        hermes_home = tmp_path / ".hermes"
-        (hermes_home / "skills").mkdir(parents=True)
+        mente_home = tmp_path / ".mente"
+        (mente_home / "skills").mkdir(parents=True)
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+        with patch.dict(os.environ, {"MENTE_HOME": str(mente_home)}):
             mounts = get_skills_directory_mount(container_base="/home/user/.hermes")
 
         assert mounts[0]["container_path"] == "/home/user/.hermes/skills"
 
     def test_symlinks_are_sanitized(self, tmp_path):
         """Symlinks in skills dir should be excluded from the mount."""
-        hermes_home = tmp_path / ".hermes"
-        skills_dir = hermes_home / "skills"
+        mente_home = tmp_path / ".mente"
+        skills_dir = mente_home / "skills"
         skills_dir.mkdir(parents=True)
         (skills_dir / "legit.md").write_text("# real skill")
         # Create a symlink pointing outside the skills tree
@@ -147,7 +160,7 @@ class TestSkillsDirectoryMount:
         secret.write_text("TOP SECRET")
         (skills_dir / "evil_link").symlink_to(secret)
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+        with patch.dict(os.environ, {"MENTE_HOME": str(mente_home)}):
             mounts = get_skills_directory_mount()
 
         assert len(mounts) >= 1
@@ -163,12 +176,12 @@ class TestSkillsDirectoryMount:
 
     def test_no_symlinks_returns_original_dir(self, tmp_path):
         """When no symlinks exist, the original dir is returned (no copy)."""
-        hermes_home = tmp_path / ".hermes"
-        skills_dir = hermes_home / "skills"
+        mente_home = tmp_path / ".mente"
+        skills_dir = mente_home / "skills"
         skills_dir.mkdir(parents=True)
         (skills_dir / "skill.md").write_text("ok")
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+        with patch.dict(os.environ, {"MENTE_HOME": str(mente_home)}):
             mounts = get_skills_directory_mount()
 
         assert mounts[0]["host_path"] == str(skills_dir)
@@ -176,8 +189,8 @@ class TestSkillsDirectoryMount:
 
 class TestIterSkillsFiles:
     def test_returns_files_skipping_symlinks(self, tmp_path):
-        hermes_home = tmp_path / ".hermes"
-        skills_dir = hermes_home / "skills"
+        mente_home = tmp_path / ".mente"
+        skills_dir = mente_home / "skills"
         (skills_dir / "cat" / "myskill").mkdir(parents=True)
         (skills_dir / "cat" / "myskill" / "SKILL.md").write_text("# skill")
         (skills_dir / "cat" / "myskill" / "scripts").mkdir()
@@ -187,7 +200,7 @@ class TestIterSkillsFiles:
         secret.write_text("nope")
         (skills_dir / "cat" / "myskill" / "evil").symlink_to(secret)
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+        with patch.dict(os.environ, {"MENTE_HOME": str(mente_home)}):
             files = iter_skills_files()
 
         paths = {f["container_path"] for f in files}
@@ -197,10 +210,10 @@ class TestIterSkillsFiles:
         assert not any("evil" in f["container_path"] for f in files)
 
     def test_empty_when_no_skills_dir(self, tmp_path):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
+        mente_home = tmp_path / ".mente"
+        mente_home.mkdir()
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+        with patch.dict(os.environ, {"MENTE_HOME": str(mente_home)}):
             assert iter_skills_files() == []
 
 class TestPathTraversalSecurity:

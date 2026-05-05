@@ -1,46 +1,46 @@
 #!/usr/bin/env python3
 """
-Hermes CLI - Main entry point.
+Mente CLI - Main entry point.
 
 Usage:
-    hermes                     # Interactive chat (default)
-    hermes chat                # Interactive chat
-    hermes gateway             # Run gateway in foreground
-    hermes gateway start       # Start gateway as service
-    hermes gateway stop        # Stop gateway service
-    hermes gateway status      # Show gateway status
-    hermes gateway install     # Install gateway service
-    hermes gateway uninstall   # Uninstall gateway service
-    hermes setup               # Interactive setup wizard
-    hermes logout              # Clear stored authentication
-    hermes status              # Show status of all components
-    hermes cron                # Manage cron jobs
-    hermes cron list           # List cron jobs
-    hermes cron status         # Check if cron scheduler is running
-    hermes doctor              # Check configuration and dependencies
-    hermes honcho setup                    # Configure Honcho AI memory integration
-    hermes honcho status                   # Show Honcho config and connection status
-    hermes honcho sessions                 # List directory → session name mappings
-    hermes honcho map <name>               # Map current directory to a session name
-    hermes honcho peer                     # Show peer names and dialectic settings
-    hermes honcho peer --user NAME         # Set user peer name
-    hermes honcho peer --ai NAME           # Set AI peer name
-    hermes honcho peer --reasoning LEVEL   # Set dialectic reasoning level
-    hermes honcho mode                     # Show current memory mode
-    hermes honcho mode [hybrid|honcho|local]  # Set memory mode
-    hermes honcho tokens                   # Show token budget settings
-    hermes honcho tokens --context N       # Set session.context() token cap
-    hermes honcho tokens --dialectic N     # Set dialectic result char cap
-    hermes honcho identity                 # Show AI peer identity representation
-    hermes honcho identity <file>          # Seed AI peer identity from a file (SOUL.md etc.)
-    hermes honcho migrate                  # Step-by-step migration guide: OpenClaw native → Hermes + Honcho
-    hermes version             Show version
-    hermes update              Update to latest version
-    hermes uninstall           Uninstall Hermes Agent
-    hermes acp                 Run as an ACP server for editor integration
-    hermes sessions browse     Interactive session picker with search
+    mente                      # Interactive chat (default)
+    mente chat                 # Interactive chat
+    mente gateway              # Run gateway in foreground
+    mente gateway start        # Start gateway as service
+    mente gateway stop         # Stop gateway service
+    mente gateway status       # Show gateway status
+    mente gateway install      # Install gateway service
+    mente gateway uninstall    # Uninstall gateway service
+    mente setup                # Interactive setup wizard
+    mente logout               # Clear stored authentication
+    mente status               # Show status of all components
+    mente cron                 # Manage cron jobs
+    mente cron list            # List cron jobs
+    mente cron status          # Check if cron scheduler is running
+    mente doctor               # Check configuration and dependencies
+    mente honcho setup                    # Configure Honcho AI memory integration
+    mente honcho status                   # Show Honcho config and connection status
+    mente honcho sessions                 # List directory → session name mappings
+    mente honcho map <name>               # Map current directory to a session name
+    mente honcho peer                     # Show peer names and dialectic settings
+    mente honcho peer --user NAME         # Set user peer name
+    mente honcho peer --ai NAME           # Set AI peer name
+    mente honcho peer --reasoning LEVEL   # Set dialectic reasoning level
+    mente honcho mode                     # Show current memory mode
+    mente honcho mode [hybrid|honcho|local]  # Set memory mode
+    mente honcho tokens                   # Show token budget settings
+    mente honcho tokens --context N       # Set session.context() token cap
+    mente honcho tokens --dialectic N     # Set dialectic result char cap
+    mente honcho identity                 # Show AI peer identity representation
+    mente honcho identity <file>          # Seed AI peer identity from a file (SOUL.md etc.)
+    mente honcho migrate                  # Step-by-step migration guide: OpenClaw native → Mente + Honcho
+    mente version             Show version
+    mente update              Update to latest version
+    mente uninstall           Uninstall Mente Agent
+    mente acp                 Run as an ACP server for editor integration
+    mente sessions browse     Interactive session picker with search
 
-    hermes claw migrate --dry-run  # Preview migration without changes
+    mente claw migrate --dry-run  # Preview migration without changes
 """
 
 import argparse
@@ -69,7 +69,7 @@ def _add_accept_hooks_flag(parser) -> None:
 def _require_tty(command_name: str) -> None:
     """Exit with a clear error if stdin is not a terminal.
 
-    Interactive TUI commands (hermes tools, hermes setup, hermes model) use
+    Interactive TUI commands (mente tools, mente setup, mente model) use
     curses or input() prompts that spin at 100% CPU when stdin is a pipe.
     This guard prevents accidental non-interactive invocation.
     """
@@ -1198,10 +1198,10 @@ def cmd_chat(args):
     if not _has_any_provider_configured():
         print()
         print(
-            "It looks like Hermes isn't configured yet -- no API keys or providers found."
+            "It looks like Mente isn't configured yet -- no API keys or providers found."
         )
         print()
-        print("  Run:  hermes setup")
+        print("  Run:  mente setup")
         print()
 
         from hermes_cli.setup import (
@@ -1223,7 +1223,7 @@ def cmd_chat(args):
             cmd_setup(args)
             return
         print()
-        print("You can run 'hermes setup' at any time to configure.")
+        print("You can run 'mente setup' at any time to configure.")
         sys.exit(1)
 
     # Start update check in background (runs while other init happens)
@@ -1465,7 +1465,7 @@ def cmd_whatsapp(args):
             print("  ✓ Session cleared")
         else:
             print("\n✓ WhatsApp is configured and paired!")
-            print("  Start the gateway with: hermes gateway")
+            print("  Start the gateway with: mente gateway")
             return
 
     # ── Step 6: QR code pairing ──────────────────────────────────────────
@@ -1496,23 +1496,23 @@ def cmd_whatsapp(args):
         print()
         if wa_mode == "bot":
             print("  Next steps:")
-            print("    1. Start the gateway:  hermes gateway")
+            print("    1. Start the gateway:  mente gateway")
             print("    2. Send a message to the bot's WhatsApp number")
             print("    3. The agent will reply automatically")
             print()
-            print("  Tip: Agent responses are prefixed with '⚕ Hermes Agent'")
+            print("  Tip: Agent responses are prefixed with '⚕ Mente Agent'")
         else:
             print("  Next steps:")
-            print("    1. Start the gateway:  hermes gateway")
+            print("    1. Start the gateway:  mente gateway")
             print("    2. Open WhatsApp → Message Yourself")
             print("    3. Type a message — the agent will reply")
             print()
-            print("  Tip: Agent responses are prefixed with '⚕ Hermes Agent'")
+            print("  Tip: Agent responses are prefixed with '⚕ Mente Agent'")
             print("  so you can tell them apart from your own messages.")
         print()
-        print("  Or install as a service: hermes gateway install")
+        print("  Or install as a service: mente gateway install")
     else:
-        print("⚠ Pairing may not have completed. Run 'hermes whatsapp' to try again.")
+        print("⚠ Pairing may not have completed. Run 'mente whatsapp' to try again.")
 
 
 def cmd_setup(args):
@@ -4965,7 +4965,7 @@ def cmd_backup(args):
 
 
 def cmd_import(args):
-    """Restore a Hermes backup from a zip file."""
+    """Restore a Mente backup from a zip file."""
     from hermes_cli.backup import run_import
 
     run_import(args)
@@ -4973,7 +4973,7 @@ def cmd_import(args):
 
 def cmd_version(args):
     """Show version."""
-    print(f"Hermes Agent v{__version__} ({__release_date__})")
+    print(f"Mente Agent v{__version__} ({__release_date__})")
     print(f"Project: {PROJECT_ROOT}")
 
     # Show Python version
@@ -5006,7 +5006,7 @@ def cmd_version(args):
 
 
 def cmd_uninstall(args):
-    """Uninstall Hermes Agent."""
+    """Uninstall Mente Agent."""
     _require_tty("uninstall")
     from hermes_cli.uninstall import run_uninstall
 
@@ -6314,7 +6314,7 @@ def _run_pre_update_backup(args) -> None:
 
 
 def cmd_update(args):
-    """Update Hermes Agent to the latest version.
+    """Update Mente Agent to the latest version.
 
     Thin wrapper around ``_cmd_update_impl``: installs hangup protection,
     runs the update, then restores stdio on the way out (even on
@@ -6323,7 +6323,7 @@ def cmd_update(args):
     from hermes_cli.config import is_managed, managed_error
 
     if is_managed():
-        managed_error("update Hermes Agent")
+        managed_error("update Mente Agent")
         return
 
     if getattr(args, "check", False):
@@ -6352,7 +6352,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         else None
     )
 
-    print("⚕ Updating Hermes Agent...")
+    print("⚕ Updating Mente Agent...")
     print()
 
     # Pre-update backup — runs before any git/file mutation so users can
@@ -7619,47 +7619,47 @@ def cmd_logs(args):
 
 
 def main():
-    """Main entry point for hermes CLI."""
+    """Main entry point for the Mente CLI."""
     parser = argparse.ArgumentParser(
-        prog="hermes",
-        description="Hermes Agent - AI assistant with tool-calling capabilities",
+        prog=os.path.basename(sys.argv[0]) or "mente",
+        description="Mente Agent - AI assistant with tool-calling capabilities",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    hermes                        Start interactive chat
-    hermes chat -q "Hello"        Single query mode
-    hermes -c                     Resume the most recent session
-    hermes -c "my project"        Resume a session by name (latest in lineage)
-    hermes --resume <session_id>  Resume a specific session by ID
-    hermes setup                  Run setup wizard
-    hermes logout                 Clear stored authentication
-    hermes auth add <provider>    Add a pooled credential
-    hermes auth list              List pooled credentials
-    hermes auth remove <p> <t>    Remove pooled credential by index, id, or label
-    hermes auth reset <provider>  Clear exhaustion status for a provider
-    hermes model                  Select default model
-    hermes fallback [list]        Show fallback provider chain
-    hermes fallback add           Add a fallback provider (same picker as `hermes model`)
-    hermes fallback remove        Remove a fallback provider from the chain
-    hermes config                 View configuration
-    hermes config edit            Edit config in $EDITOR
-    hermes config set model gpt-4 Set a config value
-    hermes gateway                Run messaging gateway
-    hermes -s hermes-agent-dev,github-auth
-    hermes -w                     Start in isolated git worktree
-    hermes gateway install        Install gateway background service
-    hermes sessions list          List past sessions
-    hermes sessions browse        Interactive session picker
-    hermes sessions rename ID T   Rename/title a session
-    hermes logs                   View agent.log (last 50 lines)
-    hermes logs -f                Follow agent.log in real time
-    hermes logs errors            View errors.log
-    hermes logs --since 1h        Lines from the last hour
-    hermes debug share             Upload debug report for support
-    hermes update                 Update to latest version
+    mente                        Start interactive chat
+    mente chat -q "Hello"        Single query mode
+    mente -c                     Resume the most recent session
+    mente -c "my project"        Resume a session by name (latest in lineage)
+    mente --resume <session_id>  Resume a specific session by ID
+    mente setup                  Run setup wizard
+    mente logout                 Clear stored authentication
+    mente auth add <provider>    Add a pooled credential
+    mente auth list              List pooled credentials
+    mente auth remove <p> <t>    Remove pooled credential by index, id, or label
+    mente auth reset <provider>  Clear exhaustion status for a provider
+    mente model                  Select default model
+    mente fallback [list]        Show fallback provider chain
+    mente fallback add           Add a fallback provider (same picker as `mente model`)
+    mente fallback remove        Remove a fallback provider from the chain
+    mente config                 View configuration
+    mente config edit            Edit config in $EDITOR
+    mente config set model gpt-4 Set a config value
+    mente gateway                Run messaging gateway
+    mente -s hermes-agent-dev,github-auth
+    mente -w                     Start in isolated git worktree
+    mente gateway install        Install gateway background service
+    mente sessions list          List past sessions
+    mente sessions browse        Interactive session picker
+    mente sessions rename ID T   Rename/title a session
+    mente logs                   View agent.log (last 50 lines)
+    mente logs -f                Follow agent.log in real time
+    mente logs errors            View errors.log
+    mente logs --since 1h        Lines from the last hour
+    mente debug share            Upload debug report for support
+    mente update                 Update to latest version
 
 For more help on a command:
-    hermes <command> --help
+    mente <command> --help
 """,
     )
 
@@ -7788,7 +7788,7 @@ For more help on a command:
     chat_parser = subparsers.add_parser(
         "chat",
         help="Interactive chat with the agent",
-        description="Start an interactive chat session with Hermes Agent",
+        description="Start an interactive chat session with Mente Agent",
     )
     chat_parser.add_argument(
         "-q", "--query", help="Single query (non-interactive mode)"
@@ -9738,7 +9738,7 @@ Examples:
     # =========================================================================
     update_parser = subparsers.add_parser(
         "update",
-        help="Update Hermes Agent to the latest version",
+        help="Update Mente Agent to the latest version",
         description="Pull the latest changes from git and reinstall dependencies",
     )
     update_parser.add_argument(
@@ -9772,8 +9772,8 @@ Examples:
     # =========================================================================
     uninstall_parser = subparsers.add_parser(
         "uninstall",
-        help="Uninstall Hermes Agent",
-        description="Remove Hermes Agent from your system. Can keep configs/data for reinstall.",
+        help="Uninstall Mente Agent",
+        description="Remove Mente Agent from your system. Can keep configs/data for reinstall.",
     )
     uninstall_parser.add_argument(
         "--full",
@@ -9790,13 +9790,13 @@ Examples:
     # =========================================================================
     acp_parser = subparsers.add_parser(
         "acp",
-        help="Run Hermes Agent as an ACP (Agent Client Protocol) server",
-        description="Start Hermes Agent in ACP mode for editor integration (VS Code, Zed, JetBrains)",
+        help="Run Mente Agent as an ACP (Agent Client Protocol) server",
+        description="Start Mente Agent in ACP mode for editor integration (VS Code, Zed, JetBrains)",
     )
     _add_accept_hooks_flag(acp_parser)
 
     def cmd_acp(args):
-        """Launch Hermes Agent as an ACP server."""
+        """Launch Mente Agent as an ACP server."""
         try:
             from acp_adapter.entry import main as acp_main
 

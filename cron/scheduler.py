@@ -130,7 +130,7 @@ def _run_mente_cron_job(
     workspace: str | None = None,
 ) -> tuple[bool, str, str, Optional[str]]:
     """Run a cron job through the Mente task bridge."""
-    from mente.integrations.hermes import run_cron_task
+    from mente.integrations.bridge import run_cron_task
 
     job_id = job["id"]
     job_name = job["name"]

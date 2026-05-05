@@ -1488,23 +1488,27 @@ def _hermes_home_for_target_user(target_home_dir: str) -> str:
     root's home.  This translates it to the target user's equivalent path:
       /root/.hermes                    → /home/alice/.hermes
       /root/.hermes/profiles/coder     → /home/alice/.hermes/profiles/coder
+      /root/.mente                     → /home/alice/.mente
       /opt/custom-hermes               → /opt/custom-hermes  (kept as-is)
     """
     current_hermes = get_hermes_home().resolve()
-    current_default = (Path.home() / ".hermes").resolve()
-    target_default = Path(target_home_dir) / ".hermes"
+    current_home = Path.home().resolve()
+    remap_roots = (
+        ((current_home / ".mente").resolve(), Path(target_home_dir) / ".mente"),
+        ((current_home / ".hermes").resolve(), Path(target_home_dir) / ".hermes"),
+    )
 
-    # Default ~/.hermes → remap to target user's default
-    if current_hermes == current_default:
-        return str(target_default)
+    for current_default, target_default in remap_roots:
+        if current_hermes == current_default:
+            return str(target_default)
+        try:
+            relative = current_hermes.relative_to(current_default)
+            return str(target_default / relative)
+        except ValueError:
+            continue
 
-    # Profile or subdir of ~/.hermes → preserve the relative structure
-    try:
-        relative = current_hermes.relative_to(current_default)
-        return str(target_default / relative)
-    except ValueError:
-        # Completely custom path (not under ~/.hermes) — keep as-is
-        return str(current_hermes)
+    # Completely custom path (not under the calling user's default roots) — keep as-is
+    return str(current_hermes)
 
 
 def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) -> str:
@@ -1566,6 +1570,7 @@ Environment="USER={username}"
 Environment="LOGNAME={username}"
 Environment="PATH={sane_path}"
 Environment="VIRTUAL_ENV={venv_dir}"
+Environment="MENTE_HOME={hermes_home}"
 Environment="HERMES_HOME={hermes_home}"
 Restart=on-failure
 RestartSec=30
@@ -1598,6 +1603,7 @@ ExecStart={python_path} -m hermes_cli.main{f" {profile_arg}" if profile_arg else
 WorkingDirectory={working_dir}
 Environment="PATH={sane_path}"
 Environment="VIRTUAL_ENV={venv_dir}"
+Environment="MENTE_HOME={hermes_home}"
 Environment="HERMES_HOME={hermes_home}"
 Restart=on-failure
 RestartSec=30

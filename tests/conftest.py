@@ -246,7 +246,7 @@ def _hermetic_environment(tmp_path, monkeypatch):
     for name in _HERMES_BEHAVIORAL_VARS:
         monkeypatch.delenv(name, raising=False)
 
-    # 3. Redirect HERMES_HOME to a per-test tempdir. Code that reads
+    # 3. Redirect HERMES_HOME and MENTE_HOME to per-test tempdirs. Code that reads
     #    ``~/.hermes/*`` via ``get_hermes_home()`` now gets the tempdir.
     #
     #    NOTE: We do NOT also redirect HOME. Doing so broke CI because
@@ -263,6 +263,9 @@ def _hermetic_environment(tmp_path, monkeypatch):
     (fake_hermes_home / "memories").mkdir()
     (fake_hermes_home / "skills").mkdir()
     monkeypatch.setenv("HERMES_HOME", str(fake_hermes_home))
+    fake_mente_home = tmp_path / "mente_test"
+    fake_mente_home.mkdir()
+    monkeypatch.setenv("MENTE_HOME", str(fake_mente_home))
 
     # 4. Deterministic locale / timezone / hashseed. CI runs in UTC with
     #    C.UTF-8 locale; local dev often doesn't. Pin everything.

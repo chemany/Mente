@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TaskStatus(StrEnum):
@@ -21,6 +21,45 @@ class TaskStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     BLOCKED = "blocked"
+
+
+class ExecutionMode(StrEnum):
+    """Top-level Mente-owned execution path selection."""
+
+    STATELESS = "stateless"
+    SESSIONFUL = "sessionful"
+
+
+class SessionMode(StrEnum):
+    """Mente-owned session continuity mode selection."""
+
+    START = "start"
+    RESUME = "resume"
+
+
+class ExecutionSession(BaseModel):
+    """Mente-owned session continuity contract for one task/request."""
+
+    mode: SessionMode
+    continuity_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_contract(self) -> "ExecutionSession":
+        if self.mode is SessionMode.RESUME and not self.continuity_id:
+            msg = "continuity_id is required when mode=resume"
+            raise ValueError(msg)
+        return self
+
+
+def _normalize_execution_mode_value(value: Any) -> Any:
+    if value is None or value == "":
+        return ExecutionMode.STATELESS
+    if isinstance(value, ExecutionMode):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized == "session":
+        return ExecutionMode.SESSIONFUL
+    return normalized
 
 
 class Task(BaseModel):
@@ -40,9 +79,28 @@ class Task(BaseModel):
     artifacts_in: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     budget: dict[str, Any] = Field(default_factory=dict)
-    execution_mode: str | None = None
+    execution_mode: ExecutionMode = ExecutionMode.STATELESS
+    execution_session: ExecutionSession | None = None
     resume_token: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("execution_mode", mode="before")
+    @classmethod
+    def _normalize_execution_mode(cls, value: Any) -> Any:
+        return _normalize_execution_mode_value(value)
+
+    @model_validator(mode="after")
+    def _normalize_execution_session(self) -> "Task":
+        if self.execution_session is None and self.resume_token:
+            self.execution_session = ExecutionSession(
+                mode=SessionMode.RESUME,
+                continuity_id=self.resume_token,
+            )
+        if self.execution_mode is ExecutionMode.STATELESS:
+            self.execution_session = None
+        elif self.execution_session is None:
+            self.execution_session = ExecutionSession(mode=SessionMode.START)
+        return self
 
 
 class ExecutionRequest(BaseModel):
@@ -61,9 +119,36 @@ class ExecutionRequest(BaseModel):
     artifacts_in: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     budget: dict[str, Any] = Field(default_factory=dict)
-    execution_mode: str | None = None
+    execution_mode: ExecutionMode = ExecutionMode.STATELESS
+    execution_session: ExecutionSession | None = None
     resume_token: str | None = None
+    tool_policy: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("execution_mode", mode="before")
+    @classmethod
+    def _normalize_execution_mode(cls, value: Any) -> Any:
+        return _normalize_execution_mode_value(value)
+
+    @field_validator("tool_policy", mode="before")
+    @classmethod
+    def _serialize_tool_policy(cls, value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
+        return value
+
+    @model_validator(mode="after")
+    def _normalize_execution_session(self) -> "ExecutionRequest":
+        if self.execution_session is None and self.resume_token:
+            self.execution_session = ExecutionSession(
+                mode=SessionMode.RESUME,
+                continuity_id=self.resume_token,
+            )
+        if self.execution_mode is ExecutionMode.STATELESS:
+            self.execution_session = None
+        elif self.execution_session is None:
+            self.execution_session = ExecutionSession(mode=SessionMode.START)
+        return self
 
 
 class ExecutionResult(BaseModel):
@@ -82,4 +167,5 @@ class ExecutionResult(BaseModel):
     raw_transcript_ref: str | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
     failure_reason: str | None = None
+    execution_session: ExecutionSession | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

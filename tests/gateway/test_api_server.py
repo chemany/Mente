@@ -14,8 +14,10 @@ Tests cover:
 
 import asyncio
 import json
+import os
 import time
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,6 +35,15 @@ from gateway.platforms.api_server import (
     cors_middleware,
     security_headers_middleware,
 )
+from mente.executors.runtime_config import RuntimeConfig
+from mente.memory.repository import SQLiteMemoryRepository
+from mente.task_core.models import (
+    ExecutionMode,
+    ExecutionResult,
+    ExecutionSession,
+    SessionMode,
+)
+from mente.task_core.repository import SQLiteTaskRepository
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +329,17 @@ def _create_app(adapter: APIServerAdapter) -> web.Application:
     app.router.add_post("/v1/responses", adapter._handle_responses)
     app.router.add_get("/v1/responses/{response_id}", adapter._handle_get_response)
     app.router.add_delete("/v1/responses/{response_id}", adapter._handle_delete_response)
+    app.router.add_get("/api/debug/tasks", adapter._handle_debug_tasks)
+    app.router.add_get("/api/debug/memories", adapter._handle_debug_memories)
     return app
+
+
+def _fake_execution_result(summary: str, *, memory_candidates=None) -> ExecutionResult:
+    return ExecutionResult(
+        status="success",
+        summary=summary,
+        memory_candidates=list(memory_candidates or []),
+    )
 
 
 @pytest.fixture
@@ -558,6 +579,538 @@ class TestChatCompletionsEndpoint:
                 assert "data: " in body
                 assert "[DONE]" in body
                 assert "Hello!" in body
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_routes_to_mente_when_enabled(self, monkeypatch, auth_adapter):
+        app = _create_app(auth_adapter)
+        mente_run = MagicMock(return_value=_fake_execution_result("via mente"))
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(auth_adapter, "_run_agent", new_callable=AsyncMock) as mock_run:
+                resp = await cli.post(
+                    "/v1/chat/completions",
+                    headers={
+                        "Authorization": "Bearer sk-secret",
+                        "X-Hermes-Session-Id": "sess-api-1",
+                    },
+                    json={
+                        "model": "hermes-agent",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                    },
+                )
+                data = await resp.json()
+
+        assert resp.status == 200
+        assert data["choices"][0]["message"]["content"] == "via mente"
+        assert resp.headers.get("X-Hermes-Session-Id") == "sess-api-1"
+        assert mente_run.call_args.kwargs["session_id"] == "sess-api-1"
+        assert mente_run.call_args.kwargs["api_mode"] == "chat_completions"
+        assert mente_run.call_args.kwargs["conversation_history"] == []
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_passes_continuity_request_and_returns_handoff(
+        self, monkeypatch, auth_adapter
+    ):
+        app = _create_app(auth_adapter)
+        audit_payload = {
+            "mode": "resume",
+            "requested_mode": "resume",
+            "effective_mode": "resume",
+            "source": "api_server",
+            "session_capable": True,
+            "continuity_id": "thread-123",
+            "continuity_status": "resumed",
+            "fallback_reason": None,
+        }
+        mente_run = MagicMock(
+            return_value=ExecutionResult(
+                status="success",
+                summary="via mente",
+                metadata={"execution_session": audit_payload},
+            )
+        )
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(auth_adapter, "_run_agent", new_callable=AsyncMock) as mock_run:
+                resp = await cli.post(
+                    "/v1/chat/completions",
+                    headers={
+                        "Authorization": "Bearer sk-secret",
+                        "X-Hermes-Session-Id": "sess-api-1",
+                    },
+                    json={
+                        "model": "hermes-agent",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "execution_mode": "sessionful",
+                        "execution_session": {
+                            "mode": "resume",
+                            "continuity_id": "thread-123",
+                        },
+                    },
+                )
+                data = await resp.json()
+
+        assert resp.status == 200
+        assert data["choices"][0]["message"]["content"] == "via mente"
+        assert data["execution_session"] == audit_payload
+        assert mente_run.call_args.kwargs["execution_mode"] is ExecutionMode.SESSIONFUL
+        assert mente_run.call_args.kwargs["execution_session"] == ExecutionSession(
+            mode=SessionMode.RESUME,
+            continuity_id="thread-123",
+        )
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_rejects_resume_without_continuity_id(
+        self, monkeypatch, auth_adapter
+    ):
+        app = _create_app(auth_adapter)
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer sk-secret"},
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "execution_mode": "sessionful",
+                    "execution_session": {"mode": "resume"},
+                },
+            )
+            data = await resp.json()
+
+        assert resp.status == 400
+        assert data["error"]["message"] == "continuity_id is required when mode=resume"
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_fresh_session_persists_empty_selected_memory_context(
+        self, monkeypatch, auth_adapter, tmp_path
+    ):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        app = _create_app(auth_adapter)
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        def _fake_execute(self, request):
+            return ExecutionResult(
+                status="success",
+                summary="I do not have any prior preferences for this session.",
+                memory_candidates=[],
+            )
+
+        monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "fresh-api-session",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "What preferences did I mention earlier?"}],
+                },
+            )
+            tasks_resp = await cli.get(
+                "/api/debug/tasks?scope=session&session_id=fresh-api-session"
+                "&source=api_server&limit=1",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            data = await tasks_resp.json()
+
+        assert resp.status == 200
+        assert tasks_resp.status == 200
+        assert data["count"] == 1
+        assert data["tasks"][0]["metadata"]["memory_context"]["selected"] == []
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_adoption_slice_persists_review_audit_to_debug_surfaces(
+        self, monkeypatch, auth_adapter, tmp_path
+    ):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        mente_home = tmp_path / "mente-home"
+        app = _create_app(auth_adapter)
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+        monkeypatch.setenv("MENTE_API_SERVER_CONVERSATION_ADOPTION_ENABLED", "1")
+        monkeypatch.setenv("MENTE_MEMORY_REVIEW_ENABLED", "1")
+        monkeypatch.setenv("MENTE_SKILL_REVIEW_ENABLED", "1")
+        monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_ENABLED", "1")
+        monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_TURN_INTERVAL", "1")
+
+        skills_dir = mente_home / "skills" / "coding" / "python-debug"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text("# test\n", encoding="utf-8")
+
+        audit_payload = {
+            "mode": "resume",
+            "requested_mode": "resume",
+            "effective_mode": "resume",
+            "source": "api_server",
+            "session_capable": True,
+            "continuity_id": "thread-123",
+            "continuity_status": "resumed",
+            "fallback_reason": None,
+        }
+
+        monkeypatch.setattr(
+            "mente.integrations.bridge.CodexExecutor.execute",
+            lambda self, request: ExecutionResult(
+                status="success",
+                summary="Remember that I prefer concise JSON responses.",
+                commands_run=["sed -n 1,40p skills/coding/python-debug/SKILL.md"],
+                memory_candidates=["User prefers JSON-first replies."],
+                metadata={"execution_session": audit_payload},
+            ),
+        )
+
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "sess-api-adoption",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Remember that I prefer concise JSON responses.",
+                        }
+                    ],
+                    "execution_mode": "sessionful",
+                    "execution_session": {
+                        "mode": "resume",
+                        "continuity_id": "thread-123",
+                    },
+                    "skill_refs": ["coding/python-debug"],
+                },
+            )
+            response_data = await resp.json()
+            tasks_resp = await cli.get(
+                "/api/debug/tasks?scope=session&session_id=sess-api-adoption"
+                "&source=api_server&limit=1",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            tasks_data = await tasks_resp.json()
+            memories_resp = await cli.get(
+                "/api/debug/memories?scope=session&session_id=sess-api-adoption"
+                "&source=api_server&limit=10",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            memories_data = await memories_resp.json()
+
+        assert resp.status == 200
+        assert response_data["execution_session"] == audit_payload
+        assert tasks_resp.status == 200
+        stored_task = SQLiteTaskRepository(db_path=task_db_path).get(tasks_data["tasks"][0]["task_id"])
+        assert stored_task is not None
+        assert stored_task.metadata["session_synthesis"]["status"] == "persisted"
+        assert tasks_data["tasks"][0]["metadata"]["workflow_contract"]["workflow_id"] == (
+            "api_server_conversation"
+        )
+        assert tasks_data["tasks"][0]["metadata"]["memory_review"]["status"] == "persisted"
+        assert tasks_data["tasks"][0]["metadata"]["skill_review"]["status"] == "suggested"
+        assert tasks_data["tasks"][0]["metadata"]["session_synthesis"]["status"] == "persisted"
+        assert tasks_data["tasks"][0]["metadata"]["execution_session"] == audit_payload
+        assert memories_resp.status == 200
+        assert any(
+            memory["metadata"].get("write_origin") == "post_turn_memory_review"
+            and memory["fact"] == "I prefer concise JSON responses."
+            for memory in memories_data["memories"]
+        )
+        assert any(
+            memory["kind"] == "session_summary"
+            and memory["metadata"].get("write_origin") == "session_synthesis"
+            for memory in memories_data["memories"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_adopted_direct_write_persists_once_and_review_noops(
+        self, monkeypatch, auth_adapter, tmp_path
+    ):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        app = _create_app(auth_adapter)
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+        monkeypatch.setenv("MENTE_API_SERVER_CONVERSATION_ADOPTION_ENABLED", "1")
+        monkeypatch.setenv("MENTE_MEMORY_REVIEW_ENABLED", "1")
+        monkeypatch.setenv("MENTE_REMEMBER_INTENT_DIRECT_WRITE_ENABLED", "1")
+
+        class _FakeUuid:
+            hex = "apidirecthttp"
+
+        monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+        monkeypatch.setattr(
+            "mente.integrations.bridge.CodexExecutor.execute",
+            lambda self, request: ExecutionResult(status="success", summary="记下了。"),
+        )
+
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "sess-api-direct-write",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "记住我喜欢简洁回答",
+                        }
+                    ],
+                },
+            )
+            response_data = await resp.json()
+            tasks_resp = await cli.get(
+                "/api/debug/tasks?scope=session&session_id=sess-api-direct-write"
+                "&source=api_server&limit=1",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            tasks_data = await tasks_resp.json()
+
+        memories = SQLiteMemoryRepository(db_path=memory_db_path).list_by_session(
+            "sess-api-direct-write",
+            limit=10,
+            source="api_server",
+        )
+        stored_task = SQLiteTaskRepository(db_path=task_db_path).get(tasks_data["tasks"][0]["task_id"])
+
+        assert resp.status == 200
+        assert response_data["choices"][0]["message"]["content"] == "记下了。"
+        assert tasks_resp.status == 200
+        assert stored_task is not None
+        assert stored_task.metadata["remember_intent_direct_write"]["status"] == "persisted"
+        assert stored_task.metadata["memory_review"]["status"] == "noop"
+        assert stored_task.metadata["memory_review"]["reason"] == "duplicate_existing"
+        assert len(memories) == 1
+        assert memories[0].fact == "我喜欢简洁回答"
+        assert memories[0].metadata["write_origin"] == "explicit_remember_intent"
+        assert memories[0].metadata["tool_name"] == "mente_remember_intent_direct_write"
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_adopted_followup_exposes_session_summary_audit(
+        self, monkeypatch, auth_adapter, tmp_path
+    ):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        app = _create_app(auth_adapter)
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+        monkeypatch.setenv("MENTE_API_SERVER_CONVERSATION_ADOPTION_ENABLED", "1")
+        monkeypatch.setenv("MENTE_SESSION_SUMMARY_RETRIEVAL_ENABLED", "1")
+        monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_ENABLED", "1")
+        monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_TURN_INTERVAL", "1")
+
+        class _FakeUuid:
+            def __init__(self, value):
+                self.hex = value
+
+        uuids = iter(
+            (
+                _FakeUuid("chatcompletionseed"),
+                _FakeUuid("apihttpseed"),
+                _FakeUuid("chatcompletionfollowup"),
+                _FakeUuid("apihttpfollowup"),
+            )
+        )
+        monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: next(uuids))
+
+        def _fake_execute(self, request):
+            if request.task_id.endswith("apihttpseed"):
+                return ExecutionResult(
+                    status="success",
+                    summary="Remember that I prefer concise JSON responses.",
+                )
+            return ExecutionResult(
+                status="success",
+                summary="Using the saved session summary.",
+            )
+
+        monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+        async with TestClient(TestServer(app)) as cli:
+            first_resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "sess-api-summary",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Remember that I prefer concise JSON responses.",
+                        }
+                    ],
+                },
+            )
+            second_resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "sess-api-summary",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Use my prior preference.",
+                        }
+                    ],
+                },
+            )
+            second_data = await second_resp.json()
+            tasks_resp = await cli.get(
+                "/api/debug/tasks?scope=session&session_id=sess-api-summary"
+                "&source=api_server&limit=2",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            tasks_data = await tasks_resp.json()
+            memories_resp = await cli.get(
+                "/api/debug/memories?scope=session&session_id=sess-api-summary"
+                "&source=api_server&limit=10",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            memories_data = await memories_resp.json()
+
+        assert first_resp.status == 200
+        assert second_resp.status == 200
+        assert second_data["choices"][0]["message"]["content"] == "Using the saved session summary."
+        assert tasks_resp.status == 200
+        assert tasks_data["count"] >= 2
+
+        latest_task = next(
+            task for task in tasks_data["tasks"] if task["task_id"] == "mente_api_server_apihttpfollowup"
+        )
+        selected = latest_task["metadata"]["memory_context"]["selected"]
+        audit_selected = latest_task["metadata"]["memory_audit"]["selected"]
+        summary_id = "session_summary:api_server:sess-api-summary:api_server_conversation"
+
+        assert selected[0]["memory_id"] == summary_id
+        assert selected[0]["kind"] == "session_summary"
+        assert selected[0]["reason"] == "session_summary_priority"
+        assert audit_selected[0]["memory_id"] == summary_id
+        assert audit_selected[0]["kind"] == "session_summary"
+        assert audit_selected[0]["reason"] == "session_summary_priority"
+        assert latest_task["metadata"]["workflow_contract"]["source"] == "api_server"
+        assert latest_task["metadata"]["workflow_contract"]["memory_read"]["session_summary"] == {
+            "enabled": True,
+            "scope": "session",
+            "kind": "session_summary",
+            "priority": "before_generic_memories",
+            "max_results": 1,
+            "counts_toward_existing_budgets": True,
+        }
+        assert memories_resp.status == 200
+        assert any(
+            memory["memory_id"] == summary_id
+            and memory["kind"] == "session_summary"
+            and memory["source"] == "api_server"
+            for memory in memories_data["memories"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_mente_uses_private_runtime_config_provider(
+        self, monkeypatch, auth_adapter, tmp_path
+    ):
+        app = _create_app(auth_adapter)
+        runtime_config = RuntimeConfig(runtime_home=tmp_path / "private-runtime-home")
+        public_codex_home = tmp_path / "public-codex-home"
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
+        captured = {}
+
+        monkeypatch.setattr(
+            "mente.integrations.bridge._resolve_runtime_config_for_workspace",
+            lambda workspace: runtime_config,
+        )
+
+        def _fake_execute(self, request):
+            captured["runtime_config"] = self._runtime_config
+            return ExecutionResult(status="success", summary="via mente")
+
+        monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "sess-api-runtime",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+            data = await resp.json()
+
+        assert resp.status == 200
+        assert data["choices"][0]["message"]["content"] == "via mente"
+        assert captured["runtime_config"] is runtime_config
+        assert captured["runtime_config"].runtime_home != Path(os.environ["CODEX_HOME"])
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_stream_true_stays_legacy_when_mente_enabled(self, monkeypatch, adapter):
+        app = _create_app(adapter)
+        mente_run = MagicMock()
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            async def _mock_run_agent(**kwargs):
+                cb = kwargs.get("stream_delta_callback")
+                if cb:
+                    cb("legacy stream")
+                return (
+                    {"final_response": "legacy stream", "messages": [], "api_calls": 1},
+                    {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                )
+
+            with patch.object(adapter, "_run_agent", side_effect=_mock_run_agent) as mock_run:
+                resp = await cli.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "hermes-agent",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "stream": True,
+                    },
+                )
+                body = await resp.text()
+
+        assert resp.status == 200
+        assert "legacy stream" in body
+        mente_run.assert_not_called()
+        assert mock_run.call_count == 1
 
     @pytest.mark.asyncio
     async def test_stream_sends_keepalive_during_quiet_tool_gap(self, adapter):
@@ -1061,6 +1614,86 @@ class TestResponsesEndpoint:
             assert call_kwargs["ephemeral_system_prompt"] == "Talk like a pirate."
 
     @pytest.mark.asyncio
+    async def test_responses_routes_to_mente_when_enabled(self, monkeypatch, adapter):
+        app = _create_app(adapter)
+        mente_run = MagicMock(return_value=_fake_execution_result("via mente responses"))
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_run_agent", new_callable=AsyncMock) as mock_run:
+                resp = await cli.post(
+                    "/v1/responses",
+                    json={
+                        "model": "hermes-agent",
+                        "input": "Hello",
+                        "conversation": "resp-session-1",
+                        "store": True,
+                    },
+                )
+                data = await resp.json()
+
+        assert resp.status == 200
+        assert data["object"] == "response"
+        assert data["output"][-1]["content"][0]["text"] == "via mente responses"
+        assert mente_run.call_args.kwargs["api_mode"] == "responses"
+        assert mente_run.call_args.kwargs["conversation_history"] == []
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_responses_mente_returns_continuity_fallback_handoff(
+        self, monkeypatch, adapter
+    ):
+        app = _create_app(adapter)
+        audit_payload = {
+            "mode": "stateless",
+            "requested_mode": "resume",
+            "effective_mode": "stateless",
+            "source": "api_server",
+            "session_capable": True,
+            "continuity_id": None,
+            "continuity_status": "fallback_stateless",
+            "fallback_reason": "thread_not_found",
+        }
+        mente_run = MagicMock(
+            return_value=ExecutionResult(
+                status="success",
+                summary="via mente responses",
+                metadata={"execution_session": audit_payload},
+            )
+        )
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_run_agent", new_callable=AsyncMock) as mock_run:
+                resp = await cli.post(
+                    "/v1/responses",
+                    json={
+                        "model": "hermes-agent",
+                        "input": "Hello",
+                        "execution_mode": "sessionful",
+                        "execution_session": {
+                            "mode": "resume",
+                            "continuity_id": "thread-stale",
+                        },
+                    },
+                )
+                data = await resp.json()
+
+        assert resp.status == 200
+        assert data["output"][-1]["content"][0]["text"] == "via mente responses"
+        assert data["execution_session"] == audit_payload
+        assert mente_run.call_args.kwargs["execution_mode"] is ExecutionMode.SESSIONFUL
+        assert mente_run.call_args.kwargs["execution_session"] == ExecutionSession(
+            mode=SessionMode.RESUME,
+            continuity_id="thread-stale",
+        )
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_previous_response_id_chaining(self, adapter):
         """Test that responses can be chained via previous_response_id."""
         mock_result_1 = {
@@ -1278,6 +1911,37 @@ class TestResponsesStreaming:
                 assert '"logprobs": []' in body
                 assert "Hello" in body
                 assert " world" in body
+
+    @pytest.mark.asyncio
+    async def test_stream_true_stays_legacy_when_mente_enabled(self, monkeypatch, adapter):
+        app = _create_app(adapter)
+        mente_run = MagicMock()
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            async def _mock_run_agent(**kwargs):
+                cb = kwargs.get("stream_delta_callback")
+                if cb:
+                    cb("legacy responses")
+                return (
+                    {"final_response": "legacy responses", "messages": [], "api_calls": 1},
+                    {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                )
+
+            with patch.object(adapter, "_run_agent", side_effect=_mock_run_agent) as mock_run:
+                resp = await cli.post(
+                    "/v1/responses",
+                    json={"model": "hermes-agent", "input": "hi", "stream": True},
+                )
+                body = await resp.text()
+
+        assert resp.status == 200
+        assert "legacy responses" in body
+        assert "event: response.completed" in body
+        mente_run.assert_not_called()
+        assert mock_run.call_count == 1
 
     @pytest.mark.asyncio
     async def test_stream_emits_function_call_and_output_items(self, adapter):

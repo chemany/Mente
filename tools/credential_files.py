@@ -218,8 +218,9 @@ def get_skills_directory_mount(
     at ``<container_base>/external_skills/<index>``.
     """
     mounts = []
-    hermes_home = _resolve_hermes_home()
-    skills_dir = hermes_home / "skills"
+    from hermes_constants import get_skills_dir
+
+    skills_dir = get_skills_dir()
     if skills_dir.is_dir():
         host_path = _safe_skills_path(skills_dir)
         mounts.append({
@@ -266,7 +267,7 @@ def _safe_skills_path(skills_dir: Path) -> str:
     if _safe_skills_tempdir and _safe_skills_tempdir.is_dir():
         shutil.rmtree(_safe_skills_tempdir, ignore_errors=True)
 
-    safe_dir = Path(tempfile.mkdtemp(prefix="hermes-skills-safe-"))
+    safe_dir = Path(tempfile.mkdtemp(prefix="mente-skills-safe-"))
     _safe_skills_tempdir = safe_dir
 
     for item in skills_dir.rglob("*"):
@@ -301,8 +302,9 @@ def iter_skills_files(
     """
     result: List[Dict[str, str]] = []
 
-    hermes_home = _resolve_hermes_home()
-    skills_dir = hermes_home / "skills"
+    from hermes_constants import get_skills_dir
+
+    skills_dir = get_skills_dir()
     if skills_dir.is_dir():
         container_root = f"{container_base.rstrip('/')}/skills"
         for item in skills_dir.rglob("*"):
@@ -403,5 +405,3 @@ def iter_cache_files(
 def clear_credential_files() -> None:
     """Reset the skill-scoped registry (e.g. on session reset)."""
     _get_registered().clear()
-
-

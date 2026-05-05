@@ -24,6 +24,7 @@ def _create_app(adapter: APIServerAdapter) -> web.Application:
     mws = [mw for mw in (cors_middleware, security_headers_middleware) if mw is not None]
     app = web.Application(middlewares=mws)
     app["api_server_adapter"] = adapter
+    app.router.add_post("/v1/chat/completions", adapter._handle_chat_completions)
     app.router.add_get("/api/debug/tasks", adapter._handle_debug_tasks)
     return app
 
@@ -39,6 +40,43 @@ def auth_adapter():
 
 
 class TestDebugTasksAPI:
+    @pytest.mark.asyncio
+    async def test_debug_tasks_observes_api_server_bridge_tasks(self, adapter, monkeypatch, tmp_path):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        def _fake_execute(self, request):
+            from mente.task_core.models import ExecutionResult
+
+            return ExecutionResult(status="success", summary="via mente")
+
+        monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            chat_resp = await cli.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+
+            assert chat_resp.status == 200
+
+            resp = await cli.get(
+                "/api/debug/tasks?scope=recent&source=api_server&task_type=conversation&limit=1"
+            )
+
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["count"] == 1
+            assert data["tasks"][0]["source"] == "api_server"
+            assert data["tasks"][0]["task_type"] == "conversation"
+
     @pytest.mark.asyncio
     async def test_debug_tasks_returns_recent_filtered_tasks(self, adapter, monkeypatch):
         class _FakeRepo:

@@ -23,12 +23,14 @@ class TestGetSubprocessHome:
 
     def test_returns_none_when_hermes_home_unset(self, monkeypatch):
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         from hermes_constants import get_subprocess_home
         assert get_subprocess_home() is None
 
     def test_returns_none_when_home_dir_missing(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
         # No home/ subdirectory created
         from hermes_constants import get_subprocess_home
@@ -39,8 +41,21 @@ class TestGetSubprocessHome:
         hermes_home.mkdir()
         profile_home = hermes_home / "home"
         profile_home.mkdir()
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
         from hermes_constants import get_subprocess_home
+        assert get_subprocess_home() == str(profile_home)
+
+    def test_returns_path_when_only_mente_home_exists(self, tmp_path, monkeypatch):
+        mente_home = tmp_path / ".mente"
+        mente_home.mkdir()
+        profile_home = mente_home / "home"
+        profile_home.mkdir()
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+        from hermes_constants import get_subprocess_home
+
         assert get_subprocess_home() == str(profile_home)
 
     def test_returns_profile_specific_path(self, tmp_path, monkeypatch):
@@ -49,6 +64,7 @@ class TestGetSubprocessHome:
         profile_dir.mkdir(parents=True)
         profile_home = profile_dir / "home"
         profile_home.mkdir()
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(profile_dir))
         from hermes_constants import get_subprocess_home
         assert get_subprocess_home() == str(profile_home)
@@ -62,6 +78,7 @@ class TestGetSubprocessHome:
 
         from hermes_constants import get_subprocess_home
 
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(base / "alpha"))
         home_a = get_subprocess_home()
 
@@ -84,6 +101,7 @@ class TestMakeRunEnvHomeInjection:
         hermes_home = tmp_path / "hermes"
         hermes_home.mkdir()
         (hermes_home / "home").mkdir()
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
         monkeypatch.setenv("HOME", "/root")
         monkeypatch.setenv("PATH", "/usr/bin:/bin")
@@ -93,10 +111,25 @@ class TestMakeRunEnvHomeInjection:
 
         assert result["HOME"] == str(hermes_home / "home")
 
+    def test_injects_home_when_only_mente_home_exists(self, tmp_path, monkeypatch):
+        mente_home = tmp_path / ".mente"
+        mente_home.mkdir()
+        (mente_home / "home").mkdir()
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+        monkeypatch.setenv("HOME", "/root")
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+        from tools.environments.local import _make_run_env
+        result = _make_run_env({})
+
+        assert result["HOME"] == str(mente_home / "home")
+
     def test_no_injection_when_home_dir_missing(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / "hermes"
         hermes_home.mkdir()
         # No home/ subdirectory
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
         monkeypatch.setenv("HOME", "/root")
         monkeypatch.setenv("PATH", "/usr/bin:/bin")
@@ -128,6 +161,7 @@ class TestSanitizeSubprocessEnvHomeInjection:
         hermes_home = tmp_path / "hermes"
         hermes_home.mkdir()
         (hermes_home / "home").mkdir()
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
         base_env = {"HOME": "/root", "PATH": "/usr/bin", "USER": "root"}
@@ -136,9 +170,23 @@ class TestSanitizeSubprocessEnvHomeInjection:
 
         assert result["HOME"] == str(hermes_home / "home")
 
+    def test_injects_home_when_only_mente_home_exists(self, tmp_path, monkeypatch):
+        mente_home = tmp_path / ".mente"
+        mente_home.mkdir()
+        (mente_home / "home").mkdir()
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+        base_env = {"HOME": "/root", "PATH": "/usr/bin", "USER": "root"}
+        from tools.environments.local import _sanitize_subprocess_env
+        result = _sanitize_subprocess_env(base_env)
+
+        assert result["HOME"] == str(mente_home / "home")
+
     def test_no_injection_when_home_dir_missing(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / "hermes"
         hermes_home.mkdir()
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
         base_env = {"HOME": "/root", "PATH": "/usr/bin"}
@@ -184,6 +232,7 @@ class TestPythonProcessUnchanged:
         hermes_home = tmp_path / "hermes"
         hermes_home.mkdir()
         (hermes_home / "home").mkdir()
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
         original_home = os.environ.get("HOME")

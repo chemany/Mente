@@ -38,7 +38,7 @@ class TestGetHermesHome:
 
 class TestEnsureHermesHome:
     def test_creates_subdirs(self, tmp_path):
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path), "MENTE_HOME": str(tmp_path)}):
             ensure_hermes_home()
             assert (tmp_path / "cron").is_dir()
             assert (tmp_path / "sessions").is_dir()
@@ -46,18 +46,43 @@ class TestEnsureHermesHome:
             assert (tmp_path / "memories").is_dir()
 
     def test_creates_default_soul_md_if_missing(self, tmp_path):
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path), "MENTE_HOME": str(tmp_path)}):
             ensure_hermes_home()
             soul_path = tmp_path / "SOUL.md"
             assert soul_path.exists()
-            assert soul_path.read_text(encoding="utf-8").strip() != ""
+            content = soul_path.read_text(encoding="utf-8").strip()
+            assert content != ""
+            assert "Mente" in content
+            assert "Hermes Agent" not in content
 
     def test_does_not_overwrite_existing_soul_md(self, tmp_path):
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path), "MENTE_HOME": str(tmp_path)}):
             soul_path = tmp_path / "SOUL.md"
             soul_path.write_text("custom soul", encoding="utf-8")
             ensure_hermes_home()
             assert soul_path.read_text(encoding="utf-8") == "custom soul"
+
+    def test_migrates_legacy_default_soul_md(self, tmp_path):
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path), "MENTE_HOME": str(tmp_path)}):
+            soul_path = tmp_path / "SOUL.md"
+            soul_path.write_text(
+                (
+                    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
+                    "You are helpful, knowledgeable, and direct. You assist users with a wide "
+                    "range of tasks including answering questions, writing and editing code, "
+                    "analyzing information, creative work, and executing actions via your tools. "
+                    "You communicate clearly, admit uncertainty when appropriate, and prioritize "
+                    "being genuinely useful over being verbose unless otherwise directed below. "
+                    "Be targeted and efficient in your exploration and investigations."
+                ),
+                encoding="utf-8",
+            )
+
+            ensure_hermes_home()
+
+            content = soul_path.read_text(encoding="utf-8")
+            assert "Mente" in content
+            assert "Hermes Agent" not in content
 
 
 class TestLoadConfigDefaults:

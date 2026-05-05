@@ -7,7 +7,17 @@
       "task_type": "conversation",
       "source": "gateway",
       "scope": "session",
-      "fact": "User prefers concise replies."
+      "fact": "User prefers concise replies.",
+      "created_at": 2000
+    },
+    {
+      "memory_id": "fixture_mem_2",
+      "task_id": "fixture_gateway_task_0",
+      "task_type": "conversation",
+      "source": "gateway",
+      "scope": "global",
+      "fact": "User wants the answer to start with the key result.",
+      "created_at": 1000
     }
   ],
   "task": {

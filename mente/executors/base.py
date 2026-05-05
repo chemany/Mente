@@ -13,3 +13,7 @@ class Executor(ABC):
     @abstractmethod
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         """Execute a prepared request and return a structured result."""
+
+    def supports_kernel_sessions(self) -> bool:
+        """Return whether this executor supports reusable kernel sessions."""
+        return False

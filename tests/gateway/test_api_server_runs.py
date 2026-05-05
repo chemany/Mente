@@ -23,6 +23,7 @@ from gateway.platforms.api_server import (
     cors_middleware,
     security_headers_middleware,
 )
+from mente.task_core.models import ExecutionResult
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +49,15 @@ def _create_runs_app(adapter: APIServerAdapter) -> web.Application:
     app.router.add_post("/v1/runs", adapter._handle_runs)
     app.router.add_get("/v1/runs/{run_id}/events", adapter._handle_run_events)
     app.router.add_post("/v1/runs/{run_id}/stop", adapter._handle_stop_run)
+    return app
+
+
+def _create_responses_app(adapter: APIServerAdapter) -> web.Application:
+    """Create an aiohttp app with /v1/responses routes registered."""
+    mws = [mw for mw in (cors_middleware, security_headers_middleware) if mw is not None]
+    app = web.Application(middlewares=mws)
+    app["api_server_adapter"] = adapter
+    app.router.add_post("/v1/responses", adapter._handle_responses)
     return app
 
 
@@ -90,6 +100,10 @@ def adapter():
 @pytest.fixture
 def auth_adapter():
     return _make_adapter(api_key="sk-secret")
+
+
+def _fake_execution_result(summary: str) -> ExecutionResult:
+    return ExecutionResult(status="success", summary=summary)
 
 
 # ---------------------------------------------------------------------------
@@ -363,3 +377,50 @@ class TestStopRun:
                 body = await events_resp.text()
                 # Stream should have received run.failed and closed
                 assert "run.failed" in body or "stream closed" in body
+
+
+class TestResponsesConversationBridge:
+    @pytest.mark.asyncio
+    async def test_conversation_reuses_history_when_mente_enabled(self, monkeypatch, adapter):
+        app = _create_responses_app(adapter)
+        mente_run = MagicMock(
+            side_effect=[
+                _fake_execution_result("first reply"),
+                _fake_execution_result("second reply"),
+            ]
+        )
+
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setattr("gateway.platforms.api_server.run_api_server_task", mente_run)
+
+        async with TestClient(TestServer(app)) as cli:
+            first = await cli.post(
+                "/v1/responses",
+                json={
+                    "model": "hermes-agent",
+                    "input": "Hello",
+                    "conversation": "resp-session-1",
+                    "store": True,
+                },
+            )
+            assert first.status == 200
+
+            second = await cli.post(
+                "/v1/responses",
+                json={
+                    "model": "hermes-agent",
+                    "input": "Follow up",
+                    "conversation": "resp-session-1",
+                    "store": True,
+                },
+            )
+            assert second.status == 200
+
+        first_call = mente_run.call_args_list[0].kwargs
+        second_call = mente_run.call_args_list[1].kwargs
+        assert first_call["conversation_history"] == []
+        assert second_call["conversation_history"] == [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "first reply"},
+        ]
+        assert first_call["session_id"] == second_call["session_id"]

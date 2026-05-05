@@ -861,6 +861,8 @@ class TestBuildSystemPrompt:
     def test_always_has_identity(self, agent):
         prompt = agent._build_system_prompt()
         assert DEFAULT_AGENT_IDENTITY in prompt
+        assert "Mente" in prompt
+        assert "Hermes Agent" not in prompt
 
     def test_includes_system_message(self, agent):
         prompt = agent._build_system_prompt(system_message="Custom instruction")
@@ -3530,7 +3532,8 @@ class TestSystemPromptStability:
         # Should have built fresh, not queried the DB
         mock_db.get_session.assert_not_called()
         assert agent._cached_system_prompt is not None
-        assert "Hermes Agent" in agent._cached_system_prompt
+        assert "Mente" in agent._cached_system_prompt
+        assert "Hermes Agent" not in agent._cached_system_prompt
 
     def test_fresh_build_when_db_has_no_prompt(self, agent):
         """If the session DB has no stored prompt, build fresh even with history."""
@@ -3557,7 +3560,8 @@ class TestSystemPromptStability:
                 agent._cached_system_prompt = agent._build_system_prompt()
 
         # Empty string is falsy, so should fall through to fresh build
-        assert "Hermes Agent" in agent._cached_system_prompt
+        assert "Mente" in agent._cached_system_prompt
+        assert "Hermes Agent" not in agent._cached_system_prompt
 
 class TestBudgetPressure:
     """Budget exhaustion grace call system."""

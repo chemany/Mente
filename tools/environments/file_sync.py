@@ -380,8 +380,8 @@ class FileSyncManager:
         Uses the existing file mapping to find a remote->host directory
         pair, then applies the same prefix substitution to the new file.
         For example, if the mapping has ``/root/.hermes/skills/a.md`` →
-        ``~/.hermes/skills/a.md``, a new remote file at
-        ``/root/.hermes/skills/b.md`` maps to ``~/.hermes/skills/b.md``.
+        ``~/.mente/skills/a.md``, a new remote file at
+        ``/root/.hermes/skills/b.md`` maps to ``~/.mente/skills/b.md``.
         """
         mapping = file_mapping if file_mapping is not None else []
         for host, remote in mapping:

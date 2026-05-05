@@ -2,8 +2,8 @@
 OpenAI-compatible API server platform adapter.
 
 Exposes an HTTP server with endpoints:
-- POST /v1/chat/completions        — OpenAI Chat Completions format (stateless; opt-in session continuity via X-Hermes-Session-Id header)
-- POST /v1/responses               — OpenAI Responses API format (stateful via previous_response_id)
+- POST /v1/chat/completions        — OpenAI Chat Completions format; non-streaming Mente requests may opt into bounded continuity via execution_mode/execution_session
+- POST /v1/responses               — OpenAI Responses API format; non-streaming Mente requests may opt into bounded continuity via execution_mode/execution_session
 - GET  /v1/responses/{response_id} — Retrieve a stored response
 - DELETE /v1/responses/{response_id} — Delete a stored response
 - GET  /v1/models                  — lists hermes-agent as an available model
@@ -47,6 +47,11 @@ from gateway.platforms.base import (
     SendResult,
     is_network_accessible,
 )
+from mente.integrations.bridge import (
+    extract_execution_session_handoff,
+    normalize_api_execution_continuity,
+    run_api_server_task,
+)
 from mente.memory.memory_query import (
     MemoryQueryError,
     execute_memory_query,
@@ -74,6 +79,51 @@ MAX_REQUEST_BYTES = 1_000_000  # 1 MB default limit for POST bodies
 CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS = 30.0
 MAX_NORMALIZED_TEXT_LENGTH = 65_536  # 64 KB cap for normalized content parts
 MAX_CONTENT_LIST_SIZE = 1_000  # Max items when content is an array
+
+
+def _use_mente_executor(stream: bool) -> bool:
+    """Return True when the API server should route a request through Mente."""
+    if stream:
+        return False
+    return os.getenv("HERMES_API_SERVER_EXECUTOR", "").strip().lower() == "mente"
+
+
+def _parse_mente_execution_continuity(
+    body: Dict[str, Any],
+) -> tuple[Any | None, Any | None, str | None]:
+    """Parse the optional Mente continuity request from one API payload."""
+    if "execution_mode" not in body and "execution_session" not in body:
+        return None, None, None
+    try:
+        execution_mode, execution_session = normalize_api_execution_continuity(
+            execution_mode=body.get("execution_mode"),
+            execution_session=body.get("execution_session"),
+        )
+    except (TypeError, ValueError) as exc:
+        return None, None, str(exc)
+    return execution_mode, execution_session, None
+
+
+def _parse_mente_skill_refs(
+    body: Dict[str, Any],
+) -> tuple[list[str], str | None]:
+    """Parse the optional Mente skill review targets from one API payload."""
+    if "skill_refs" not in body:
+        return [], None
+
+    raw_refs = body.get("skill_refs")
+    if not isinstance(raw_refs, list):
+        return [], "skill_refs must be a list of non-empty strings"
+
+    normalized: list[str] = []
+    for raw_ref in raw_refs:
+        if not isinstance(raw_ref, str):
+            return [], "skill_refs must be a list of non-empty strings"
+        candidate = raw_ref.strip()
+        if not candidate:
+            return [], "skill_refs must be a list of non-empty strings"
+        normalized.append(candidate)
+    return normalized, None
 
 
 def _normalize_chat_content(
@@ -844,6 +894,16 @@ class APIServerAdapter(BasePlatformAdapter):
             )
 
         stream = body.get("stream", False)
+        execution_mode = None
+        execution_session = None
+        skill_refs: list[str] = []
+        if _use_mente_executor(stream):
+            execution_mode, execution_session, continuity_error = _parse_mente_execution_continuity(body)
+            if continuity_error is not None:
+                return web.json_response(_openai_error(continuity_error), status=400)
+            skill_refs, skill_refs_error = _parse_mente_skill_refs(body)
+            if skill_refs_error is not None:
+                return web.json_response(_openai_error(skill_refs_error), status=400)
 
         # Extract system message (becomes ephemeral system prompt layered ON TOP of core)
         system_prompt = None
@@ -999,6 +1059,22 @@ class APIServerAdapter(BasePlatformAdapter):
 
         # Non-streaming: run the agent (with optional Idempotency-Key)
         async def _compute_completion():
+            if _use_mente_executor(stream):
+                result = await asyncio.to_thread(
+                    run_api_server_task,
+                    user_message=user_message,
+                    conversation_history=history,
+                    session_id=session_id,
+                    api_mode="chat_completions",
+                    execution_mode=execution_mode,
+                    execution_session=execution_session,
+                    skill_refs=skill_refs,
+                )
+                return result, {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                }
             return await self._run_agent(
                 user_message=user_message,
                 conversation_history=history,
@@ -1027,9 +1103,12 @@ class APIServerAdapter(BasePlatformAdapter):
                     status=500,
                 )
 
-        final_response = result.get("final_response", "")
-        if not final_response:
-            final_response = result.get("error", "(No response generated)")
+        if _use_mente_executor(stream):
+            final_response = result.summary or "(No response generated)"
+        else:
+            final_response = result.get("final_response", "")
+            if not final_response:
+                final_response = result.get("error", "(No response generated)")
 
         response_data = {
             "id": completion_id,
@@ -1052,6 +1131,10 @@ class APIServerAdapter(BasePlatformAdapter):
                 "total_tokens": usage.get("total_tokens", 0),
             },
         }
+        if _use_mente_executor(stream):
+            execution_session_handoff = extract_execution_session_handoff(result)
+            if execution_session_handoff is not None:
+                response_data["execution_session"] = execution_session_handoff
 
         return web.json_response(response_data, headers={"X-Hermes-Session-Id": session_id})
 
@@ -1710,6 +1793,17 @@ class APIServerAdapter(BasePlatformAdapter):
         previous_response_id = body.get("previous_response_id")
         conversation = body.get("conversation")
         store = body.get("store", True)
+        stream = bool(body.get("stream", False))
+        execution_mode = None
+        execution_session = None
+        skill_refs: list[str] = []
+        if _use_mente_executor(stream):
+            execution_mode, execution_session, continuity_error = _parse_mente_execution_continuity(body)
+            if continuity_error is not None:
+                return web.json_response(_openai_error(continuity_error), status=400)
+            skill_refs, skill_refs_error = _parse_mente_skill_refs(body)
+            if skill_refs_error is not None:
+                return web.json_response(_openai_error(skill_refs_error), status=400)
 
         # conversation and previous_response_id are mutually exclusive
         if conversation and previous_response_id:
@@ -1792,7 +1886,6 @@ class APIServerAdapter(BasePlatformAdapter):
         # groups the entire conversation under one session entry.
         session_id = stored_session_id or str(uuid.uuid4())
 
-        stream = bool(body.get("stream", False))
         if stream:
             # Streaming branch — emit OpenAI Responses SSE events as the
             # agent runs so frontends can render text deltas and tool
@@ -1867,6 +1960,22 @@ class APIServerAdapter(BasePlatformAdapter):
             )
 
         async def _compute_response():
+            if _use_mente_executor(stream):
+                result = await asyncio.to_thread(
+                    run_api_server_task,
+                    user_message=user_message,
+                    conversation_history=conversation_history,
+                    session_id=session_id,
+                    api_mode="responses",
+                    execution_mode=execution_mode,
+                    execution_session=execution_session,
+                    skill_refs=skill_refs,
+                )
+                return result, {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                }
             return await self._run_agent(
                 user_message=user_message,
                 conversation_history=conversation_history,
@@ -1898,9 +2007,12 @@ class APIServerAdapter(BasePlatformAdapter):
                     status=500,
                 )
 
-        final_response = result.get("final_response", "")
-        if not final_response:
-            final_response = result.get("error", "(No response generated)")
+        if _use_mente_executor(stream):
+            final_response = result.summary or "(No response generated)"
+        else:
+            final_response = result.get("final_response", "")
+            if not final_response:
+                final_response = result.get("error", "(No response generated)")
 
         response_id = f"resp_{uuid.uuid4().hex[:28]}"
         created_at = int(time.time())
@@ -1910,14 +2022,31 @@ class APIServerAdapter(BasePlatformAdapter):
         full_history = list(conversation_history)
         full_history.append({"role": "user", "content": user_message})
         # Add agent's internal messages if available
-        agent_messages = result.get("messages", [])
-        if agent_messages:
-            full_history.extend(agent_messages)
-        else:
+        if _use_mente_executor(stream):
             full_history.append({"role": "assistant", "content": final_response})
+        else:
+            agent_messages = result.get("messages", [])
+            if agent_messages:
+                full_history.extend(agent_messages)
+            else:
+                full_history.append({"role": "assistant", "content": final_response})
 
         # Build output items (includes tool calls + final message)
-        output_items = self._extract_output_items(result)
+        if _use_mente_executor(stream):
+            output_items = [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": final_response,
+                        }
+                    ],
+                }
+            ]
+        else:
+            output_items = self._extract_output_items(result)
 
         response_data = {
             "id": response_id,
@@ -1932,6 +2061,10 @@ class APIServerAdapter(BasePlatformAdapter):
                 "total_tokens": usage.get("total_tokens", 0),
             },
         }
+        if _use_mente_executor(stream):
+            execution_session_handoff = extract_execution_session_handoff(result)
+            if execution_session_handoff is not None:
+                response_data["execution_session"] = execution_session_handoff
 
         # Store the complete response object for future chaining / GET retrieval
         if store:
@@ -2030,8 +2163,15 @@ class APIServerAdapter(BasePlatformAdapter):
         auth_err = self._check_auth(request)
         if auth_err:
             return auth_err
+        raw_params = dict(request.query)
+        raw_source = (raw_params.get("source") or "").strip().lower()
         try:
-            query = parse_http_task_query(request.query)
+            query_params = raw_params
+            if raw_source == "api_server":
+                query_params = {key: value for key, value in raw_params.items() if key != "source"}
+            query = parse_http_task_query(query_params)
+            if raw_source == "api_server":
+                query["source"] = "api_server"
         except TaskQueryError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -2053,8 +2193,15 @@ class APIServerAdapter(BasePlatformAdapter):
         auth_err = self._check_auth(request)
         if auth_err:
             return auth_err
+        raw_params = dict(request.query)
+        raw_source = (raw_params.get("source") or "").strip().lower()
         try:
-            query = parse_http_memory_query(request.query)
+            query_params = raw_params
+            if raw_source == "api_server":
+                query_params = {key: value for key, value in raw_params.items() if key != "source"}
+            query = parse_http_memory_query(query_params)
+            if raw_source == "api_server":
+                query["source"] = "api_server"
         except MemoryQueryError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 

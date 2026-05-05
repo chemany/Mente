@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from mente.memory.policy import MemoryPolicy
 from mente.context_builder.builder import ContextBuilder
 from mente.executors.base import Executor
 from mente.memory.repository import InMemoryMemoryRepository
@@ -99,4 +100,48 @@ def test_compare_memory_replay_reports_injected_memory():
 
     assert comparison["baseline"]["memory_fact_count"] == 0
     assert comparison["memory_enabled"]["memory_fact_count"] == 1
+    assert comparison["baseline"]["prompt_fingerprint"] != comparison["memory_enabled"]["prompt_fingerprint"]
+    assert comparison["memory_enabled"]["policy_id"] == "gateway:conversation"
+    assert comparison["memory_enabled"]["prompt_char_count"] >= comparison["baseline"]["prompt_char_count"]
     assert comparison["memory_enabled"]["selected_memory_ids"] == ["mem_1"]
+
+
+def test_compare_memory_replay_accepts_policy_override():
+    fixture = {
+        "seed_memories": [
+            {
+                "memory_id": "mem_1",
+                "session_id": "session_1",
+                "task_id": "task_old",
+                "task_type": "conversation",
+                "source": "gateway",
+                "scope": "session",
+                "fact": "User prefers concise replies.",
+            }
+        ],
+        "task": {
+            "task_id": "task_1",
+            "session_id": "session_1",
+            "task_type": "conversation",
+            "objective": "Reply",
+            "user_request": "Reply",
+            "metadata": {"source": "gateway"},
+        },
+    }
+    override = MemoryPolicy(
+        policy_id="tight_gateway",
+        allowed_injection_scopes=["session"],
+        max_injected_memories=1,
+        max_chars_per_injected_fact=40,
+        max_total_injected_chars=80,
+        max_promoted_memories=1,
+        max_chars_per_promoted_fact=40,
+    )
+
+    comparison = compare_memory_replay(
+        fixture,
+        executor_factory=_RecordingExecutor,
+        policy_override=override,
+    )
+
+    assert comparison["memory_enabled"]["policy_id"] == "tight_gateway"

@@ -1,4 +1,4 @@
-"""Shared constants for Hermes Agent.
+"""Shared constants for Mente.
 
 Import-safe module with no dependencies — can be imported from anywhere
 without risk of circular imports.
@@ -9,17 +9,42 @@ from pathlib import Path
 
 
 def get_hermes_home() -> Path:
-    """Return the Hermes home directory (default: ~/.hermes).
+    """Return the primary home directory (default: ~/.mente).
 
-    Reads HERMES_HOME env var, falls back to ~/.hermes.
+    Reads MENTE_HOME first for the new product root, then HERMES_HOME for
+    backward compatibility, and falls back to ~/.hermes.
     This is the single source of truth — all other copies should import this.
     """
+    mente_val = os.environ.get("MENTE_HOME", "").strip()
+    if mente_val:
+        return Path(mente_val).expanduser()
     val = os.environ.get("HERMES_HOME", "").strip()
-    return Path(val) if val else Path.home() / ".hermes"
+    return Path(val).expanduser() if val else Path.home() / ".hermes"
+
+
+def get_mente_home() -> Path:
+    """Return the Mente home directory (default: ~/.mente).
+
+    Mente now owns its own independent root.
+    """
+    configured = os.environ.get("MENTE_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    return Path.home() / ".mente"
+
+
+def display_mente_home() -> str:
+    """Return a user-friendly display string for the current MENTE_HOME."""
+    home = get_mente_home()
+    try:
+        return "~/" + str(home.relative_to(Path.home()))
+    except ValueError:
+        return str(home)
 
 
 def get_default_hermes_root() -> Path:
-    """Return the root Hermes directory for profile-level operations.
+    """Return the root directory for profile-level operations.
 
     In standard deployments this is ``~/.hermes``.
 
@@ -72,7 +97,7 @@ def get_optional_skills_dir(default: Path | None = None) -> Path:
 
 
 def get_hermes_dir(new_subpath: str, old_name: str) -> Path:
-    """Resolve a Hermes subdirectory with backward compatibility.
+    """Resolve a subdirectory with backward compatibility.
 
     New installs get the consolidated layout (e.g. ``cache/images``).
     Existing installs that already have the old path (e.g. ``image_cache``)
@@ -117,7 +142,7 @@ def get_subprocess_home() -> str | None:
 
     When ``{HERMES_HOME}/home/`` exists on disk, subprocesses should use it
     as ``HOME`` so system tools (git, ssh, gh, npm …) write their configs
-    inside the Hermes data directory instead of the OS-level ``/root`` or
+    inside the Mente data directory instead of the OS-level ``/root`` or
     ``~/``.  This provides:
 
     * **Docker persistence** — tool configs land inside the persistent volume.
@@ -129,10 +154,8 @@ def get_subprocess_home() -> str | None:
     Activation is directory-based: if the ``home/`` subdirectory doesn't
     exist, returns ``None`` and behavior is unchanged.
     """
-    hermes_home = os.getenv("HERMES_HOME")
-    if not hermes_home:
-        return None
-    profile_home = os.path.join(hermes_home, "home")
+    effective_home = get_hermes_home()
+    profile_home = os.path.join(str(effective_home), "home")
     if os.path.isdir(profile_home):
         return profile_home
     return None
@@ -234,8 +257,8 @@ def get_config_path() -> Path:
 
 
 def get_skills_dir() -> Path:
-    """Return the path to the skills directory under HERMES_HOME."""
-    return get_hermes_home() / "skills"
+    """Return the path to the skills directory under MENTE_HOME."""
+    return get_mente_home() / "skills"
 
 
 

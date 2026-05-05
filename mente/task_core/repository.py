@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from hermes_constants import get_hermes_home
+from hermes_constants import get_mente_home
 from mente.task_core.models import Task
 
 MENTE_TASKS_SCHEMA_SQL = """
@@ -127,7 +127,7 @@ def get_default_task_db_path() -> Path:
     override = os.getenv("MENTE_TASK_DB_PATH", "").strip()
     if override:
         return Path(override).expanduser()
-    return get_hermes_home() / "state.db"
+    return get_mente_home() / "state.db"
 
 
 class SQLiteTaskRepository:

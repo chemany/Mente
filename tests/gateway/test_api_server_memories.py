@@ -11,6 +11,8 @@ from gateway.platforms.api_server import (
     security_headers_middleware,
 )
 from mente.memory.models import MemoryRecord
+from mente.memory.repository import SQLiteMemoryRepository
+from mente.task_core.models import ExecutionResult
 
 
 def _make_adapter(api_key: str = "") -> APIServerAdapter:
@@ -24,6 +26,8 @@ def _create_app(adapter: APIServerAdapter) -> web.Application:
     mws = [mw for mw in (cors_middleware, security_headers_middleware) if mw is not None]
     app = web.Application(middlewares=mws)
     app["api_server_adapter"] = adapter
+    app.router.add_post("/v1/chat/completions", adapter._handle_chat_completions)
+    app.router.add_get("/api/debug/tasks", adapter._handle_debug_tasks)
     app.router.add_get("/api/debug/memories", adapter._handle_debug_memories)
     return app
 
@@ -33,7 +37,170 @@ def adapter():
     return _make_adapter()
 
 
+@pytest.fixture
+def auth_adapter():
+    return _make_adapter(api_key="sk-secret")
+
+
 class TestDebugMemoriesAPI:
+    @pytest.mark.asyncio
+    async def test_debug_memories_observes_api_server_bridge_memories(self, adapter, monkeypatch, tmp_path):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        def _fake_execute(self, request):
+            from mente.task_core.models import ExecutionResult
+
+            return ExecutionResult(
+                status="success",
+                summary="via mente",
+                memory_candidates=["User prefers concise replies."],
+            )
+
+        monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            chat_resp = await cli.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "Remember this preference"}],
+                },
+            )
+
+            assert chat_resp.status == 200
+
+            resp = await cli.get(
+                "/api/debug/memories?scope=recent&source=api_server&task_type=conversation&limit=1"
+            )
+
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["count"] == 1
+            assert data["memories"][0]["source"] == "api_server"
+            assert data["memories"][0]["fact"] == "User prefers concise replies."
+
+    @pytest.mark.asyncio
+    async def test_debug_memories_lists_api_server_session_memories(self, auth_adapter, monkeypatch, tmp_path):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        def _fake_execute(self, request):
+            from mente.task_core.models import ExecutionResult
+
+            if request.user_request == "Remember this preference":
+                return ExecutionResult(
+                    status="success",
+                    summary="first",
+                    memory_candidates=["User prefers concise replies."],
+                )
+            return ExecutionResult(status="success", summary="second")
+
+        monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+        app = _create_app(auth_adapter)
+        async with TestClient(TestServer(app)) as cli:
+            first_resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "api-session-1",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "Remember this preference"}],
+                },
+            )
+            second_resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "api-session-1",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "What do I prefer?"}],
+                },
+            )
+
+            assert first_resp.status == 200
+            assert second_resp.status == 200
+
+            resp = await cli.get(
+                "/api/debug/memories?scope=session&session_id=api-session-1"
+                "&source=api_server&task_type=conversation&memory_scope=session&limit=5",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["count"] == 1
+            assert data["memories"][0]["source"] == "api_server"
+            assert data["memories"][0]["scope"] == "session"
+            assert data["memories"][0]["session_id"] == "api-session-1"
+            assert data["memories"][0]["fact"] == "User prefers concise replies."
+
+    @pytest.mark.asyncio
+    async def test_debug_memories_does_not_promote_fabricated_prior_preferences_for_empty_api_session(
+        self, auth_adapter, monkeypatch, tmp_path
+    ):
+        task_db_path = tmp_path / "tasks.db"
+        memory_db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "mente")
+        monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        def _fake_execute(self, request):
+            return ExecutionResult(
+                status="success",
+                summary="You mentioned earlier that you prefer terse replies.",
+                memory_candidates=["User previously said they prefer terse replies."],
+            )
+
+        monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+        app = _create_app(auth_adapter)
+        async with TestClient(TestServer(app)) as cli:
+            chat_resp = await cli.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Id": "api-isolation-1",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": "What preferences did I mention earlier?"}],
+                },
+            )
+            tasks_resp = await cli.get(
+                "/api/debug/tasks?scope=session&session_id=api-isolation-1"
+                "&source=api_server&limit=1",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            memories_resp = await cli.get(
+                "/api/debug/memories?scope=session&session_id=api-isolation-1"
+                "&source=api_server&task_type=conversation&memory_scope=session&limit=5",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            task_data = await tasks_resp.json()
+            memory_data = await memories_resp.json()
+
+        assert chat_resp.status == 200
+        assert tasks_resp.status == 200
+        assert memories_resp.status == 200
+
+        assert task_data["count"] == 1
+        assert task_data["tasks"][0]["metadata"]["memory_context"]["selected"] == []
+        assert memory_data["count"] == 0
+        assert memory_data["memories"] == []
+
     @pytest.mark.asyncio
     async def test_debug_memories_returns_recent_filtered_memories(self, adapter, monkeypatch):
         class _FakeRepo:
@@ -42,8 +209,18 @@ class TestDebugMemoriesAPI:
                 self.recent_requests = []
                 self.session_requests = []
 
-            def list_recent(self, limit=20, offset=0, source=None, task_type=None, memory_scope=None):
-                self.recent_requests.append((limit, offset, source, task_type, memory_scope))
+            def list_recent(
+                self,
+                limit=20,
+                offset=0,
+                source=None,
+                task_type=None,
+                memory_scope=None,
+                include_inactive=False,
+            ):
+                self.recent_requests.append(
+                    (limit, offset, source, task_type, memory_scope, include_inactive)
+                )
                 return [
                     MemoryRecord(
                         memory_id="mem_001",
@@ -58,8 +235,19 @@ class TestDebugMemoriesAPI:
                     )
                 ]
 
-            def list_by_session(self, session_id, limit=20, offset=0, source=None, task_type=None, memory_scope=None):
-                self.session_requests.append((session_id, limit, offset, source, task_type, memory_scope))
+            def list_by_session(
+                self,
+                session_id,
+                limit=20,
+                offset=0,
+                source=None,
+                task_type=None,
+                memory_scope=None,
+                include_inactive=False,
+            ):
+                self.session_requests.append(
+                    (session_id, limit, offset, source, task_type, memory_scope, include_inactive)
+                )
                 return []
 
             def close(self):
@@ -86,6 +274,7 @@ class TestDebugMemoriesAPI:
                 "source": "gateway",
                 "task_type": "conversation",
                 "memory_scope": "session",
+                "include_superseded": False,
                 "limit": 1,
                 "offset": 0,
             }
@@ -100,6 +289,114 @@ class TestDebugMemoriesAPI:
             }
             assert data["memories"][0]["memory_id"] == "mem_001"
             assert data["memories"][0]["fact"] == "User prefers concise replies."
-            assert fake_repo.recent_requests == [(2, 0, "gateway", "conversation", "session")]
+            assert fake_repo.recent_requests == [(2, 0, "gateway", "conversation", "session", False)]
             assert fake_repo.session_requests == []
             assert fake_repo.closed is True
+
+    @pytest.mark.asyncio
+    async def test_debug_memories_defaults_to_active_rows_only(self, auth_adapter, monkeypatch, tmp_path):
+        memory_db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        repository = SQLiteMemoryRepository(db_path=memory_db_path)
+        repository.save(
+            MemoryRecord(
+                memory_id="mem_old",
+                session_id="api-session-1",
+                task_id="task-old",
+                task_type="conversation",
+                source="api_server",
+                scope="session",
+                fact="我喜欢英文回答",
+                fact_key="fact-old",
+                slot_key="preference:response_language",
+                active=False,
+                superseded_by_memory_id="mem_new",
+            )
+        )
+        repository.save(
+            MemoryRecord(
+                memory_id="mem_new",
+                session_id="api-session-1",
+                task_id="task-new",
+                task_type="conversation",
+                source="api_server",
+                scope="session",
+                fact="我更喜欢中文回答",
+                fact_key="fact-new",
+                slot_key="preference:response_language",
+                active=True,
+            )
+        )
+        repository.close()
+
+        app = _create_app(auth_adapter)
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.get(
+                "/api/debug/memories?scope=session&session_id=api-session-1"
+                "&source=api_server&task_type=conversation&memory_scope=session&limit=5",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["count"] == 1
+            assert data["memories"][0]["fact"] == "我更喜欢中文回答"
+            assert data["memories"][0]["active"] is True
+            assert data["memories"][0]["slot_key"] == "preference:response_language"
+            assert data["memories"][0]["superseded_by_memory_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_debug_memories_include_superseded_flag_exposes_inactive_rows(
+        self, auth_adapter, monkeypatch, tmp_path
+    ):
+        memory_db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+        repository = SQLiteMemoryRepository(db_path=memory_db_path)
+        repository.save(
+            MemoryRecord(
+                memory_id="mem_old",
+                session_id="api-session-1",
+                task_id="task-old",
+                task_type="conversation",
+                source="api_server",
+                scope="session",
+                fact="我喜欢英文回答",
+                fact_key="fact-old",
+                slot_key="preference:response_language",
+                active=False,
+                superseded_by_memory_id="mem_new",
+            )
+        )
+        repository.save(
+            MemoryRecord(
+                memory_id="mem_new",
+                session_id="api-session-1",
+                task_id="task-new",
+                task_type="conversation",
+                source="api_server",
+                scope="session",
+                fact="我更喜欢中文回答",
+                fact_key="fact-new",
+                slot_key="preference:response_language",
+                active=True,
+            )
+        )
+        repository.close()
+
+        app = _create_app(auth_adapter)
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.get(
+                "/api/debug/memories?scope=session&session_id=api-session-1"
+                "&source=api_server&task_type=conversation&memory_scope=session&limit=5"
+                "&include_superseded=1",
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["count"] == 2
+            assert [memory["memory_id"] for memory in data["memories"]] == ["mem_new", "mem_old"]
+            assert data["memories"][1]["active"] is False
+            assert data["memories"][1]["superseded_by_memory_id"] == "mem_new"
