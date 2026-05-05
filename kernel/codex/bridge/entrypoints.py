@@ -14,7 +14,11 @@ import subprocess
 import threading
 from typing import TYPE_CHECKING, Any
 
-from hermes_constants import get_mente_home
+from kernel.codex.release.runtime import (
+    RuntimeNotBootstrappedError,
+    expected_vendored_runtime_binary_path,
+    resolve_vendored_runtime_binary,
+)
 from kernel.codex.runtime.launcher import build_exec_command, build_private_runtime_env
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
 
@@ -39,7 +43,7 @@ class CodexSnapshotBridgeSurface:
     adapter_seam: str = "CodexKernelAdapter"
     selected_front_door: str = "vendored_runtime_binary"
     bootstrap_owner: str = "kernel.codex.bridge"
-    runtime_locator_policy: str = "vendored_python_runtime_locator"
+    runtime_locator_policy: str = "mente_release_freeze_manifest"
     requires_sys_path_injection: bool = False
     uses_ambient_codex_discovery: bool = False
     uses_public_codex_binary: bool = False
@@ -74,28 +78,18 @@ def get_codex_handoff_surface() -> CodexSnapshotBridgeSurface:
         rust_exec_entrypoint=upstream_root / "codex-rs/exec/src/main.rs",
         python_sdk_root=upstream_root / "sdk/python/src",
         app_server_root=upstream_root / "sdk/python/src/codex_app_server",
-        runtime_locator_module=upstream_root
-        / "sdk/python-runtime/src/codex_cli_bin/__init__.py",
-        runtime_binary_path=_default_runtime_binary_path(),
+        runtime_locator_module=repo_root / "kernel/codex/release/runtime.py",
+        runtime_binary_path=expected_vendored_runtime_binary_path(repo_root),
     )
-
-
-def _runtime_binary_name() -> str:
-    return "codex.exe" if subprocess.os.name == "nt" else "codex"
-
-
-def _default_runtime_binary_path() -> Path:
-    return get_mente_home() / "codex" / "bin" / _runtime_binary_name()
 
 
 def _resolve_runtime_binary_path(
     *,
-    runtime_config: RuntimeConfig,
     codex_binary_override: str | Path | None = None,
 ) -> Path:
     if codex_binary_override is not None:
         return Path(codex_binary_override).expanduser()
-    return runtime_config.runtime_home / "bin" / _runtime_binary_name()
+    return resolve_vendored_runtime_binary()
 
 
 def build_vendored_command(
@@ -115,7 +109,6 @@ def build_vendored_command(
     """Build the bridge-owned vendored front-door command for one exec call."""
 
     command_path = _resolve_runtime_binary_path(
-        runtime_config=runtime_config,
         codex_binary_override=codex_binary_override,
     )
     command = build_exec_command(
@@ -154,13 +147,13 @@ def invoke_vendored_front_door(
 ) -> CodexBridgeInvocationResult:
     """Invoke the bridge-selected vendored front door for one exec request."""
 
-    resolved_binary_path = _resolve_runtime_binary_path(
-        runtime_config=runtime_config,
-        codex_binary_override=codex_binary_override,
-    )
-    if not resolved_binary_path.is_file():
+    try:
+        resolved_binary_path = _resolve_runtime_binary_path(
+            codex_binary_override=codex_binary_override,
+        )
+    except RuntimeNotBootstrappedError as exc:
         return CodexBridgeInvocationResult(
-            backend_failure=f"runtime_not_bootstrapped:{resolved_binary_path}",
+            backend_failure=f"runtime_not_bootstrapped:{exc}",
         )
 
     command = build_vendored_command(

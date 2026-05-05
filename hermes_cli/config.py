@@ -13,6 +13,7 @@ This module provides:
 """
 
 import copy
+import json
 import logging
 import os
 import platform
@@ -117,6 +118,46 @@ def get_managed_update_command() -> Optional[str]:
 def recommended_update_command() -> str:
     """Return the best update command for the current installation."""
     return get_managed_update_command() or "mente update"
+
+
+RELEASE_INSTALL_MANIFEST_NAME = ".mente-install.json"
+
+
+def get_release_install_manifest_path(project_root: Optional[Path] = None) -> Path:
+    """Return the release-install manifest path for a checkout/install root."""
+    root = Path(project_root) if project_root is not None else Path(__file__).resolve().parents[1]
+    return root / RELEASE_INSTALL_MANIFEST_NAME
+
+
+def default_release_install_policy() -> dict:
+    """Return the default C6 install/bootstrap/update policy contract."""
+    return {
+        "install_mode": "release",
+        "update_policy": "git_tag_release",
+        "runtime_bootstrap_policy": "artifact_manifest_and_runtime_wheel",
+        "developer_setup_path": "./setup-hermes.sh",
+        "one_click_install_policy": "release_pinned",
+    }
+
+
+def load_release_install_manifest(project_root: Optional[Path] = None) -> Optional[dict]:
+    """Load the release-install manifest when the checkout was installed in release mode."""
+    path = get_release_install_manifest_path(project_root)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return {**default_release_install_policy(), **payload}
+
+
+def save_release_install_manifest(payload: dict, project_root: Optional[Path] = None) -> Path:
+    """Write the release-install manifest for release-pinned installs."""
+    path = get_release_install_manifest_path(project_root)
+    data = {**default_release_install_policy(), **payload}
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def format_managed_message(action: str = "modify this Mente installation") -> str:

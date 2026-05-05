@@ -612,3 +612,95 @@ def test_cmd_update_skips_stash_restore_when_reset_fails(monkeypatch, tmp_path, 
 
     out = capsys.readouterr().out
     assert "preserved in stash" in out
+
+
+def test_cmd_update_release_install_updates_by_tag_and_persists_release_ref(monkeypatch, tmp_path):
+    _setup_update_mocks(monkeypatch, tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(hermes_main, "_update_node_dependencies", lambda: None)
+    monkeypatch.setattr(hermes_main, "_build_web_ui", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(hermes_main, "_clear_bytecode_cache", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(hermes_main, "_invalidate_update_cache", lambda: None)
+
+    manifest = {
+        "install_mode": "release",
+        "release_ref": "v2026.4.30",
+    }
+    saved_payloads = []
+    monkeypatch.setattr(hermes_config, "load_release_install_manifest", lambda *_args, **_kwargs: manifest.copy())
+    monkeypatch.setattr(hermes_config, "save_release_install_manifest", lambda payload, *_args, **_kwargs: saved_payloads.append(payload.copy()))
+
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        if cmd == ["git", "fetch", "origin", "--tags"]:
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return SimpleNamespace(stdout="HEAD\n", stderr="", returncode=0)
+        if cmd == ["git", "describe", "--tags", "--exact-match"]:
+            return SimpleNamespace(stdout="v2026.4.30\n", stderr="", returncode=0)
+        if cmd == ["git", "tag", "--sort=-creatordate"]:
+            return SimpleNamespace(stdout="v2026.5.1\nv2026.4.30\n", stderr="", returncode=0)
+        if cmd == ["git", "checkout", "v2026.5.1"]:
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hermes_main.subprocess, "run", fake_run)
+
+    hermes_main.cmd_update(SimpleNamespace())
+
+    assert ["git", "fetch", "origin", "--tags"] in recorded
+    assert ["git", "checkout", "v2026.5.1"] in recorded
+    assert saved_payloads[-1]["release_ref"] == "v2026.5.1"
+    assert not any(cmd[:3] == ["git", "checkout", "main"] for cmd in recorded)
+
+
+def test_cmd_update_release_install_noops_when_already_on_latest_tag(monkeypatch, tmp_path, capsys):
+    _setup_update_mocks(monkeypatch, tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(hermes_main, "_update_node_dependencies", lambda: None)
+    monkeypatch.setattr(hermes_main, "_build_web_ui", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(hermes_main, "_clear_bytecode_cache", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(hermes_main, "_invalidate_update_cache", lambda: None)
+
+    monkeypatch.setattr(hermes_config, "load_release_install_manifest", lambda *_args, **_kwargs: {
+        "install_mode": "release",
+        "release_ref": "v2026.5.1",
+    })
+
+    restore_calls = []
+    monkeypatch.setattr(
+        hermes_main,
+        "_stash_local_changes_if_needed",
+        lambda *a, **kw: "abc123deadbeef",
+    )
+    monkeypatch.setattr(
+        hermes_main,
+        "_restore_stashed_changes",
+        lambda *a, **kw: restore_calls.append(1) or True,
+    )
+
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        if cmd == ["git", "fetch", "origin", "--tags"]:
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return SimpleNamespace(stdout="HEAD\n", stderr="", returncode=0)
+        if cmd == ["git", "describe", "--tags", "--exact-match"]:
+            return SimpleNamespace(stdout="v2026.5.1\n", stderr="", returncode=0)
+        if cmd == ["git", "tag", "--sort=-creatordate"]:
+            return SimpleNamespace(stdout="v2026.5.1\nv2026.4.30\n", stderr="", returncode=0)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hermes_main.subprocess, "run", fake_run)
+
+    hermes_main.cmd_update(SimpleNamespace())
+
+    assert len(restore_calls) == 1
+    assert not any(cmd[:2] == ["git", "checkout"] for cmd in recorded if len(cmd) >= 2)
+    out = capsys.readouterr().out
+    assert "release-pinned install detected" in out.lower()
+    assert "already up to date" in out.lower()

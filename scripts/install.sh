@@ -9,7 +9,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/NousResearch/mente-agent/main/scripts/install.sh | bash
 #
 # Or with options:
-#   curl -fsSL ... | bash -s -- --no-venv --skip-setup
+#   curl -fsSL ... | bash -s -- --release latest --no-venv --skip-setup
 #
 # ============================================================================
 
@@ -52,7 +52,12 @@ ROOT_FHS_LAYOUT=false
 # Options
 USE_VENV=true
 RUN_SETUP=true
+INSTALL_MODE="release"
+RELEASE_REF="${HERMES_RELEASE_VERSION:-latest}"
 BRANCH="main"
+RUNTIME_ARTIFACT_MANIFEST=""
+RUNTIME_WHEEL=""
+CURRENT_RELEASE_REF=""
 
 # Detect non-interactive mode (e.g. curl | bash)
 # When stdin is not a terminal, read -p will fail with EOF,
@@ -74,8 +79,22 @@ while [[ $# -gt 0 ]]; do
             RUN_SETUP=false
             shift
             ;;
+        --release)
+            INSTALL_MODE="release"
+            RELEASE_REF="$2"
+            shift 2
+            ;;
         --branch)
+            INSTALL_MODE="source"
             BRANCH="$2"
+            shift 2
+            ;;
+        --runtime-artifact-manifest)
+            RUNTIME_ARTIFACT_MANIFEST="$2"
+            shift 2
+            ;;
+        --runtime-wheel)
+            RUNTIME_WHEEL="$2"
             shift 2
             ;;
         --dir)
@@ -95,13 +114,18 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --no-venv      Don't create virtual environment"
             echo "  --skip-setup   Skip interactive setup wizard"
-            echo "  --branch NAME  Git branch to install (default: main)"
+            echo "  --release TAG  Release tag to install (default: latest)"
+            echo "  --branch NAME  Developer/source checkout branch to install (default: main)"
+            echo "  --runtime-artifact-manifest PATH  Local/offline vendored runtime artifact manifest"
+            echo "  --runtime-wheel PATH  Local/offline vendored runtime wheel to bootstrap"
             echo "  --dir PATH     Installation directory"
             echo "                   default (non-root):  ~/.mente/mente-agent"
             echo "                   default (root, Linux): /usr/local/lib/mente-agent"
             echo "  -h, --help     Show this help"
             echo ""
             echo "Notes:"
+            echo "  One-click end-user installs are release-pinned by default."
+            echo "  ./setup-hermes.sh is the developer/source-checkout path."
             echo "  When running as root on Linux, Mente installs the code under"
             echo "  /usr/local/lib/mente-agent and links the command into"
             echo "  /usr/local/bin/mente."
@@ -794,6 +818,59 @@ show_manual_install_hint() {
 # Installation
 # ============================================================================
 
+resolve_target_release_ref() {
+    local requested="${1:-latest}"
+    if [ "$requested" != "latest" ]; then
+        printf '%s\n' "$requested"
+        return 0
+    fi
+
+    local latest_tag
+    latest_tag="$(git tag --sort=-creatordate | head -n 1)"
+    if [ -z "$latest_tag" ]; then
+        return 1
+    fi
+    printf '%s\n' "$latest_tag"
+}
+
+write_install_manifest() {
+    cat > "$INSTALL_DIR/.mente-install.json" <<EOF
+{
+  "install_mode": "$INSTALL_MODE",
+  "release_ref": "${CURRENT_RELEASE_REF:-}",
+  "source_branch": "${BRANCH:-}",
+  "runtime_artifact_manifest": "${RUNTIME_ARTIFACT_MANIFEST:-}",
+  "runtime_wheel": "${RUNTIME_WHEEL:-}",
+  "update_policy": "$( [ "$INSTALL_MODE" = "release" ] && printf 'git_tag_release' || printf 'git_branch_source' )",
+  "runtime_bootstrap_policy": "artifact_manifest_and_runtime_wheel",
+  "developer_setup_path": "./setup-hermes.sh",
+  "one_click_install_policy": "$( [ "$INSTALL_MODE" = "release" ] && printf 'release_pinned' || printf 'source_checkout' )"
+}
+EOF
+}
+
+bootstrap_vendored_runtime() {
+    if [ -z "$RUNTIME_WHEEL" ]; then
+        if [ -n "$RUNTIME_ARTIFACT_MANIFEST" ]; then
+            log_info "Runtime artifact manifest recorded: $RUNTIME_ARTIFACT_MANIFEST"
+        fi
+        return 0
+    fi
+
+    log_info "Bootstrapping vendored Codex runtime wheel..."
+    if [ "$DISTRO" = "termux" ]; then
+        if [ "$USE_VENV" = true ]; then
+            "$INSTALL_DIR/venv/bin/python" -m pip install "$RUNTIME_WHEEL"
+        else
+            "$PYTHON_PATH" -m pip install "$RUNTIME_WHEEL"
+        fi
+    else
+        export VIRTUAL_ENV="$INSTALL_DIR/venv"
+        $UV_CMD pip install "$RUNTIME_WHEEL"
+    fi
+    log_success "Vendored Codex runtime wheel installed"
+}
+
 clone_repo() {
     log_info "Installing to $INSTALL_DIR..."
 
@@ -811,9 +888,18 @@ clone_repo() {
                 autostash_ref="$(git rev-parse --verify refs/stash)"
             fi
 
-            git fetch origin
-            git checkout "$BRANCH"
-            git pull --ff-only origin "$BRANCH"
+            if [ "$INSTALL_MODE" = "release" ]; then
+                git fetch origin --tags
+                CURRENT_RELEASE_REF="$(resolve_target_release_ref "$RELEASE_REF")" || {
+                    log_error "Could not resolve a release tag for install/update"
+                    exit 1
+                }
+                git checkout "$CURRENT_RELEASE_REF"
+            else
+                git fetch origin
+                git checkout "$BRANCH"
+                git pull --ff-only origin "$BRANCH"
+            fi
 
             if [ -n "$autostash_ref" ]; then
                 local restore_now="yes"
@@ -856,13 +942,17 @@ clone_repo() {
         # GIT_SSH_COMMAND disables interactive prompts and sets a short timeout
         # so SSH fails fast instead of hanging when no key is configured.
         log_info "Trying SSH clone..."
+        local clone_args=()
+        if [ "$INSTALL_MODE" = "source" ]; then
+            clone_args=(--branch "$BRANCH")
+        fi
         if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
-           git clone --branch "$BRANCH" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
+           git clone "${clone_args[@]}" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
             log_success "Cloned via SSH"
         else
             rm -rf "$INSTALL_DIR" 2>/dev/null  # Clean up partial SSH clone
             log_info "SSH failed, trying HTTPS..."
-            if git clone --branch "$BRANCH" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
+            if git clone "${clone_args[@]}" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
                 log_success "Cloned via HTTPS"
             else
                 log_error "Failed to clone repository"
@@ -872,6 +962,20 @@ clone_repo() {
     fi
 
     cd "$INSTALL_DIR"
+
+    if [ "$INSTALL_MODE" = "release" ]; then
+        git fetch origin --tags >/dev/null 2>&1 || true
+        CURRENT_RELEASE_REF="$(resolve_target_release_ref "$RELEASE_REF")" || {
+            log_error "Could not resolve a release tag after clone"
+            exit 1
+        }
+        git checkout "$CURRENT_RELEASE_REF" >/dev/null 2>&1 || {
+            log_error "Failed to check out release tag $CURRENT_RELEASE_REF"
+            exit 1
+        }
+    fi
+
+    write_install_manifest
 
     log_success "Repository ready"
 }
@@ -1543,6 +1647,7 @@ main() {
     clone_repo
     setup_venv
     install_deps
+    bootstrap_vendored_runtime
     install_node_deps
     setup_path
     copy_config_templates

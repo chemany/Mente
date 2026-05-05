@@ -31,7 +31,7 @@
           "memory_fact_count": 1,
           "policy_id": "gateway:conversation",
           "max_prompt_budget_char_count": 40,
-          "max_prompt_char_count": 400
+          "max_prompt_char_count": 550
         },
         "balanced_gateway": {
           "selected_memory_ids": ["fixture_mem_1", "fixture_mem_2"],

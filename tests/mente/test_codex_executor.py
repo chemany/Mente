@@ -1045,8 +1045,13 @@ def test_codex_executor_build_command_delegates_to_vendored_launcher(monkeypatch
 
 
 
-def test_codex_executor_default_command_uses_vendored_bridge_front_door():
+def test_codex_executor_default_command_uses_vendored_bridge_front_door(monkeypatch, tmp_path):
     executor = CodexExecutor()
+    fake_runtime = tmp_path / "runtime" / "codex"
+    fake_runtime.parent.mkdir(parents=True)
+    fake_runtime.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_runtime.chmod(0o755)
+    monkeypatch.setenv("MENTE_CODEX_RUNTIME_BIN", str(fake_runtime))
     request = ExecutionRequest(
         task_id="task_1",
         session_id="session_1",
@@ -1058,7 +1063,7 @@ def test_codex_executor_default_command_uses_vendored_bridge_front_door():
 
     cmd = executor.build_command(request, output_schema="schema.json")
 
-    assert cmd[0].endswith("/codex/bin/codex")
+    assert cmd[0] == str(fake_runtime)
     assert cmd[0] != "codex"
 
 

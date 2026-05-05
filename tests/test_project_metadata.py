@@ -33,6 +33,12 @@ def test_project_scripts_expose_mente_as_primary_command():
     assert "hermes-acp" not in scripts
 
 
+def _load_pyproject():
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with pyproject_path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
 def test_matrix_extra_linux_only_in_all():
     """mautrix[encryption] depends on python-olm which is upstream-broken on
     modern macOS (archived libolm, C++ errors with Clang 21+).  The [matrix]
@@ -74,3 +80,16 @@ def test_feishu_extra_includes_qrcode_for_qr_login():
 
     feishu_extra = optional_dependencies["feishu"]
     assert any(dep.startswith("qrcode") for dep in feishu_extra)
+
+
+def test_c6_packaging_metadata_includes_kernel_slice():
+    pyproject = _load_pyproject()
+    include = pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
+
+    assert "kernel" in include
+    assert "kernel.*" in include
+
+    manifest_path = Path(__file__).resolve().parents[1] / "MANIFEST.in"
+    manifest_content = manifest_path.read_text(encoding="utf-8")
+
+    assert "graft kernel" in manifest_content

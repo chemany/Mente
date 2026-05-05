@@ -84,3 +84,36 @@ def test_bridge_manifest_declares_boundary_and_no_cutover_yet():
 
     for statement in required_statements:
         assert statement in content
+
+
+def test_c6_patch_policy_docs_and_patch_root_exist():
+    repo_root = Path(__file__).resolve().parents[2]
+    patch_root = repo_root / "kernel/codex/patches"
+    readme_path = patch_root / "README.md"
+    policy_path = repo_root / "docs/plans/2026-04-30-mente-codex-patch-policy.md"
+
+    assert patch_root.exists()
+    assert readme_path.exists()
+    assert policy_path.exists()
+
+    readme = readme_path.read_text(encoding="utf-8").lower()
+    policy = policy_path.read_text(encoding="utf-8").lower()
+
+    for statement in [
+        "default landing zone",
+        "do **not** edit `kernel/codex/upstream/` by default",
+        "product logic",
+    ]:
+        assert statement in readme
+
+    for statement in [
+        "same-snapshot mente patch",
+        "new upstream snapshot upgrade",
+        "kernel/codex/bridge/",
+        "kernel/codex/release/",
+        "kernel/codex/runtime/",
+        "kernel/codex/patches/",
+        "no edits inside the vendored upstream tree",
+        "public `codex` fallback remains disabled",
+    ]:
+        assert statement in policy

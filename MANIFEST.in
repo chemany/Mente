@@ -1,4 +1,6 @@
 graft skills
 graft optional-skills
+graft kernel
+graft docs/plans
 global-exclude __pycache__
 global-exclude *.py[cod]

@@ -238,8 +238,10 @@ def run_doctor(args):
         try:
             __import__(module)
             check_ok(name, "(optional)")
-        except ImportError:
-            check_warn(name, "(optional, not installed)")
+        except Exception:
+            # Optional integrations should never cause `hermes doctor` itself
+            # to fail if their import-time side effects explode on this host.
+            check_warn(name, "(optional, unavailable on this platform/runtime)")
     
     # =========================================================================
     # Check: Configuration files
