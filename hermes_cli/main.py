@@ -7661,7 +7661,7 @@ def cmd_dashboard(args):
 
     from hermes_cli.web_server import start_server
 
-    embedded_chat = args.tui or os.environ.get("HERMES_DASHBOARD_TUI") == "1"
+    embedded_chat = _resolve_dashboard_embedded_chat_enabled(args)
     start_server(
         host=args.host,
         port=args.port,
@@ -7669,6 +7669,32 @@ def cmd_dashboard(args):
         allow_public=getattr(args, "insecure", False),
         embedded_chat=embedded_chat,
     )
+
+
+def _resolve_dashboard_embedded_chat_enabled(args, config: Optional[dict] = None) -> bool:
+    """Resolve whether the dashboard should expose the embedded TUI chat tab.
+
+    Priority: explicit CLI flag, environment override, config.yaml, default.
+    """
+    from utils import is_truthy_value
+
+    cli_value = getattr(args, "tui", None)
+    if cli_value is not None:
+        return bool(cli_value)
+
+    env_value = os.environ.get("HERMES_DASHBOARD_TUI")
+    if env_value is not None:
+        return is_truthy_value(env_value, default=False)
+
+    if config is None:
+        from hermes_cli.config import load_config
+
+        config = load_config()
+
+    dashboard = config.get("dashboard") if isinstance(config, dict) else None
+    if not isinstance(dashboard, dict):
+        return True
+    return is_truthy_value(dashboard.get("embedded_chat"), default=True)
 
 
 def cmd_completion(args, parser=None):
@@ -10033,12 +10059,24 @@ Examples:
         action="store_true",
         help="Allow binding to non-localhost (DANGEROUS: exposes API keys on the network)",
     )
-    dashboard_parser.add_argument(
+    dashboard_tui_group = dashboard_parser.add_mutually_exclusive_group()
+    dashboard_tui_group.add_argument(
         "--tui",
+        dest="tui",
         action="store_true",
+        default=None,
         help=(
             "Expose the in-browser Chat tab (embedded `hermes --tui` via PTY/WebSocket). "
-            "Alternatively set HERMES_DASHBOARD_TUI=1."
+            "Overrides dashboard.embedded_chat."
+        ),
+    )
+    dashboard_tui_group.add_argument(
+        "--no-tui",
+        dest="tui",
+        action="store_false",
+        help=(
+            "Hide the in-browser Chat tab. Overrides dashboard.embedded_chat "
+            "and HERMES_DASHBOARD_TUI."
         ),
     )
     dashboard_parser.set_defaults(func=cmd_dashboard)

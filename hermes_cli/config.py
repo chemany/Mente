@@ -728,6 +728,7 @@ DEFAULT_CONFIG = {
     # Web dashboard settings
     "dashboard": {
         "theme": "default",  # Dashboard visual theme: "default", "midnight", "ember", "mono", "cyberpunk", "rose"
+        "embedded_chat": True,  # Show the in-browser Chat tab backed by the real TUI
     },
 
     # Privacy settings
