@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from hermes_constants import get_mente_home
-
-MENTE_CODEX_RUNTIME_HOME_ENV = "MENTE_CODEX_RUNTIME_HOME"
+from kernel.codex.home import resolve_private_codex_home
 
 
 def resolve_runtime_home() -> Path:
     """Resolve the private runtime home used for Mente-backed Codex execution."""
-    configured = os.getenv(MENTE_CODEX_RUNTIME_HOME_ENV, "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    return get_mente_home() / "codex"
+    return resolve_private_codex_home()

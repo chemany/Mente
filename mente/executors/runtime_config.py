@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
-
-from hermes_constants import get_mente_home
+from kernel.codex.config import load_private_codex_config, load_private_model_settings
 from mente.executors.runtime_home import resolve_runtime_home
 
 
@@ -31,18 +27,14 @@ class RuntimeConfig:
 
 def resolve_runtime_config(workspace: str | Path) -> RuntimeConfig:
     """Resolve the merged runtime config from system, profile, and workspace layers."""
-    merged = _deep_merge(
-        {},
-        _load_toml(_resolve_profile_config_path()),
-    )
-    merged = _deep_merge(
+    merged = load_private_codex_config(workspace=workspace)
+    merged, explicit_subprocess_env = _apply_explicit_codex_runtime_settings(merged)
+    merged, inherited_subprocess_env = _apply_mente_model_runtime_fallback(
         merged,
-        _load_toml(_resolve_workspace_config_path(workspace)),
+        load_private_model_settings(),
     )
-    merged, subprocess_env = _apply_mente_model_runtime_fallback(
-        merged,
-        _load_mente_model_settings(),
-    )
+    subprocess_env = dict(inherited_subprocess_env)
+    subprocess_env.update(explicit_subprocess_env)
 
     runtime_config = merged.pop("runtime", {})
     runtime_home = resolve_runtime_home()
@@ -68,66 +60,68 @@ def resolve_runtime_config(workspace: str | Path) -> RuntimeConfig:
     )
 
 
-def _resolve_profile_config_path() -> Path:
-    configured = os.getenv("MENTE_CODEX_CONFIG_PATH", "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    mente_home = get_mente_home()
-    candidate = mente_home / "config.toml"
-    return candidate
+def _apply_explicit_codex_runtime_settings(
+    merged: dict[str, object],
+) -> tuple[dict[str, object], dict[str, str]]:
+    if not merged:
+        return merged, {}
 
+    resolved = dict(merged)
+    subprocess_env: dict[str, str] = {}
 
-def _resolve_workspace_config_path(workspace: str | Path) -> Path:
-    configured = os.getenv("MENTE_CODEX_WORKSPACE_CONFIG_PATH", "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    return Path(workspace).expanduser() / ".mente" / "codex.toml"
+    default_model = resolved.pop("default", None)
+    if isinstance(default_model, str) and default_model.strip() and not isinstance(resolved.get("model"), str):
+        resolved["model"] = default_model.strip()
 
+    provider_label = resolved.pop("provider", None)
+    if not isinstance(provider_label, str) or not provider_label.strip():
+        provider_label = "Mente"
+    else:
+        provider_label = provider_label.strip()
 
-def _load_toml(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-    try:
-        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    return parsed
+    base_url = resolved.pop("base_url", None)
+    if not isinstance(base_url, str) or not base_url.strip():
+        base_url = ""
+    else:
+        base_url = base_url.strip()
 
+    api_key = resolved.pop("api_key", None)
+    if not isinstance(api_key, str) or not api_key.strip():
+        api_key = ""
+    else:
+        api_key = api_key.strip()
 
-def _deep_merge(base: dict[str, object], overlay: dict[str, object]) -> dict[str, object]:
-    merged = dict(base)
-    for key, value in overlay.items():
-        existing = merged.get(key)
-        if isinstance(existing, dict) and isinstance(value, dict):
-            merged[key] = _deep_merge(existing, value)
-        else:
-            merged[key] = value
-    return merged
+    if _has_explicit_codex_provider_config(resolved):
+        return resolved, subprocess_env
 
+    if not any((base_url, api_key)):
+        return resolved, subprocess_env
 
-def _load_mente_model_settings() -> dict[str, str]:
-    config_path = get_mente_home() / "config.yaml"
-    if not config_path.exists():
-        return {}
-    try:
-        parsed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
+    model_providers = resolved.get("model_providers")
+    if not isinstance(model_providers, dict):
+        model_providers = {}
+        resolved["model_providers"] = model_providers
 
-    model = parsed.get("model")
-    if not isinstance(model, dict):
-        return {}
+    provider_config = model_providers.get("mente")
+    if not isinstance(provider_config, dict):
+        provider_config = {}
 
-    settings: dict[str, str] = {}
-    for key in ("default", "model", "provider", "base_url", "api_key"):
-        value = model.get(key)
-        if isinstance(value, str) and value.strip():
-            settings[key] = value.strip()
-    return settings
+    provider_config.setdefault("name", provider_label)
+    if base_url:
+        provider_config.setdefault("base_url", base_url)
+    provider_config.setdefault("wire_api", "responses")
+    provider_config.setdefault("env_key", "MENTE_CODEX_API_KEY")
+    provider_config.setdefault("requires_openai_auth", False)
+
+    model_providers["mente"] = provider_config
+    resolved.setdefault("model_provider", "mente")
+
+    if api_key:
+        subprocess_env["MENTE_CODEX_API_KEY"] = api_key
+    if base_url:
+        subprocess_env["OPENAI_BASE_URL"] = base_url
+
+    return resolved, subprocess_env
 
 
 def _apply_mente_model_runtime_fallback(

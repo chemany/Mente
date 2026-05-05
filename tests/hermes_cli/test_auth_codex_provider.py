@@ -9,20 +9,25 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+import hermes_cli.auth as auth_module
 from hermes_cli.auth import (
     AuthError,
     DEFAULT_CODEX_BASE_URL,
     PROVIDER_REGISTRY,
+    _login_openai_codex,
     _read_codex_tokens,
     _save_codex_tokens,
-    _import_codex_cli_tokens,
-    _login_openai_codex,
     get_codex_auth_status,
     get_provider_auth_state,
     refresh_codex_oauth_pure,
     resolve_codex_runtime_credentials,
     resolve_provider,
 )
+
+
+@pytest.fixture(autouse=True)
+def _prefer_file_local_hermes_home(monkeypatch):
+    monkeypatch.delenv("MENTE_HOME", raising=False)
 
 
 def _setup_hermes_auth(hermes_home: Path, *, access_token: str = "access", refresh_token: str = "refresh"):
@@ -144,23 +149,8 @@ def test_save_codex_tokens_roundtrip(tmp_path, monkeypatch):
     assert data["tokens"]["refresh_token"] == "rt456"
 
 
-def test_import_codex_cli_tokens(tmp_path, monkeypatch):
-    codex_home = tmp_path / "codex-cli"
-    codex_home.mkdir(parents=True, exist_ok=True)
-    (codex_home / "auth.json").write_text(json.dumps({
-        "tokens": {"access_token": "cli-at", "refresh_token": "cli-rt"},
-    }))
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-
-    tokens = _import_codex_cli_tokens()
-    assert tokens is not None
-    assert tokens["access_token"] == "cli-at"
-    assert tokens["refresh_token"] == "cli-rt"
-
-
-def test_import_codex_cli_tokens_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "nonexistent"))
-    assert _import_codex_cli_tokens() is None
+def test_public_codex_cli_import_helper_is_removed():
+    assert not hasattr(auth_module, "_import_codex_cli_tokens")
 
 
 def test_codex_tokens_not_written_to_shared_file(tmp_path, monkeypatch):
@@ -253,6 +243,8 @@ def test_refresh_parses_openai_nested_error_shape_refresh_token_reused(monkeypat
     assert err.relogin_required is True
     # The existing dedicated branch should override the message with actionable guidance.
     assert "already consumed by another client" in str(err)
+    assert "Run `codex` in your terminal" not in str(err)
+    assert "run `hermes auth` to re-authenticate" in str(err)
 
 
 def test_refresh_parses_openai_nested_error_shape_generic_code(monkeypatch):
@@ -323,10 +315,6 @@ def test_login_openai_codex_force_new_login_skips_existing_reuse_prompt(monkeypa
         lambda: {"base_url": DEFAULT_CODEX_BASE_URL},
     )
     monkeypatch.setattr(
-        "hermes_cli.auth._import_codex_cli_tokens",
-        lambda: {"access_token": "cli-at", "refresh_token": "cli-rt"},
-    )
-    monkeypatch.setattr(
         "hermes_cli.auth._codex_device_code_login",
         lambda: {
             "tokens": {"access_token": "fresh-at", "refresh_token": "fresh-rt"},
@@ -351,3 +339,34 @@ def test_login_openai_codex_force_new_login_skips_existing_reuse_prompt(monkeypa
 
     assert called["device_login"] == 1
     assert called["tokens"]["access_token"] == "fresh-at"
+
+
+def test_login_openai_codex_does_not_offer_public_codex_cli_import(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "hermes_cli.auth.resolve_codex_runtime_credentials",
+        lambda: (_ for _ in ()).throw(
+            AuthError("missing", provider="openai-codex", code="codex_auth_missing")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.auth._import_codex_cli_tokens",
+        lambda: {"access_token": "cli-at", "refresh_token": "cli-rt"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.auth._codex_device_code_login",
+        lambda: {
+            "tokens": {"access_token": "fresh-at", "refresh_token": "fresh-rt"},
+            "last_refresh": "2026-04-01T00:00:00Z",
+            "base_url": DEFAULT_CODEX_BASE_URL,
+        },
+    )
+    monkeypatch.setattr("hermes_cli.auth._save_codex_tokens", lambda *args, **kwargs: None)
+    monkeypatch.setattr("hermes_cli.auth._update_config_for_provider", lambda *args, **kwargs: "/tmp/config.yaml")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+
+    _login_openai_codex(SimpleNamespace(), PROVIDER_REGISTRY["openai-codex"], force_new_login=False)
+
+    out = capsys.readouterr().out
+    assert "~/.codex/auth.json" not in out
+    assert "Import these credentials?" not in out

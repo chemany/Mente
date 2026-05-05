@@ -20,6 +20,7 @@ from mente.execution_events import ExecutionEventCallback, emit_execution_event
 from mente.executors.bridge_mcp import augment_runtime_config_for_bridge_tools
 from mente.executors.kernel_adapter import CodexKernelAdapter
 from mente.executors.prompting import render_execution_prompt
+from mente.executors.runtime_auth import write_private_runtime_auth
 from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
 from mente.feature_flags import (
     is_sessionful_execution_enabled,
@@ -322,16 +323,10 @@ class CodexExecutor(CodexKernelAdapter):
         return build_private_runtime_env(codex_home, extra_env)
 
     def _seed_auth_into_isolated_home(self, codex_home: Path, runtime_config: RuntimeConfig) -> str:
-        """Copy only Codex auth material into the isolated runtime home."""
+        """Materialize private Codex auth into the isolated runtime home."""
         if runtime_config.subprocess_env.get("MENTE_CODEX_API_KEY"):
             return "private_env"
-        source_auth = self._resolve_public_codex_home() / "auth.json"
-        if not source_auth.exists():
-            return "missing"
-        target_auth = codex_home / "auth.json"
-        shutil.copy2(source_auth, target_auth)
-        target_auth.chmod(0o600)
-        return "public_codex_home"
+        return write_private_runtime_auth(codex_home)
 
     def _seed_user_skills_into_isolated_home(self, codex_home: Path) -> str:
         """Expose Mente-managed user skills inside the private Codex runtime home."""
@@ -362,13 +357,6 @@ class CodexExecutor(CodexKernelAdapter):
             return
         if path.exists():
             shutil.rmtree(path)
-
-    def _resolve_public_codex_home(self) -> Path:
-        """Resolve the user's shared Codex home used only as an auth seed source."""
-        configured = os.environ.get("CODEX_HOME", "").strip()
-        if configured:
-            return Path(configured).expanduser()
-        return Path.home() / ".codex"
 
     def _resolve_runtime_config(self, workspace: str | Path) -> RuntimeConfig:
         """Resolve the private runtime config for this executor instance."""

@@ -9,6 +9,13 @@ from typing import List, Optional
 
 import os
 
+from kernel.codex.config import (
+    load_private_codex_profile_config,
+    load_private_model_settings,
+    resolve_private_codex_model_name,
+)
+from kernel.codex.home import resolve_private_codex_home
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CODEX_MODELS: List[str] = [
@@ -148,11 +155,13 @@ def _read_cache_models(codex_home: Path) -> List[str]:
 def get_codex_model_ids(access_token: Optional[str] = None) -> List[str]:
     """Return available Codex model IDs, trying API first, then local sources.
     
-    Resolution order: API (live, if token provided) > config.toml default >
+    Resolution order: API (live, if token provided) > dedicated Codex YAML model >
+    global Mente YAML model > legacy private runtime config.toml default >
     local cache > hardcoded defaults.
     """
-    codex_home_str = os.getenv("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
-    codex_home = Path(codex_home_str).expanduser()
+    codex_home = resolve_private_codex_home()
+    profile_codex_config = load_private_codex_profile_config()
+    global_model_settings = load_private_model_settings()
     ordered: List[str] = []
 
     # Try live API if we have a token
@@ -162,9 +171,13 @@ def get_codex_model_ids(access_token: Optional[str] = None) -> List[str]:
             return _add_forward_compat_models(api_models)
 
     # Fall back to local sources
-    default_model = _read_default_model(codex_home)
+    default_model = resolve_private_codex_model_name(profile_codex_config)
+    if not default_model:
+        default_model = global_model_settings.get("default") or global_model_settings.get("model")
+    if not default_model:
+        default_model = _read_default_model(codex_home)
     if default_model:
-        ordered.append(default_model)
+        ordered.append(default_model.strip())
 
     for model_id in _read_cache_models(codex_home):
         if model_id not in ordered:

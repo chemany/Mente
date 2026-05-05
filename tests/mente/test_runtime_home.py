@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from hermes_constants import get_mente_home
+from kernel.codex.home import resolve_private_codex_home
 from mente.executors import resolve_runtime_home
 
 
@@ -21,6 +22,18 @@ def test_resolve_runtime_home_ignores_public_codex_home(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
 
     runtime_home = resolve_runtime_home()
+
+    assert runtime_home != public_codex_home
+    assert runtime_home == mente_home / "codex"
+
+
+def test_resolve_private_codex_home_ignores_public_codex_home(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    public_codex_home = tmp_path / "public-codex-home"
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
+
+    runtime_home = resolve_private_codex_home()
 
     assert runtime_home != public_codex_home
     assert runtime_home == mente_home / "codex"

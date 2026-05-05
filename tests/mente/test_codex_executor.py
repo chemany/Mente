@@ -2,6 +2,9 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+from hermes_cli.auth import AuthError
 from kernel.codex.runtime.launcher import build_private_runtime_env, build_stateless_command
 from kernel.codex.runtime.protocol import KernelExecutionPayload
 from kernel.codex.runtime.result import KernelExecutionResult
@@ -20,6 +23,14 @@ from mente.task_core.models import (
     ExecutionSession,
     SessionMode,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_runtime_auth_resolution(monkeypatch):
+    monkeypatch.setattr(
+        "mente.executors.runtime_auth.resolve_codex_runtime_credentials",
+        lambda **kwargs: {"api_key": "stub-private-access-token"},
+    )
 
 
 def _build_adapter_payload(adapter: CodexKernelAdapter, request: ExecutionRequest) -> dict[str, object]:
@@ -635,6 +646,13 @@ def test_codex_executor_exposes_mente_user_skills_inside_private_runtime(monkeyp
 
 
 def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypatch, tmp_path):
+    from hermes_cli.auth import resolve_codex_runtime_credentials as _real_resolve_codex_runtime_credentials
+
+    monkeypatch.setattr(
+        "mente.executors.runtime_auth.resolve_codex_runtime_credentials",
+        _real_resolve_codex_runtime_credentials,
+    )
+    mente_home = tmp_path / ".mente"
     public_codex_home = tmp_path / "public-codex-home"
     public_codex_home.mkdir()
     (public_codex_home / "auth.json").write_text(
@@ -644,7 +662,25 @@ def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypa
     (public_codex_home / "config.toml").write_text('model = "gpt-5"', encoding="utf-8")
     (public_codex_home / "rules").mkdir()
     (public_codex_home / "rules" / "default.rules").write_text("never share", encoding="utf-8")
-    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+    mente_home.mkdir(parents=True, exist_ok=True)
+    (mente_home / "auth.json").write_text(
+        json.dumps({
+            "version": 1,
+            "providers": {
+                "openai-codex": {
+                    "tokens": {
+                        "access_token": "private-access-token",
+                        "refresh_token": "private-refresh-token",
+                    },
+                    "last_refresh": "2026-05-05T00:00:00Z",
+                    "auth_mode": "chatgpt",
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("HERMES_HOME", str(mente_home))
     monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
     captured: dict[str, object] = {}
 
@@ -669,28 +705,123 @@ def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypa
     result = executor.execute(request)
 
     assert result.status == "success"
-    assert captured["auth_payload"] == {"OPENAI_API_KEY": "test-openai-key"}
+    assert captured["auth_payload"] == {"OPENAI_API_KEY": "private-access-token"}
     assert captured["config_exists"] is False
     assert captured["rules_exist"] is False
+
+
+def test_codex_executor_seeds_runtime_auth_from_hermes_store_not_public_codex_home(
+    monkeypatch, tmp_path
+):
+    from hermes_cli.auth import resolve_codex_runtime_credentials as _real_resolve_codex_runtime_credentials
+
+    monkeypatch.setattr(
+        "mente.executors.runtime_auth.resolve_codex_runtime_credentials",
+        _real_resolve_codex_runtime_credentials,
+    )
+    hermes_home = tmp_path / ".mente"
+    public_codex_home = tmp_path / "public-codex-home"
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    public_codex_home.mkdir(parents=True, exist_ok=True)
+    (public_codex_home / "auth.json").write_text(
+        json.dumps({"OPENAI_API_KEY": "public-stale-key"}),
+        encoding="utf-8",
+    )
+    (hermes_home / "auth.json").write_text(
+        json.dumps({
+            "version": 1,
+            "providers": {
+                "openai-codex": {
+                    "tokens": {
+                        "access_token": "private-access-token",
+                        "refresh_token": "private-refresh-token",
+                    },
+                    "last_refresh": "2026-05-05T00:00:00Z",
+                    "auth_mode": "chatgpt",
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            isolated_home = runtime_config.runtime_home
+            captured["auth_payload"] = json.loads((isolated_home / "auth.json").read_text(encoding="utf-8"))
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert captured["auth_payload"] == {"OPENAI_API_KEY": "private-access-token"}
+
+
+def test_codex_executor_public_codex_home_only_fails_closed_when_private_runtime_auth_missing(
+    monkeypatch, tmp_path
+):
+    from hermes_cli.auth import resolve_codex_runtime_credentials as _real_resolve_codex_runtime_credentials
+
+    monkeypatch.setattr(
+        "mente.executors.runtime_auth.resolve_codex_runtime_credentials",
+        _real_resolve_codex_runtime_credentials,
+    )
+    public_codex_home = tmp_path / "public-codex-home"
+    public_codex_home.mkdir(parents=True, exist_ok=True)
+    (public_codex_home / "auth.json").write_text(
+        json.dumps({"OPENAI_API_KEY": "public-only"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".mente"))
+    monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
+
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
+
+    with pytest.raises(AuthError, match="No Codex credentials stored"):
+        executor.execute(request)
 
 
 def test_codex_executor_execute_passes_minimal_provider_overrides_without_copying_config(
     monkeypatch, tmp_path
 ):
     mente_home = tmp_path / ".mente"
-    profile_config = mente_home / "config.toml"
-    workspace_config = tmp_path / ".mente" / "codex.toml"
+    workspace = tmp_path / "workspace"
+    profile_config = mente_home / "config.yaml"
+    workspace_config = workspace / ".mente" / "config.yaml"
     profile_config.parent.mkdir(parents=True, exist_ok=True)
     workspace_config.parent.mkdir(parents=True, exist_ok=True)
     profile_config.write_text(
         "\n".join(
             [
-                'model_provider = "profile"',
-                'model = "gpt-5.4"',
-                "",
-                "[model_providers.profile]",
-                'name = "vipnewapi"',
-                'base_url = "https://profile.invalid/v1"',
+                "codex:",
+                '  model_provider: "profile"',
+                '  model: "gpt-5.4"',
+                "  model_providers:",
+                "    profile:",
+                '      name: "vipnewapi"',
+                '      base_url: "https://profile.invalid/v1"',
             ]
         ),
         encoding="utf-8",
@@ -698,11 +829,12 @@ def test_codex_executor_execute_passes_minimal_provider_overrides_without_copyin
     workspace_config.write_text(
         "\n".join(
             [
-                'model = "gpt-5.5"',
-                "",
-                "[model_providers.profile]",
-                'wire_api = "responses"',
-                "requires_openai_auth = true",
+                "codex:",
+                '  model: "gpt-5.5"',
+                "  model_providers:",
+                "    profile:",
+                '      wire_api: "responses"',
+                "      requires_openai_auth: true",
             ]
         ),
         encoding="utf-8",
@@ -724,7 +856,7 @@ def test_codex_executor_execute_passes_minimal_provider_overrides_without_copyin
         task_type="conversation",
         objective="Reply",
         user_request="Reply to the user",
-        workspace=str(tmp_path),
+        workspace=str(workspace),
     )
 
     result = executor.execute(request)
@@ -776,7 +908,7 @@ def test_codex_executor_emits_runtime_preparation_events(monkeypatch, tmp_path):
     ]
     assert events[0][1]["injected_count"] == 0
     assert events[1][1]["runtime_home"] == str(runtime_config.runtime_home)
-    assert events[2][1]["auth_source"] == "public_codex_home"
+    assert events[2][1]["auth_source"] == "hermes-auth-store"
     assert (runtime_config.runtime_home / "auth.json").exists()
 
 

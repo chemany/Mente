@@ -8803,6 +8803,18 @@ Examples:
     # config migrate
     config_subparsers.add_parser("migrate", help="Update config with new options")
 
+    # config migrate-codex
+    config_migrate_codex = config_subparsers.add_parser(
+        "migrate-codex",
+        help="Migrate legacy private Codex TOML into YAML config",
+    )
+    config_migrate_codex.add_argument(
+        "--workspace",
+        action="append",
+        default=[],
+        help="Workspace root whose .mente/codex.toml should be migrated to .mente/config.yaml.",
+    )
+
     config_parser.set_defaults(func=cmd_config)
 
     # =========================================================================

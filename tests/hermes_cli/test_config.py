@@ -1,6 +1,8 @@
 """Tests for hermes_cli configuration management."""
 
 import os
+import sys
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -20,7 +22,9 @@ from hermes_cli.config import (
     save_env_value_secure,
     sanitize_env_file,
     _sanitize_env_lines,
+    config_command,
 )
+import hermes_cli.main as main_module
 
 
 class TestGetHermesHome:
@@ -138,6 +142,62 @@ class TestSaveAndLoadRoundtrip:
 
             reloaded = load_config()
             assert reloaded["terminal"]["timeout"] == 999
+
+
+class TestConfigMigrateCodexCommand:
+    def test_prints_profile_and_workspace_results(self, capsys):
+        args = Namespace(
+            command="config",
+            config_command="migrate-codex",
+            workspace=["/tmp/ws-a", "/tmp/ws-b"],
+        )
+        with patch(
+            "hermes_cli.config.migrate_legacy_private_codex_config",
+            side_effect=[
+                {"profile": "migrated"},
+                {"profile": "migrated", "workspace": "noop_no_legacy_toml"},
+                {"profile": "migrated", "workspace": "skipped_existing_yaml_codex"},
+            ],
+        ) as migrate:
+            config_command(args)
+
+        assert migrate.call_count == 3
+        assert migrate.call_args_list[0].kwargs == {}
+        assert migrate.call_args_list[1].kwargs == {"workspace": Path("/tmp/ws-a")}
+        assert migrate.call_args_list[2].kwargs == {"workspace": Path("/tmp/ws-b")}
+
+        out = capsys.readouterr().out
+        assert "profile: migrated" in out
+        assert "workspace /tmp/ws-a: noop_no_legacy_toml" in out
+        assert "workspace /tmp/ws-b: skipped_existing_yaml_codex" in out
+
+    def test_main_parses_migrate_codex_workspace_args(self, monkeypatch):
+        captured = {}
+
+        def fake_cmd_config(args):
+            captured["args"] = args
+
+        monkeypatch.setattr(main_module, "cmd_config", fake_cmd_config)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "mente",
+                "config",
+                "migrate-codex",
+                "--workspace",
+                "/tmp/ws-a",
+                "--workspace",
+                "/tmp/ws-b",
+            ],
+        )
+
+        main_module.main()
+
+        args = captured["args"]
+        assert args.command == "config"
+        assert args.config_command == "migrate-codex"
+        assert args.workspace == ["/tmp/ws-a", "/tmp/ws-b"]
 
 
 class TestSaveEnvValueSecure:

@@ -161,6 +161,23 @@ def test_check_gateway_service_linger_skips_when_service_not_installed(monkeypat
     assert issues == []
 
 
+def test_run_doctor_does_not_require_codex_cli_for_openai_codex_auth(monkeypatch, tmp_path):
+    helper = TestDoctorMemoryProviderSection()
+
+    def _fake_which(cmd: str):
+        if cmd == "codex":
+            return None
+        return "/usr/bin/true"
+
+    monkeypatch.setattr(doctor_mod.shutil, "which", _fake_which)
+    monkeypatch.setattr("hermes_cli.auth.get_codex_auth_status", lambda: {"logged_in": False})
+
+    out = helper._run_doctor_and_capture(monkeypatch, tmp_path, provider="")
+
+    assert "codex CLI not found" not in out
+    assert "(required for openai-codex login)" not in out
+
+
 # ── Memory provider section (doctor should only check the *active* provider) ──
 
 

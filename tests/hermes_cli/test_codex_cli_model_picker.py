@@ -22,6 +22,11 @@ from unittest.mock import patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _prefer_file_local_hermes_home(monkeypatch):
+    monkeypatch.delenv("MENTE_HOME", raising=False)
+
+
 def _make_fake_jwt(expiry_offset: int = 3600) -> str:
     """Build a fake JWT with a future expiry."""
     header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()

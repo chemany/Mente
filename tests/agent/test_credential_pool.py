@@ -8,6 +8,11 @@ import time
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _prefer_file_local_hermes_home(monkeypatch):
+    monkeypatch.delenv("MENTE_HOME", raising=False)
+
+
 def _write_auth_store(tmp_path, payload: dict) -> None:
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True, exist_ok=True)
@@ -250,13 +255,8 @@ def test_exhausted_402_entry_resets_after_one_hour(tmp_path, monkeypatch):
     assert entry.last_status == "ok"
 
 
-def test_explicit_reset_timestamp_overrides_default_429_ttl(tmp_path, monkeypatch):
+def test_openai_codex_explicit_reset_timestamp_overrides_default_429_ttl(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
-    # Prevent auto-seeding from Codex CLI tokens on the host
-    monkeypatch.setattr(
-        "hermes_cli.auth._import_codex_cli_tokens",
-        lambda: None,
-    )
     _write_auth_store(
         tmp_path,
         {

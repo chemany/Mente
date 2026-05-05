@@ -2126,11 +2126,11 @@ def _is_remote_session() -> bool:
 
 
 # =============================================================================
-# OpenAI Codex auth — tokens stored in ~/.hermes/auth.json (not ~/.codex/)
+# OpenAI Codex auth — tokens stored in the Hermes auth store
 #
-# Hermes maintains its own Codex OAuth session separate from the Codex CLI
-# and VS Code extension. This prevents refresh token rotation conflicts
-# where one app's refresh invalidates the other's session.
+# Hermes maintains its own Codex OAuth session. This prevents refresh token
+# rotation conflicts and keeps runtime auth private to Hermes/Mente-owned
+# state.
 # =============================================================================
 
 def _read_codex_tokens(*, _lock: bool = True) -> Dict[str, Any]:
@@ -2253,9 +2253,8 @@ def refresh_codex_oauth_pure(
         if code == "refresh_token_reused":
             message = (
                 "Codex refresh token was already consumed by another client "
-                "(e.g. Codex CLI or VS Code extension). "
-                "Run `codex` in your terminal to generate fresh tokens, "
-                "then run `hermes auth` to re-authenticate."
+                "(e.g. another Codex-linked client or VS Code extension); "
+                "run `hermes auth` to re-authenticate."
             )
             relogin_required = True
         # A 401/403 from the token endpoint always means the refresh token
@@ -2319,40 +2318,6 @@ def _refresh_codex_auth_tokens(
 
     _save_codex_tokens(updated_tokens)
     return updated_tokens
-
-
-def _import_codex_cli_tokens() -> Optional[Dict[str, str]]:
-    """Try to read tokens from ~/.codex/auth.json (Codex CLI shared file).
-    
-    Returns tokens dict if valid and not expired, None otherwise.
-    Does NOT write to the shared file.
-    """
-    codex_home = os.getenv("CODEX_HOME", "").strip()
-    if not codex_home:
-        codex_home = str(Path.home() / ".codex")
-    auth_path = Path(codex_home).expanduser() / "auth.json"
-    if not auth_path.is_file():
-        return None
-    try:
-        payload = json.loads(auth_path.read_text())
-        tokens = payload.get("tokens")
-        if not isinstance(tokens, dict):
-            return None
-        access_token = tokens.get("access_token")
-        refresh_token = tokens.get("refresh_token")
-        if not access_token or not refresh_token:
-            return None
-        # Reject expired tokens — importing stale tokens from ~/.codex/
-        # that can't be refreshed leaves the user stuck with "Login successful!"
-        # but no working credentials.
-        if _codex_access_token_is_expiring(access_token, 0):
-            logger.debug(
-                "Codex CLI tokens at %s are expired — skipping import.", auth_path,
-            )
-            return None
-        return dict(tokens)
-    except Exception:
-        return None
 
 
 def resolve_codex_runtime_credentials(
@@ -3898,26 +3863,6 @@ def _login_openai_codex(
         except AuthError:
             pass
 
-    # Check for existing Codex CLI tokens we can import
-    if not force_new_login:
-        cli_tokens = _import_codex_cli_tokens()
-        if cli_tokens:
-            print("Found existing Codex CLI credentials at ~/.codex/auth.json")
-            print("Hermes will create its own session to avoid conflicts with Codex CLI / VS Code.")
-            try:
-                do_import = input("Import these credentials? (a separate login is recommended) [y/N]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                do_import = "n"
-            if do_import in ("y", "yes"):
-                _save_codex_tokens(cli_tokens)
-                base_url = os.getenv("HERMES_CODEX_BASE_URL", "").strip().rstrip("/") or DEFAULT_CODEX_BASE_URL
-                config_path = _update_config_for_provider("openai-codex", base_url)
-                print()
-                print("Credentials imported. Note: if Codex CLI refreshes its token,")
-                print("Hermes will keep working independently with its own session.")
-                print(f"  Config updated: {config_path} (model.provider=openai-codex)")
-                return
-
     # Run a fresh device code flow — Hermes gets its own OAuth session
     print()
     print("Signing in to OpenAI Codex...")
@@ -4063,7 +4008,7 @@ def _codex_device_code_login() -> Dict[str, Any]:
             provider="openai-codex", code="token_exchange_no_access_token",
         )
 
-    # Return tokens for the caller to persist (no longer writes to ~/.codex/)
+    # Return tokens for the caller to persist in the Hermes auth store.
     base_url = (
         os.getenv("HERMES_CODEX_BASE_URL", "").strip().rstrip("/")
         or DEFAULT_CODEX_BASE_URL

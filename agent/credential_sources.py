@@ -254,13 +254,12 @@ def _remove_nous_device_code(provider: str, removed) -> RemovalResult:
 
 
 def _remove_codex_device_code(provider: str, removed) -> RemovalResult:
-    """Codex tokens live in TWO places: our auth store AND ~/.codex/auth.json.
+    """Codex tokens live in the Hermes auth store and can be re-seeded.
 
-    refresh_codex_oauth_pure() writes both every time, so clearing only
-    the Hermes auth store is not enough — _seed_from_singletons() would
-    re-import from ~/.codex/auth.json on the next load_pool() call and
-    the removal would be instantly undone.  We suppress instead of
-    deleting Codex CLI's file, so the Codex CLI itself keeps working.
+    Removing the pool entry alone is not enough — `_seed_from_singletons()`
+    would re-materialize the `device_code` entry from `providers.openai-codex`
+    on the next `load_pool()` call. We suppress that canonical source so the
+    user's removal stays stable until they explicitly re-add Codex auth.
 
     The canonical source name in ``_seed_from_singletons`` is
     ``"device_code"`` (no prefix).  Entries may show up in the pool as
@@ -281,7 +280,6 @@ def _remove_codex_device_code(provider: str, removed) -> RemovalResult:
     suppress_credential_source(provider, "device_code")
     result.hints.extend([
         "Suppressed openai-codex device_code source — it will not be re-seeded.",
-        "Note: Codex CLI credentials still live in ~/.codex/auth.json",
         "Run `hermes auth add openai-codex` to re-enable if needed.",
     ])
     return result
@@ -383,7 +381,7 @@ def _register_all_sources() -> None:
         provider="openai-codex", source_id="device_code",
         match_fn=lambda src: src == "device_code" or src.endswith(":device_code"),
         remove_fn=_remove_codex_device_code,
-        description="auth.json providers.openai-codex + ~/.codex/auth.json",
+        description="auth.json providers.openai-codex",
     ))
     register(RemovalStep(
         provider="qwen-oauth", source_id="qwen-cli",

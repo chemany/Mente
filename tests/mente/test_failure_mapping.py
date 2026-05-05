@@ -1,11 +1,21 @@
 import subprocess
 
+import pytest
+
 from mente.context_builder.builder import ContextBuilder
 from mente.executors.base import Executor
 from mente.executors.codex import CodexExecutor
 from mente.orchestrator.service import Orchestrator
 from mente.task_core.models import ExecutionRequest, ExecutionResult, Task
 from mente.task_core.repository import InMemoryTaskRepository
+
+
+@pytest.fixture(autouse=True)
+def _stub_runtime_auth_resolution(monkeypatch):
+    monkeypatch.setattr(
+        "mente.executors.runtime_auth.resolve_codex_runtime_credentials",
+        lambda **kwargs: {"api_key": "stub-private-access-token"},
+    )
 
 
 def test_codex_executor_maps_spawn_failure(monkeypatch):

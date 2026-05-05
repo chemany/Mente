@@ -63,6 +63,7 @@ import yaml
 
 from hermes_cli.colors import Colors, color
 from hermes_cli.default_soul import DEFAULT_SOUL_MD, LEGACY_DEFAULT_SOUL_MD
+from kernel.codex.config import migrate_legacy_private_codex_config
 
 
 # =============================================================================
@@ -4211,7 +4212,15 @@ def config_command(args):
                 print(color(f"  ⚠️  {warning}", Colors.YELLOW))
         
         print()
-    
+
+    elif subcmd == "migrate-codex":
+        profile_result = migrate_legacy_private_codex_config()
+        print(f"profile: {profile_result['profile']}")
+
+        for workspace in getattr(args, "workspace", []) or []:
+            result = migrate_legacy_private_codex_config(workspace=Path(workspace))
+            print(f"workspace {workspace}: {result['workspace']}")
+
     elif subcmd == "check":
         # Non-interactive check for what's missing
         print()
@@ -4259,6 +4268,7 @@ def config_command(args):
         print("  mente config set <key> <value>   Set a config value")
         print("  mente config check     Check for missing/outdated config")
         print("  mente config migrate   Update config with new options")
+        print("  mente config migrate-codex       Migrate legacy private Codex TOML into YAML")
         print("  mente config path      Show config file path")
         print("  mente config env-path  Show .env file path")
         sys.exit(1)

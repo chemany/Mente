@@ -1,17 +1,41 @@
 import json
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+for module_name in ("hermes_cli.codex_models", "hermes_cli"):
+    module = sys.modules.get(module_name)
+    module_file = getattr(module, "__file__", "")
+    if module_file and str(REPO_ROOT) not in module_file:
+        del sys.modules[module_name]
 
 from hermes_cli.codex_models import DEFAULT_CODEX_MODELS, get_codex_model_ids
 
 
+def _set_private_codex_home(monkeypatch, codex_home: Path) -> None:
+    mente_home = codex_home.parent
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("HERMES_HOME", str(mente_home))
+
+
+def _write_profile_codex_yaml(mente_home: Path, lines: list[str]) -> None:
+    (mente_home / "config.yaml").write_text("\n".join(lines), encoding="utf-8")
+
+
 def test_get_codex_model_ids_prioritizes_default_and_cache(tmp_path, monkeypatch):
-    codex_home = tmp_path / "codex-home"
+    codex_home = tmp_path / ".mente" / "codex"
+    mente_home = codex_home.parent
     codex_home.mkdir(parents=True, exist_ok=True)
-    (codex_home / "config.toml").write_text('model = "gpt-5.2-codex"\n')
+    _write_profile_codex_yaml(
+        mente_home,
+        [
+            "codex:",
+            '  model: "gpt-5.2-codex"',
+        ],
+    )
     (codex_home / "models_cache.json").write_text(
         json.dumps(
             {
@@ -24,7 +48,7 @@ def test_get_codex_model_ids_prioritizes_default_and_cache(tmp_path, monkeypatch
             }
         )
     )
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    _set_private_codex_home(monkeypatch, codex_home)
 
     models = get_codex_model_ids()
 
@@ -46,15 +70,117 @@ def test_setup_wizard_codex_import_resolves():
 
 
 def test_get_codex_model_ids_falls_back_to_curated_defaults(tmp_path, monkeypatch):
-    codex_home = tmp_path / "codex-home"
+    codex_home = tmp_path / ".mente" / "codex"
     codex_home.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    _set_private_codex_home(monkeypatch, codex_home)
 
     models = get_codex_model_ids()
 
     assert models[: len(DEFAULT_CODEX_MODELS)] == DEFAULT_CODEX_MODELS
     assert "gpt-5.4" in models
     assert "gpt-5.3-codex-spark" not in models
+
+
+def test_get_codex_model_ids_falls_back_to_private_runtime_toml_when_yaml_absent(tmp_path, monkeypatch):
+    codex_home = tmp_path / ".mente" / "codex"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    (codex_home / "config.toml").write_text('model = "private-runtime-fallback"\n')
+    _set_private_codex_home(monkeypatch, codex_home)
+
+    models = get_codex_model_ids()
+
+    assert models[0] == "private-runtime-fallback"
+
+
+def test_get_codex_model_ids_ignores_public_codex_home_by_default(tmp_path, monkeypatch):
+    private_codex_home = tmp_path / ".mente" / "codex"
+    public_codex_home = tmp_path / "public-codex-home"
+    mente_home = private_codex_home.parent
+    private_codex_home.mkdir(parents=True, exist_ok=True)
+    public_codex_home.mkdir(parents=True, exist_ok=True)
+    _write_profile_codex_yaml(
+        mente_home,
+        [
+            "codex:",
+            '  model: "private-model"',
+        ],
+    )
+    (public_codex_home / "config.toml").write_text('model = "public-model"\n')
+    _set_private_codex_home(monkeypatch, private_codex_home)
+    monkeypatch.setenv("CODEX_HOME", str(public_codex_home))
+
+    models = get_codex_model_ids()
+
+    assert models[0] == "private-model"
+    assert "public-model" not in models
+
+
+def test_get_codex_model_ids_ignores_workspace_codex_yaml(tmp_path, monkeypatch):
+    private_codex_home = tmp_path / ".mente" / "codex"
+    workspace = tmp_path / "workspace"
+    mente_home = private_codex_home.parent
+    private_codex_home.mkdir(parents=True, exist_ok=True)
+    (workspace / ".mente").mkdir(parents=True, exist_ok=True)
+    _write_profile_codex_yaml(
+        mente_home,
+        [
+            "codex:",
+            '  model: "profile-model"',
+        ],
+    )
+    (workspace / ".mente" / "config.yaml").write_text(
+        "\n".join(
+            [
+                "codex:",
+                '  model: "workspace-model"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _set_private_codex_home(monkeypatch, private_codex_home)
+
+    models = get_codex_model_ids()
+
+    assert models[0] == "profile-model"
+    assert "workspace-model" not in models
+
+
+def test_get_codex_model_ids_prefers_dedicated_codex_model_over_global_model(tmp_path, monkeypatch):
+    private_codex_home = tmp_path / ".mente" / "codex"
+    mente_home = private_codex_home.parent
+    private_codex_home.mkdir(parents=True, exist_ok=True)
+    _write_profile_codex_yaml(
+        mente_home,
+        [
+            "model:",
+            '  default: "global-model"',
+            "codex:",
+            '  default: "codex-model"',
+        ],
+    )
+    _set_private_codex_home(monkeypatch, private_codex_home)
+
+    models = get_codex_model_ids()
+
+    assert models[0] == "codex-model"
+
+
+def test_get_codex_model_ids_falls_back_to_global_model_when_codex_omitted(tmp_path, monkeypatch):
+    private_codex_home = tmp_path / ".mente" / "codex"
+    mente_home = private_codex_home.parent
+    private_codex_home.mkdir(parents=True, exist_ok=True)
+    _write_profile_codex_yaml(
+        mente_home,
+        [
+            "model:",
+            '  default: "global-model"',
+        ],
+    )
+    _set_private_codex_home(monkeypatch, private_codex_home)
+
+    models = get_codex_model_ids()
+
+    assert models[0] == "global-model"
 
 
 def test_get_codex_model_ids_adds_forward_compat_models_from_templates(monkeypatch):

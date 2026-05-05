@@ -1,10 +1,11 @@
 from mente.executors.runtime_config import resolve_runtime_config
 
 
-def test_runtime_config_merges_system_profile_and_workspace_layers(monkeypatch, tmp_path):
+def test_runtime_config_merges_profile_and_workspace_yaml_layers(monkeypatch, tmp_path):
     mente_home = tmp_path / ".mente"
-    profile_config = mente_home / "config.toml"
-    workspace_config = tmp_path / ".mente" / "codex.toml"
+    workspace = tmp_path / "workspace"
+    profile_config = mente_home / "config.yaml"
+    workspace_config = workspace / ".mente" / "config.yaml"
     profile_config.parent.mkdir(parents=True, exist_ok=True)
     workspace_config.parent.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("MENTE_HOME", str(mente_home))
@@ -12,15 +13,15 @@ def test_runtime_config_merges_system_profile_and_workspace_layers(monkeypatch, 
     profile_config.write_text(
         "\n".join(
             [
-                'model_provider = "profile"',
-                'model = "gpt-5.4"',
-                "",
-                "[model_providers.profile]",
-                'name = "vipnewapi"',
-                'base_url = "https://profile.invalid/v1"',
-                "",
-                "[runtime]",
-                f'home = "{tmp_path / "profile-runtime-home"}"',
+                "codex:",
+                '  model_provider: "profile"',
+                '  model: "gpt-5.4"',
+                "  model_providers:",
+                "    profile:",
+                '      name: "vipnewapi"',
+                '      base_url: "https://profile.invalid/v1"',
+                "  runtime:",
+                f'    home: "{tmp_path / "profile-runtime-home"}"',
             ]
         ),
         encoding="utf-8",
@@ -28,21 +29,21 @@ def test_runtime_config_merges_system_profile_and_workspace_layers(monkeypatch, 
     workspace_config.write_text(
         "\n".join(
             [
-                'model = "gpt-5.5"',
-                "",
-                "[model_providers.profile]",
-                'wire_api = "responses"',
-                "",
-                "[runtime]",
-                f'home = "{tmp_path / "workspace-runtime-home"}"',
+                "codex:",
+                '  model: "gpt-5.5"',
+                "  model_providers:",
+                "    profile:",
+                '      wire_api: "responses"',
+                "  runtime:",
+                f'    home: "{workspace / "workspace-runtime-home"}"',
             ]
         ),
         encoding="utf-8",
     )
 
-    runtime_config = resolve_runtime_config(tmp_path)
+    runtime_config = resolve_runtime_config(workspace)
 
-    assert runtime_config.runtime_home == tmp_path / "workspace-runtime-home"
+    assert runtime_config.runtime_home == workspace / "workspace-runtime-home"
     assert runtime_config.ignore_user_config is True
     assert runtime_config.ignore_rules is True
     assert runtime_config.to_codex_overrides() == [
@@ -79,6 +80,107 @@ def test_runtime_config_ignores_public_codex_user_config_by_default(monkeypatch,
     assert runtime_config.to_codex_overrides() == []
 
 
+def test_runtime_config_prefers_yaml_over_legacy_toml_when_both_exist(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    workspace = tmp_path / "workspace"
+    profile_yaml = mente_home / "config.yaml"
+    profile_toml = mente_home / "config.toml"
+    workspace_yaml = workspace / ".mente" / "config.yaml"
+    workspace_toml = workspace / ".mente" / "codex.toml"
+    profile_yaml.parent.mkdir(parents=True, exist_ok=True)
+    workspace_yaml.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    profile_toml.write_text(
+        "\n".join(
+            [
+                'model_provider = "legacy"',
+                'model = "legacy-profile"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workspace_toml.write_text(
+        "\n".join(
+            [
+                'model = "legacy-workspace"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    profile_yaml.write_text(
+        "\n".join(
+            [
+                "codex:",
+                '  model_provider: "yaml"',
+                '  model: "yaml-profile"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workspace_yaml.write_text(
+        "\n".join(
+            [
+                "codex:",
+                '  model: "yaml-workspace"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    runtime_config = resolve_runtime_config(workspace)
+
+    assert runtime_config.to_codex_overrides() == [
+        'model="yaml-workspace"',
+        'model_provider="yaml"',
+    ]
+
+
+def test_runtime_config_uses_legacy_toml_fallback_when_yaml_absent(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    workspace = tmp_path / "workspace"
+    profile_config = mente_home / "config.toml"
+    workspace_config = workspace / ".mente" / "codex.toml"
+    profile_config.parent.mkdir(parents=True, exist_ok=True)
+    workspace_config.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    profile_config.write_text(
+        "\n".join(
+            [
+                'model_provider = "profile"',
+                'model = "gpt-5.4"',
+                "",
+                "[model_providers.profile]",
+                'name = "vipnewapi"',
+                'base_url = "https://profile.invalid/v1"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workspace_config.write_text(
+        "\n".join(
+            [
+                'model = "gpt-5.5"',
+                "",
+                "[model_providers.profile]",
+                'wire_api = "responses"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    runtime_config = resolve_runtime_config(workspace)
+
+    assert runtime_config.to_codex_overrides() == [
+        'model="gpt-5.5"',
+        'model_provider="profile"',
+        'model_providers.profile.base_url="https://profile.invalid/v1"',
+        'model_providers.profile.name="vipnewapi"',
+        'model_providers.profile.wire_api="responses"',
+    ]
+
+
 def test_runtime_config_ignores_legacy_hermes_mente_config(monkeypatch, tmp_path):
     mente_home = tmp_path / ".mente"
     legacy_home = tmp_path / ".hermes" / "mente"
@@ -98,15 +200,16 @@ def test_runtime_config_ignores_legacy_hermes_mente_config(monkeypatch, tmp_path
 
 def test_runtime_config_keeps_isolation_flags_stable_with_profile_override(monkeypatch, tmp_path):
     mente_home = tmp_path / ".mente"
-    profile_config = mente_home / "config.toml"
+    profile_config = mente_home / "config.yaml"
     profile_config.parent.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("MENTE_HOME", str(mente_home))
 
     profile_config.write_text(
         "\n".join(
             [
-                "[runtime]",
-                f'home = "{tmp_path / "private-runtime-home"}"',
+                "codex:",
+                "  runtime:",
+                f'    home: "{tmp_path / "private-runtime-home"}"',
             ]
         ),
         encoding="utf-8",
@@ -150,4 +253,76 @@ def test_runtime_config_falls_back_to_mente_model_settings_for_private_provider(
     assert runtime_config.subprocess_env == {
         "MENTE_CODEX_API_KEY": "sk-test-mente",
         "OPENAI_BASE_URL": "https://api.10fu.com/v1",
+    }
+
+
+def test_runtime_config_dedicated_codex_settings_override_global_model_defaults(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir(parents=True, exist_ok=True)
+    (mente_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "model:",
+                '  default: "global-model"',
+                '  base_url: "https://global.invalid/v1"',
+                '  api_key: "sk-global"',
+                "codex:",
+                '  default: "codex-model"',
+                '  base_url: "https://codex.invalid/v1"',
+                '  api_key: "sk-codex"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    runtime_config = resolve_runtime_config(tmp_path)
+
+    assert runtime_config.to_codex_overrides() == [
+        'model="codex-model"',
+        'model_provider="mente"',
+        'model_providers.mente.base_url="https://codex.invalid/v1"',
+        'model_providers.mente.env_key="MENTE_CODEX_API_KEY"',
+        'model_providers.mente.name="Mente"',
+        'model_providers.mente.requires_openai_auth=false',
+        'model_providers.mente.wire_api="responses"',
+    ]
+    assert runtime_config.subprocess_env == {
+        "MENTE_CODEX_API_KEY": "sk-codex",
+        "OPENAI_BASE_URL": "https://codex.invalid/v1",
+    }
+
+
+def test_runtime_config_codex_model_only_inherits_global_provider_settings(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir(parents=True, exist_ok=True)
+    (mente_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "model:",
+                '  default: "global-model"',
+                '  base_url: "https://global.invalid/v1"',
+                '  api_key: "sk-global"',
+                "codex:",
+                '  default: "codex-model"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    runtime_config = resolve_runtime_config(tmp_path)
+
+    assert runtime_config.to_codex_overrides() == [
+        'model="codex-model"',
+        'model_provider="mente"',
+        'model_providers.mente.base_url="https://global.invalid/v1"',
+        'model_providers.mente.env_key="MENTE_CODEX_API_KEY"',
+        'model_providers.mente.name="Mente"',
+        'model_providers.mente.requires_openai_auth=false',
+        'model_providers.mente.wire_api="responses"',
+    ]
+    assert runtime_config.subprocess_env == {
+        "MENTE_CODEX_API_KEY": "sk-global",
+        "OPENAI_BASE_URL": "https://global.invalid/v1",
     }

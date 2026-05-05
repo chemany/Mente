@@ -514,9 +514,9 @@ def run_doctor(args):
         check_warn("Auth provider status", f"(could not check: {e})")
 
     if shutil.which("codex"):
-        check_ok("codex CLI")
+        check_ok("codex CLI", "(optional)")
     else:
-        check_warn("codex CLI not found", "(required for openai-codex login)")
+        check_info("codex CLI (optional)")
 
     # =========================================================================
     # Check: Directory structure
