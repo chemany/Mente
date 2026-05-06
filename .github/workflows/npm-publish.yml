@@ -1,0 +1,36 @@
+name: npm-publish
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "npm-v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install package dependencies
+        run: npm ci
+
+      - name: Verify npm installer tests
+        run: npm run test:npm-installer
+
+      - name: Verify package contents
+        run: npm pack --dry-run
+
+      - name: Publish package
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

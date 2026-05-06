@@ -44,7 +44,15 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), [Open
 
 ## Quick Install
 
-### Option 1: npm bootstrapper
+### Option 1: direct installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash
+```
+
+Works on Linux, macOS, WSL2, and Android via Termux. The one-click installer is release-pinned by default and can also bootstrap a matching vendored Codex runtime from local/offline assets via `--runtime-artifact-manifest` and `--runtime-wheel`.
+
+### Option 2: npm bootstrapper
 
 ```bash
 npm install -g mente-agent
@@ -53,13 +61,7 @@ mente
 
 The npm package is intentionally **thin**. It publishes only the launcher and installer scripts, then bootstraps the full Mente runtime on first run. By default the bootstrapper installs from the repo's `main` branch, and you can force a tagged release with `MENTE_BOOTSTRAP_RELEASE=<tag> mente`. It does **not** publish your local `.env`, `auth.json`, `~/.mente`, `~/.hermes`, sessions, logs, or other machine-local state.
 
-### Option 2: direct installer
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash
-```
-
-Works on Linux, macOS, WSL2, and Android via Termux. The one-click installer is release-pinned by default and can also bootstrap a matching vendored Codex runtime from local/offline assets via `--runtime-artifact-manifest` and `--runtime-wheel`.
+At the moment, the repository is **ready for npm publish but not yet live on the npm registry**. Until the first public npm release is published, use Option 1 above. Once the package is published, the `npm install -g mente-agent` flow becomes the primary one-line install path.
 
 > **Android / Termux:** The tested manual path is documented in the [Termux guide](https://chemany.github.io/Mente/docs/getting-started/termux). On Termux, Mente installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
 >
@@ -96,16 +98,17 @@ mente doctor        # Diagnose any issues
 
 This README tracks the current Mente packaging and runtime direction:
 
-- **One install command for GitHub visitors:** `npm install -g mente-agent`
+- **One current install command for GitHub visitors:** `curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash`
+- **One intended npm install command after publish:** `npm install -g mente-agent`
 - **One visible agent identity:** user-facing replies and progress now present as `Mente`
 - **Same execution depth under the hood:** complex coding and tool work still route through the Codex-backed executor
 - **Safer operations surface:** packaging is whitelist-based, and config/admin actions now have explicit handling for API keys, provider auth, and restart boundaries
 
 If you are evaluating Mente from GitHub, the practical model is:
 
-1. Install the bootstrap package from npm.
+1. Install Mente with the direct installer.
 2. Launch `mente`.
-3. Let the bundled installer bring down the full runtime.
+3. Let the bootstrap flow finish preparing the full runtime.
 4. Use Mente normally from CLI or gateway surfaces.
 
 ## CLI vs Messaging Quick Reference

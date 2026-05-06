@@ -44,7 +44,15 @@
 
 ## 快速安装
 
-### 方案 1：npm 引导安装
+### 方案 1：直接使用安装脚本
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash
+```
+
+支持 Linux、macOS、WSL2，以及 Android 的 Termux。这个一键安装器默认按 release 版本固定安装，也能通过 `--runtime-artifact-manifest` 和 `--runtime-wheel` 从本地或离线资源引导匹配的 vendored runtime。
+
+### 方案 2：npm 引导安装
 
 ```bash
 npm install -g mente-agent
@@ -53,13 +61,7 @@ mente
 
 这个 npm 包刻意保持 **很薄**。它只发布 launcher 和 installer 脚本，第一次运行时再自动引导完整的 Mente runtime。默认会从仓库的 `main` 分支完成 bootstrap，你也可以通过 `MENTE_BOOTSTRAP_RELEASE=<tag> mente` 强制安装某个发布版本。它 **不会** 把你本机的 `.env`、`auth.json`、`~/.mente`、`~/.hermes`、sessions、logs 或其它机器私有状态打进包里。
 
-### 方案 2：直接使用安装脚本
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash
-```
-
-支持 Linux、macOS、WSL2，以及 Android 的 Termux。这个一键安装器默认按 release 版本固定安装，也能通过 `--runtime-artifact-manifest` 和 `--runtime-wheel` 从本地或离线资源引导匹配的 vendored runtime。
+目前仓库里的 npm 包已经 **具备可发布状态，但还没有真正发布到 npm registry**。在首个公开 npm 版本上线前，请先使用上面的方案 1。等包真正发布后，`npm install -g mente-agent` 才是对外的一键安装主路径。
 
 > **Android / Termux：** 已验证的手动安装路径见 [Termux 指南](https://chemany.github.io/Mente/docs/getting-started/termux)。在 Termux 上，Mente 会安装精简过的 `.[termux]` 依赖集合，因为完整的 `.[all]` 目前会拉到 Android 不兼容的语音依赖。
 >
@@ -96,16 +98,17 @@ mente doctor        # 检查并诊断问题
 
 当前 README 反映的是 Mente 最新的打包和 runtime 方向：
 
-- **GitHub 访客的一条安装命令：** `npm install -g mente-agent`
+- **GitHub 访客当前可用的一条安装命令：** `curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash`
+- **npm 发布后的目标一条安装命令：** `npm install -g mente-agent`
 - **统一的可见 agent 身份：** 对外回复和进度统一呈现为 `Mente`
 - **同样深度的底层执行能力：** 复杂编码和工具执行仍然走 Codex-backed executor
 - **更安全的运维表面：** 打包采用白名单方式，配置/管理操作也有 API key、provider 鉴权和重启边界的明确处理
 
 如果你是从 GitHub 第一次接触 Mente，最实用的理解方式是：
 
-1. 先从 npm 安装 bootstrap 包。
+1. 先通过直接安装脚本安装 Mente。
 2. 执行 `mente`。
-3. 让内置 installer 自动拉起完整 runtime。
+3. 让 bootstrap 流程完成完整 runtime 的准备。
 4. 再从 CLI 或消息网关里正常使用 Mente。
 
 ## CLI 与消息网关速查
