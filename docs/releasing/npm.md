@@ -2,6 +2,8 @@
 
 This runbook is the shortest safe path to publish `mente-agent` to npm.
 
+If this is the first public npm release for the package, run the dedicated checklist first: [npm-first-release-checklist.md](./npm-first-release-checklist.md).
+
 ## One-time setup
 
 1. Log in to the `mente-agent` package owner account on npm.
