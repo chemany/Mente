@@ -2483,6 +2483,15 @@ def test_prompt_submit_auto_titles_session_on_complete(monkeypatch):
     """maybe_auto_title is called after a successful (complete) prompt."""
 
     class _Agent:
+        def _current_main_runtime(self):
+            return {
+                "provider": "openrouter",
+                "model": "anthropic/claude-sonnet-4.6",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": "test-key",
+                "api_mode": "chat_completions",
+            }
+
         def run_conversation(
             self, prompt, conversation_history=None, stream_callback=None
         ):
@@ -2515,6 +2524,13 @@ def test_prompt_submit_auto_titles_session_on_complete(monkeypatch):
     assert args[1] == "session-key"
     assert args[2] == "Tell me about Rome"
     assert args[3] == "Rome was founded in 753 BC."
+    assert mock_title.call_args.kwargs["main_runtime"] == {
+        "provider": "openrouter",
+        "model": "anthropic/claude-sonnet-4.6",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": "test-key",
+        "api_mode": "chat_completions",
+    }
 
 
 def test_prompt_submit_skips_auto_title_when_interrupted(monkeypatch):

@@ -30,6 +30,7 @@ def resolve_memory_context(
 
     source = str(task.metadata.get("source") or "").strip() or None
     seen_retrieved_ids: set[str] = set()
+    session_summary_kind = policy.session_summary_kind or "session_summary"
     retrieved = memory_repository.list_relevant(
         session_id=task.session_id,
         task_type=task.task_type,
@@ -82,6 +83,17 @@ def resolve_memory_context(
         seen_retrieved_ids.add(record.memory_id)
         if record.memory_id in selected_summary_ids:
             continue
+        if record.kind == session_summary_kind:
+            trace.skipped.append(
+                MemoryTraceItem(
+                    memory_id=record.memory_id,
+                    scope=record.scope,
+                    kind=record.kind,
+                    fact=record.fact,
+                    reason="session_summary_filtered",
+                )
+            )
+            continue
         if record.scope in policy.allowed_injection_scopes:
             allowed_records.append(record)
         else:
@@ -129,6 +141,7 @@ def resolve_explicit_memory_read(
 
     policy_resolver = memory_policy_resolver or MemoryPolicyResolver.default()
     policy = policy_resolver.resolve(task)
+    internal_only_kinds = (policy.session_summary_kind or "session_summary",)
     if memory_repository is None:
         return [], "memory_repository_unavailable"
     if not policy.explicit_read_enabled:
@@ -164,6 +177,7 @@ def resolve_explicit_memory_read(
             memory_scope=scope,
             limit=remaining,
             source=source,
+            exclude_kinds=internal_only_kinds,
         )
         for record in records:
             results.append(

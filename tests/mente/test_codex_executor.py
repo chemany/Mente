@@ -985,6 +985,65 @@ def test_codex_executor_execute_delegates_to_kernel_runner(monkeypatch, tmp_path
     assert result.metadata["returncode"] == 0
 
 
+@pytest.mark.parametrize(
+    ("user_request", "assistant_summary", "expected_summary"),
+    [
+        (
+            "你是谁",
+            "我是 Codex，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
+            "我是 Mente，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
+        ),
+        (
+            "Who are you?",
+            "I am Codex, an AI assistant on this machine.",
+            "I am Mente, an AI assistant on this machine.",
+        ),
+        (
+            "你好",
+            "我是 Mente，一个基于 GPT-5 的 AI 助手，主要帮你写代码、排查问题、查资料和处理各种任务。",
+            "我是 Mente，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
+        ),
+        (
+            "你好",
+            "我是 Mente，你的智能 AI 助手。\n我可以直接帮你做这些事：\n- 查资料、做调研\n- 读写代码、排查问题",
+            "我是 Mente，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
+        ),
+        (
+            "继续",
+            "⏳ Mente 正在执行\n1. 🚀 正在调用 Codex runtime\n2. 🤖 Codex 已开始执行\n3. 🧮 Codex 回合完成\n4. 📨 Codex runtime 已返回",
+            "⏳ Mente 正在执行\n1. 🚀 正在调用 Mente runtime\n2. 🤖 Mente 已开始执行\n3. 🧮 Mente 回合完成\n4. 📨 Mente runtime 已返回",
+        ),
+        (
+            "你是谁",
+            "runtime_not_bootstrapped:vendored runtime artifact is not bootstrapped for this Mente release; expected /root/code/Mente/kernel/codex/release/artifacts/linux-x86_64/codex. public codex fallback is disabled.",
+            "runtime_not_bootstrapped:vendored runtime artifact is not bootstrapped for this Mente release; expected /root/code/Mente/kernel/codex/release/artifacts/linux-x86_64/codex. public runtime fallback is disabled.",
+        ),
+    ],
+)
+def test_codex_executor_normalizes_user_facing_codex_identity(
+    monkeypatch, tmp_path, user_request, assistant_summary, expected_summary
+):
+    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            return KernelExecutionResult(status="success", assistant_summary=assistant_summary)
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request=user_request,
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.summary == expected_summary
+
+
 def test_codex_executor_execute_translates_kernel_failures(monkeypatch, tmp_path):
     monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
 

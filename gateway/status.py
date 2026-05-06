@@ -27,7 +27,8 @@ if sys.platform == "win32":
 else:
     import fcntl
 
-_GATEWAY_KIND = "hermes-gateway"
+_GATEWAY_KIND = "mente-gateway"
+_LEGACY_GATEWAY_KINDS = {"hermes-gateway"}
 _RUNTIME_STATUS_FILE = "gateway_state.json"
 _LOCKS_DIRNAME = "gateway-locks"
 _IS_WINDOWS = sys.platform == "win32"
@@ -132,7 +133,7 @@ def _read_process_cmdline(pid: int) -> Optional[str]:
 
 
 def _looks_like_gateway_process(pid: int) -> bool:
-    """Return True when the live PID still looks like the Hermes gateway."""
+    """Return True when the live PID still looks like the gateway runtime."""
     cmdline = _read_process_cmdline(pid)
     if not cmdline:
         return False
@@ -140,7 +141,9 @@ def _looks_like_gateway_process(pid: int) -> bool:
     patterns = (
         "hermes_cli.main gateway",
         "hermes_cli/main.py gateway",
+        "mente gateway",
         "hermes gateway",
+        "mente-gateway",
         "hermes-gateway",
         "gateway/run.py",
     )
@@ -149,7 +152,7 @@ def _looks_like_gateway_process(pid: int) -> bool:
 
 def _record_looks_like_gateway(record: dict[str, Any]) -> bool:
     """Validate gateway identity from PID-file metadata when cmdline is unavailable."""
-    if record.get("kind") != _GATEWAY_KIND:
+    if record.get("kind") not in {_GATEWAY_KIND, *_LEGACY_GATEWAY_KINDS}:
         return False
 
     argv = record.get("argv")
@@ -160,6 +163,7 @@ def _record_looks_like_gateway(record: dict[str, Any]) -> bool:
     patterns = (
         "hermes_cli.main gateway",
         "hermes_cli/main.py gateway",
+        "mente gateway",
         "hermes gateway",
         "gateway/run.py",
     )

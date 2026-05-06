@@ -522,6 +522,13 @@ class TestPrompt:
     async def test_prompt_auto_titles_session(self, agent):
         new_resp = await agent.new_session(cwd=".")
         state = agent.session_manager.get_session(new_resp.session_id)
+        runtime = {
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-4.6",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": "test-key",
+            "api_mode": "chat_completions",
+        }
         state.agent.run_conversation = MagicMock(return_value={
             "final_response": "Here is the fix.",
             "messages": [
@@ -529,6 +536,7 @@ class TestPrompt:
                 {"role": "assistant", "content": "Here is the fix."},
             ],
         })
+        state.agent._current_main_runtime = MagicMock(return_value=runtime)
 
         mock_conn = MagicMock(spec=acp.Client)
         mock_conn.session_update = AsyncMock()
@@ -542,6 +550,7 @@ class TestPrompt:
         assert mock_title.call_args.args[1] == new_resp.session_id
         assert mock_title.call_args.args[2] == "fix the broken ACP history"
         assert mock_title.call_args.args[3] == "Here is the fix."
+        assert mock_title.call_args.kwargs["main_runtime"] == runtime
 
     @pytest.mark.asyncio
     async def test_prompt_populates_usage_from_top_level_run_conversation_fields(self, agent):

@@ -8806,6 +8806,13 @@ class HermesCLI:
                     _title_failure_cb = getattr(
                         self.agent, "_emit_auxiliary_failure", None
                     ) if self.agent else None
+                    _title_main_runtime = None
+                    _runtime_fn = getattr(self.agent, "_current_main_runtime", None) if self.agent else None
+                    if callable(_runtime_fn):
+                        try:
+                            _title_main_runtime = _runtime_fn()
+                        except Exception:
+                            _title_main_runtime = None
                     maybe_auto_title(
                         self._session_db,
                         self.session_id,
@@ -8813,6 +8820,7 @@ class HermesCLI:
                         response,
                         self.conversation_history,
                         failure_callback=_title_failure_cb,
+                        main_runtime=_title_main_runtime,
                     )
                 except Exception:
                     pass

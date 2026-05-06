@@ -2549,12 +2549,20 @@ def _(rid, params: dict) -> dict:
                 try:
                     from agent.title_generator import maybe_auto_title
 
+                    _title_main_runtime = None
+                    _runtime_fn = getattr(agent, "_current_main_runtime", None)
+                    if callable(_runtime_fn):
+                        try:
+                            _title_main_runtime = _runtime_fn()
+                        except Exception:
+                            _title_main_runtime = None
                     maybe_auto_title(
                         _get_db(),
                         session.get("session_key") or sid,
                         text,
                         raw,
                         session.get("history", []),
+                        main_runtime=_title_main_runtime,
                     )
                 except Exception:
                     pass

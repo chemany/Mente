@@ -455,6 +455,8 @@ def test_context_builder_disabling_session_summary_policy_reverts_to_generic_pre
     assert [item.memory_id for item in disabled_trace.selected] == [
         item.memory_id for item in baseline_trace.selected
     ]
+    assert "mem_summary" not in [item.memory_id for item in baseline_trace.selected]
+    assert "mem_summary" not in [item.memory_id for item in disabled_trace.selected]
     assert [(item.memory_id, item.reason) for item in disabled_trace.skipped] == [
         (item.memory_id, item.reason) for item in baseline_trace.skipped
     ]

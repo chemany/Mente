@@ -218,6 +218,87 @@ def test_sqlite_memory_repository_list_relevant_by_scope_filters_kind(tmp_path):
     assert [row.memory_id for row in rows] == ["mem_summary"]
 
 
+def test_in_memory_memory_repository_list_relevant_by_scope_excludes_kinds():
+    repo = InMemoryMemoryRepository()
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_summary",
+            session_id="sess-1",
+            task_id="task_1",
+            task_type="conversation",
+            source="api_server",
+            scope="session",
+            kind="session_summary",
+            fact="Summary fact",
+            score=9.0,
+        )
+    )
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_fact",
+            session_id="sess-1",
+            task_id="task_2",
+            task_type="conversation",
+            source="api_server",
+            scope="session",
+            kind="fact",
+            fact="Ordinary fact",
+            score=5.0,
+        )
+    )
+
+    rows = repo.list_relevant_by_scope(
+        session_id="sess-1",
+        task_type="conversation",
+        memory_scope="session",
+        limit=1,
+        exclude_kinds=("session_summary",),
+    )
+
+    assert [row.memory_id for row in rows] == ["mem_fact"]
+
+
+def test_sqlite_memory_repository_list_relevant_by_scope_excludes_kinds(tmp_path):
+    db_path = tmp_path / "memory.db"
+    repo = SQLiteMemoryRepository(db_path=db_path)
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_summary",
+            session_id="sess-1",
+            task_id="task_1",
+            task_type="conversation",
+            source="api_server",
+            scope="session",
+            kind="session_summary",
+            fact="Summary fact",
+            score=9.0,
+        )
+    )
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_fact",
+            session_id="sess-1",
+            task_id="task_2",
+            task_type="conversation",
+            source="api_server",
+            scope="session",
+            kind="fact",
+            fact="Ordinary fact",
+            score=5.0,
+        )
+    )
+
+    rows = repo.list_relevant_by_scope(
+        session_id="sess-1",
+        task_type="conversation",
+        memory_scope="session",
+        limit=1,
+        exclude_kinds=("session_summary",),
+    )
+
+    assert [row.memory_id for row in rows] == ["mem_fact"]
+
+
 def test_sqlite_memory_repository_find_active_exact_matches_by_fact_key(tmp_path):
     db_path = tmp_path / "memory.db"
     repo = SQLiteMemoryRepository(db_path=db_path)

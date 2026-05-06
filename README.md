@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Mente Agent" width="100%">
+  <img src="assets/mente-agent-banner.png" alt="Mente Agent" width="100%">
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="./README.zh.md">中文</a>
 </p>
 
 # Mente Agent ☤

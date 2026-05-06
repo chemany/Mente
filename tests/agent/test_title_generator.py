@@ -113,6 +113,30 @@ class TestGenerateTitle:
         user_content = captured_kwargs["messages"][1]["content"]
         assert len(user_content) < 1100  # 500 + 500 + formatting
 
+    def test_passes_main_runtime_to_call_llm(self):
+        """Title generation should reuse the live main runtime when provided."""
+        captured_kwargs = {}
+
+        def mock_call_llm(**kwargs):
+            captured_kwargs.update(kwargs)
+            resp = MagicMock()
+            resp.choices = [MagicMock()]
+            resp.choices[0].message.content = "Short Title"
+            return resp
+
+        runtime = {
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-4.6",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": "test-key",
+            "api_mode": "chat_completions",
+        }
+
+        with patch("agent.title_generator.call_llm", side_effect=mock_call_llm):
+            generate_title("question", "answer", main_runtime=runtime)
+
+        assert captured_kwargs["main_runtime"] == runtime
+
 
 class TestAutoTitleSession:
     """Tests for auto_title_session() — the sync worker function."""
@@ -182,7 +206,7 @@ class TestMaybeAutoTitle:
             import time
             time.sleep(0.3)
             mock_auto.assert_called_once_with(
-                db, "sess-1", "hello", "hi there", failure_callback=None
+                db, "sess-1", "hello", "hi there", failure_callback=None, main_runtime=None
             )
 
     def test_forwards_failure_callback_to_worker(self):
@@ -202,7 +226,43 @@ class TestMaybeAutoTitle:
             import time
             time.sleep(0.3)
             mock_auto.assert_called_once_with(
-                db, "sess-1", "hello", "hi there", failure_callback=_cb
+                db, "sess-1", "hello", "hi there", failure_callback=_cb, main_runtime=None
+            )
+
+    def test_forwards_main_runtime_to_worker(self):
+        """maybe_auto_title must forward main_runtime into the worker thread."""
+        db = MagicMock()
+        db.get_session_title.return_value = None
+        history = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ]
+        runtime = {
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-4.6",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": "test-key",
+            "api_mode": "chat_completions",
+        }
+
+        with patch("agent.title_generator.auto_title_session") as mock_auto:
+            maybe_auto_title(
+                db,
+                "sess-1",
+                "hello",
+                "hi there",
+                history,
+                main_runtime=runtime,
+            )
+            import time
+            time.sleep(0.3)
+            mock_auto.assert_called_once_with(
+                db,
+                "sess-1",
+                "hello",
+                "hi there",
+                failure_callback=None,
+                main_runtime=runtime,
             )
 
     def test_skips_if_no_response(self):

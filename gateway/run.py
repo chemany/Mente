@@ -111,6 +111,7 @@ def _run_mente_gateway_turn(
     session_id: str,
     session_key: str | None = None,
     channel_prompt: str | None = None,
+    event_callback=None,
 ) -> Dict[str, Any]:
     """Run a gateway turn through the Mente task bridge."""
     from mente.integrations.bridge import run_gateway_task
@@ -123,6 +124,7 @@ def _run_mente_gateway_turn(
         session_id=session_id,
         session_key=session_key,
         channel_prompt=channel_prompt,
+        event_callback=event_callback,
     )
 
     if result.status == "success":
@@ -616,6 +618,160 @@ logger = logging.getLogger(__name__)
 # session from bypassing the "already running" guard during the async gap
 # between the guard check and actual agent creation.
 _AGENT_PENDING_SENTINEL = object()
+_MENTE_PROGRESS_DONE_SENTINEL = object()
+
+_MENTE_GATEWAY_PROGRESS_PROTOCOL: dict[str, tuple[int, str]] = {
+    "executor.runtime_config_resolved": (1, "🏠 已锁定私有 runtime"),
+    "executor.auth_prepared": (2, "🔐 已准备运行时鉴权"),
+    "kernel.workspace_prepared": (3, "📦 已准备隔离工作区"),
+    "kernel.transport_invoking": (4, "🚀 正在调用 Mente runtime"),
+    "kernel.bridge_invoking": (4, "🚀 正在调用 Mente runtime"),
+    "kernel.codex.turn.started": (5, "🤖 Mente 已开始执行"),
+    "kernel.codex.turn.completed": (6, "🧮 Mente 回合完成"),
+    "kernel.transport_completed": (7, "📨 Mente runtime 已返回"),
+    "kernel.bridge_completed": (7, "📨 Mente runtime 已返回"),
+    "__gateway.completed__": (8, "✅ 执行完成，正在整理结果"),
+}
+
+
+def _resolve_mente_gateway_progress_step(
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> tuple[int, str] | None:
+    """Map stable Mente execution events to one user-facing progress step."""
+    del payload
+    return _MENTE_GATEWAY_PROGRESS_PROTOCOL.get(str(event_type or ""))
+
+
+def _resolve_mente_gateway_progress_detail(
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> str | None:
+    """Map low-level Mente/Codex events into user-facing detail lines."""
+    payload = payload or {}
+    normalized_type = str(event_type or "")
+    if normalized_type == "kernel.codex.command.started":
+        command = str(payload.get("command") or "").strip()
+        if command:
+            return f"💻 执行命令：{command}"
+    if normalized_type == "kernel.codex.command.completed":
+        command = str(payload.get("command") or "").strip()
+        if command:
+            exit_code = payload.get("exit_code")
+            prefix = "✅" if exit_code == 0 else "❌"
+            return f"{prefix} 命令完成：{command}"
+    if normalized_type == "kernel.codex.mcp_tool.started":
+        tool_name = str(payload.get("tool") or "").strip()
+        if tool_name:
+            return f"🛠️ 调用工具：{tool_name}"
+    if normalized_type == "kernel.codex.mcp_tool.completed":
+        tool_name = str(payload.get("tool") or "").strip()
+        if tool_name:
+            error = payload.get("error")
+            prefix = "✅" if not error else "❌"
+            return f"{prefix} 工具完成：{tool_name}"
+    return None
+
+
+def _render_mente_gateway_progress(steps: dict[int, str], details: list[str]) -> str:
+    """Render the accumulated Mente execution protocol as one editable message."""
+    lines = ["⏳ Mente 正在执行"]
+    for step_no in sorted(steps):
+        lines.append(f"{step_no}. {steps[step_no]}")
+    for index, detail in enumerate(details, start=len(steps) + 1):
+        lines.append(f"{index}. {detail}")
+    return "\n".join(lines)
+
+
+async def _send_mente_gateway_progress_messages(
+    *,
+    adapter: BasePlatformAdapter | None,
+    chat_id: str,
+    metadata: dict[str, Any] | None,
+    progress_queue: "queue.Queue[object]",
+    is_current,
+) -> None:
+    """Stream Mente protocol progress through one editable gateway message."""
+    if adapter is None:
+        return
+    if type(adapter).edit_message is BasePlatformAdapter.edit_message:
+        while not progress_queue.empty():
+            try:
+                progress_queue.get_nowait()
+            except Exception:
+                break
+        return
+
+    progress_steps: dict[int, str] = {}
+    progress_details: list[str] = []
+    progress_msg_id: str | None = None
+
+    while True:
+        if not is_current():
+            while not progress_queue.empty():
+                try:
+                    progress_queue.get_nowait()
+                except Exception:
+                    break
+            return
+
+        try:
+            raw = progress_queue.get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(0.05)
+            continue
+
+        if raw is _MENTE_PROGRESS_DONE_SENTINEL:
+            if progress_msg_id and progress_steps:
+                try:
+                    await adapter.edit_message(
+                        chat_id=chat_id,
+                        message_id=progress_msg_id,
+                        content=_render_mente_gateway_progress(progress_steps),
+                        finalize=True,
+                    )
+                except Exception:
+                    pass
+            return
+
+        if not isinstance(raw, tuple) or len(raw) != 2:
+            continue
+
+        kind, value = raw
+        if kind == "step":
+            step_no, step_text = value
+            if not isinstance(step_no, int) or not isinstance(step_text, str):
+                continue
+            if progress_steps.get(step_no) == step_text:
+                continue
+            progress_steps[step_no] = step_text
+        elif kind == "detail":
+            detail_text = str(value or "").strip()
+            if not detail_text:
+                continue
+            progress_details.append(detail_text)
+        else:
+            continue
+        full_text = _render_mente_gateway_progress(progress_steps, progress_details)
+
+        try:
+            if progress_msg_id is None:
+                result = await adapter.send(
+                    chat_id=chat_id,
+                    content=full_text,
+                    metadata=metadata,
+                )
+                progress_msg_id = result.message_id
+            else:
+                await adapter.edit_message(
+                    chat_id=chat_id,
+                    message_id=progress_msg_id,
+                    content=full_text,
+                    finalize=False,
+                )
+        except Exception as e:
+            logger.error("Mente progress message error: %s", e)
+            await asyncio.sleep(0.2)
 
 
 def _resolve_runtime_agent_kwargs() -> dict:
@@ -2435,7 +2591,7 @@ class GatewayRunner:
         
         Returns True if at least one adapter connected successfully.
         """
-        logger.info("Starting Hermes Gateway...")
+        logger.info("Starting Mente Gateway...")
         logger.info("Session storage: %s", self.config.sessions_dir)
         try:
             from hermes_cli.profiles import get_active_profile_name
@@ -2543,7 +2699,7 @@ class GatewayRunner:
         # SKIP suspension after a clean (graceful) shutdown — the previous
         # process already drained active agents, so sessions aren't stuck.
         # This prevents unwanted auto-resets after `hermes update`,
-        # `hermes gateway restart`, or `/restart`.
+        # `mente gateway restart`, or `/restart`.
         _clean_marker = _hermes_home / ".clean_shutdown"
         if _clean_marker.exists():
             logger.info("Previous gateway exited cleanly — skipping session suspension")
@@ -5807,7 +5963,7 @@ class GatewayRunner:
                 title = None
 
         lines = [
-            "📊 **Hermes Gateway Status**",
+            "📊 **Mente Gateway Status**",
             "",
             f"**Session ID:** `{session_entry.session_id}`",
         ]
@@ -6046,7 +6202,7 @@ class GatewayRunner:
             self.request_restart(detached=True, via_service=False)
         if active_agents:
             return f"⏳ Draining {active_agents} active agent(s) before restart..."
-        return "♻ Restarting gateway. If you aren't notified within 60 seconds, restart from the console with `hermes gateway restart`."
+        return "♻ Restarting gateway. If you aren't notified within 60 seconds, restart from the console with `mente gateway restart`."
 
     def _is_stale_restart_redelivery(self, event: MessageEvent) -> bool:
         """Return True if this /restart is a Telegram re-delivery we already handled.
@@ -9920,17 +10076,81 @@ class GatewayRunner:
                 event_message_id=event_message_id,
             )
 
+        user_config = _load_gateway_config()
+        platform_key = _platform_config_key(source.platform)
+        display_config = user_config.get("display", {})
+        if not isinstance(display_config, dict):
+            display_config = {}
+
+        from gateway.display_config import resolve_display_setting
+
         if os.getenv("HERMES_GATEWAY_EXECUTOR", "").strip().lower() == "mente":
-            result = await asyncio.to_thread(
-                _run_mente_gateway_turn,
-                message=message,
-                context_prompt=context_prompt,
-                history=history,
-                source=source,
-                session_id=session_id,
-                session_key=session_key,
-                channel_prompt=channel_prompt,
+            _resolved_tp = resolve_display_setting(user_config, platform_key, "tool_progress")
+            progress_mode = (
+                _resolved_tp
+                or os.getenv("HERMES_TOOL_PROGRESS_MODE")
+                or "all"
             )
+            tool_progress_enabled = progress_mode != "off" and source.platform != Platform.WEBHOOK
+            progress_queue = queue.Queue() if tool_progress_enabled else None
+            progress_task = None
+            mente_progress_last = [None]
+
+            if source.platform == Platform.SLACK:
+                _progress_thread_id = source.thread_id or event_message_id
+            else:
+                _progress_thread_id = source.thread_id
+            _progress_metadata = {"thread_id": _progress_thread_id} if _progress_thread_id else None
+
+            def _mente_event_callback(event_type: str, payload: dict[str, Any]) -> None:
+                if not progress_queue or not _run_still_current():
+                    return
+                step = _resolve_mente_gateway_progress_step(event_type, payload)
+                if step is not None and step != mente_progress_last[0]:
+                    mente_progress_last[0] = step
+                    progress_queue.put(("step", step))
+                detail = _resolve_mente_gateway_progress_detail(event_type, payload)
+                if detail:
+                    progress_queue.put(("detail", detail))
+
+            if progress_queue is not None:
+                progress_task = asyncio.create_task(
+                    _send_mente_gateway_progress_messages(
+                        adapter=self.adapters.get(source.platform),
+                        chat_id=source.chat_id,
+                        metadata=_progress_metadata,
+                        progress_queue=progress_queue,
+                        is_current=_run_still_current,
+                    )
+                )
+
+            try:
+                result = await asyncio.to_thread(
+                    _run_mente_gateway_turn,
+                    message=message,
+                    context_prompt=context_prompt,
+                    history=history,
+                    source=source,
+                    session_id=session_id,
+                    session_key=session_key,
+                    channel_prompt=channel_prompt,
+                    event_callback=_mente_event_callback if progress_queue is not None else None,
+                )
+                if progress_queue is not None:
+                    progress_queue.put(("step", _MENTE_GATEWAY_PROGRESS_PROTOCOL["__gateway.completed__"]))
+            finally:
+                if progress_queue is not None:
+                    progress_queue.put(_MENTE_PROGRESS_DONE_SENTINEL)
+                if progress_task is not None:
+                    try:
+                        await asyncio.wait_for(progress_task, timeout=2.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        progress_task.cancel()
+                        try:
+                            await progress_task
+                        except asyncio.CancelledError:
+                            pass
+
             _register_mente_post_delivery_reviews(
                 adapter=self.adapters.get(source.platform),
                 source=source,
@@ -9942,21 +10162,13 @@ class GatewayRunner:
             return result
 
         from run_agent import AIAgent
-        
-        user_config = _load_gateway_config()
-        platform_key = _platform_config_key(source.platform)
 
         from hermes_cli.tools_config import _get_platform_tools
         enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
 
-        display_config = user_config.get("display", {})
-        if not isinstance(display_config, dict):
-            display_config = {}
-
         # Per-platform display settings — resolve via display_config module
         # which checks display.platforms.<platform>.<key> first, then
         # display.<key> global, then built-in platform defaults.
-        from gateway.display_config import resolve_display_setting
 
         # Apply tool preview length config (0 = no limit)
         try:
@@ -9975,7 +10187,6 @@ class GatewayRunner:
         )
         # Disable tool progress for webhooks - they don't support message editing,
         # so each progress line would be sent as a separate message.
-        from gateway.config import Platform
         tool_progress_enabled = progress_mode != "off" and source.platform != Platform.WEBHOOK
         # Natural assistant status messages are intentionally independent from
         # tool progress and token streaming. Users can keep tool_progress quiet
@@ -10966,6 +11177,13 @@ class GatewayRunner:
                     _title_failure_cb = getattr(
                         agent, "_emit_auxiliary_failure", None
                     )
+                    _title_main_runtime = None
+                    _runtime_fn = getattr(agent, "_current_main_runtime", None)
+                    if callable(_runtime_fn):
+                        try:
+                            _title_main_runtime = _runtime_fn()
+                        except Exception:
+                            _title_main_runtime = None
                     maybe_auto_title(
                         self._session_db,
                         effective_session_id,
@@ -10973,6 +11191,7 @@ class GatewayRunner:
                         final_response,
                         all_msgs,
                         failure_callback=_title_failure_cb,
+                        main_runtime=_title_main_runtime,
                     )
                 except Exception:
                     pass
@@ -11788,14 +12007,14 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             hermes_home = str(get_hermes_home())
             logger.error(
                 "Another gateway instance is already running (PID %d, HERMES_HOME=%s). "
-                "Use 'hermes gateway restart' to replace it, or 'hermes gateway stop' first.",
+                "Use 'mente gateway restart' to replace it, or 'mente gateway stop' first.",
                 existing_pid, hermes_home,
             )
             print(
                 f"\n❌ Gateway already running (PID {existing_pid}).\n"
-                f"   Use 'hermes gateway restart' to replace it,\n"
-                f"   or 'hermes gateway stop' to kill it first.\n"
-                f"   Or use 'hermes gateway run --replace' to auto-replace.\n"
+                f"   Use 'mente gateway restart' to replace it,\n"
+                f"   or 'mente gateway stop' to kill it first.\n"
+                f"   Or use 'mente gateway run --replace' to auto-replace.\n"
             )
             return False
 
@@ -11863,7 +12082,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             _signal_initiated_shutdown = True
             logger.info("Received SIGTERM/SIGINT — initiating shutdown")
         # Diagnostic: log all hermes-related processes so we can identify
-        # what triggered the signal (hermes update, hermes gateway restart,
+        # what triggered the signal (hermes update, mente gateway restart,
         # a stale detached subprocess, etc.).
         try:
             import subprocess as _sp
@@ -12001,7 +12220,7 @@ def main():
     """CLI entry point for the gateway."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Hermes Gateway - Multi-platform messaging")
+    parser = argparse.ArgumentParser(description="Mente Gateway - Multi-platform messaging")
     parser.add_argument("--config", "-c", help="Path to gateway config file")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     

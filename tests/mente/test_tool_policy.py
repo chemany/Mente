@@ -1,24 +1,21 @@
 from kernel.codex.bridge.tool_surface import (
     filter_vendored_native_tools,
     get_vendored_capability_surface,
+    get_vendored_native_tool_names,
 )
 from mente.executors import ToolExposurePolicy, resolve_tool_exposure_policy
 
 
-EXPECTED_GATEWAY_NATIVE_TOOLS = [
-    "apply_patch",
-    "exec_command",
-    "request_user_input",
-    "update_plan",
-    "view_image",
-    "write_stdin",
-]
 EXPECTED_GATEWAY_BRIDGE_TOOLS = [
     "mente_memory_query",
     "mente_memory_save",
     "mente_task_lookup",
     "mente_session_notify",
     "mente_wechat_publish_draft",
+]
+EXPECTED_API_SERVER_BRIDGE_TOOLS = [
+    "mente_memory_query",
+    "mente_memory_save",
 ]
 
 
@@ -51,12 +48,14 @@ def test_resolve_tool_exposure_policy_filters_vendored_surface_and_keeps_bridge_
     monkeypatch.setenv("MENTE_MEMORY_READ_TOOL_ENABLED", "1")
     monkeypatch.setenv("MENTE_MEMORY_WRITE_TOOL_ENABLED", "1")
     surface = get_vendored_capability_surface()
+    vendored_native_tools = get_vendored_native_tool_names()
     policy = resolve_tool_exposure_policy(source="gateway", task_type="conversation")
 
     assert policy.native_tool_source == surface.native_tools.source_path
     assert policy.bridge_tool_source == "mente/executors/bridge_tools.py"
-    assert policy.native_tools == filter_vendored_native_tools(EXPECTED_GATEWAY_NATIVE_TOOLS)
+    assert policy.native_tools == vendored_native_tools
     assert policy.bridge_tools == EXPECTED_GATEWAY_BRIDGE_TOOLS
+    assert policy.session_capable is True
     assert all(tool not in policy.native_tools for tool in policy.bridge_tools)
 
 
@@ -65,6 +64,20 @@ def test_resolve_tool_exposure_policy_fails_closed_for_memory_bridge_tools_by_de
 
     assert "mente_memory_query" not in policy.bridge_tools
     assert "mente_memory_save" not in policy.bridge_tools
+
+
+def test_resolve_tool_exposure_policy_exposes_all_vendored_native_tools_for_api_server(
+    monkeypatch,
+):
+    monkeypatch.setenv("MENTE_MEMORY_READ_TOOL_ENABLED", "1")
+    monkeypatch.setenv("MENTE_MEMORY_WRITE_TOOL_ENABLED", "1")
+
+    policy = resolve_tool_exposure_policy(source="api_server", task_type="conversation")
+
+    assert policy.native_tools == get_vendored_native_tool_names()
+    assert policy.bridge_tools == EXPECTED_API_SERVER_BRIDGE_TOOLS
+    assert policy.session_capable is True
+    assert all(tool not in policy.native_tools for tool in policy.bridge_tools)
 
 
 

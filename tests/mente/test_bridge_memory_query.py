@@ -147,6 +147,60 @@ def test_query_mente_memory_honors_requested_scope():
     }
 
 
+def test_query_mente_memory_excludes_internal_session_summaries_from_explicit_reads():
+    repo = InMemoryMemoryRepository()
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_summary",
+            session_id="session_1",
+            task_id="task_old_summary",
+            task_type="conversation",
+            source="api_server",
+            scope="session",
+            kind="session_summary",
+            fact="Session summary: user prefers concise JSON replies.",
+            score=3.0,
+        )
+    )
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_session",
+            session_id="session_1",
+            task_id="task_old_session",
+            task_type="conversation",
+            source="api_server",
+            scope="session",
+            fact="User prefers concise replies.",
+            score=2.0,
+        )
+    )
+
+    result = query_mente_memory(
+        memory_scope="session",
+        limit=1,
+        repository=repo,
+        environment=_build_environment(
+            source="api_server",
+            policy_id="api_server:conversation",
+        ),
+    )
+
+    assert result == {
+        "ok": True,
+        "policy_id": "api_server:conversation",
+        "results": [
+            {
+                "memory_id": "mem_session",
+                "task_id": "task_old_session",
+                "scope": "session",
+                "fact": "User prefers concise replies.",
+                "source": "api_server",
+                "task_type": "conversation",
+            }
+        ],
+    }
+
+
 def test_query_mente_memory_fails_closed_for_disallowed_policy():
     repo = InMemoryMemoryRepository()
     repo.save(

@@ -85,6 +85,56 @@ class _FollowupAdapter(BasePlatformAdapter):
         return {"id": chat_id}
 
 
+class _ProgressAdapter(BasePlatformAdapter):
+    SUPPORTS_MESSAGE_EDITING = True
+
+    def __init__(self, platform=Platform.FEISHU):
+        self.platform = platform
+        self.sent = []
+        self.edits = []
+
+    @property
+    def name(self) -> str:
+        return "progress-adapter"
+
+    async def connect(self) -> bool:
+        return True
+
+    async def disconnect(self) -> None:
+        return None
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None) -> SendResult:
+        self.sent.append(
+            {
+                "chat_id": chat_id,
+                "content": content,
+                "reply_to": reply_to,
+                "metadata": metadata,
+            }
+        )
+        return SendResult(success=True, message_id="progress-msg-1")
+
+    async def edit_message(self, chat_id, message_id, content, *, finalize=False) -> SendResult:
+        self.edits.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "content": content,
+                "finalize": finalize,
+            }
+        )
+        return SendResult(success=True, message_id=message_id)
+
+    async def send_typing(self, chat_id, metadata=None) -> None:
+        return None
+
+    async def stop_typing(self, chat_id) -> None:
+        return None
+
+    async def get_chat_info(self, chat_id: str):
+        return {"id": chat_id}
+
+
 def test_format_mente_memory_review_outcome_persisted():
     assert gateway_run._format_mente_memory_review_outcome(
         {
@@ -258,6 +308,156 @@ async def test_run_agent_registers_post_delivery_reviews_and_sends_compact_follo
         "💾 记忆复盘已保存（1 条）",
         "🛠️ 技能复盘已生成建议：coding/python-debug",
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_emits_progress_protocol_messages(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _direct_to_thread)
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        for event_type in (
+            "executor.runtime_config_resolved",
+            "executor.auth_prepared",
+            "kernel.workspace_prepared",
+            "kernel.bridge_invoking",
+            "kernel.codex.turn.started",
+            "kernel.codex.turn.completed",
+            "kernel.bridge_completed",
+        ):
+            event_callback(event_type, {})
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="帮我看看这个项目报错原因",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=9,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert result["final_response"] == "done"
+    all_progress_text = "\n".join(
+        [entry["content"] for entry in adapter.sent]
+        + [entry["content"] for entry in adapter.edits]
+    )
+    assert "🏠 已锁定私有 runtime" in all_progress_text
+    assert "🔐 已准备运行时鉴权" in all_progress_text
+    assert "📦 已准备隔离工作区" in all_progress_text
+    assert "🚀 正在调用 Mente runtime" in all_progress_text
+    assert "🤖 Mente 已开始执行" in all_progress_text
+    assert "🧮 Mente 回合完成" in all_progress_text
+    assert "📨 Mente runtime 已返回" in all_progress_text
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_emits_codex_command_detail_progress(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _direct_to_thread)
+
+    command = "/bin/bash -lc 'which google-chrome'"
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        event_callback("kernel.codex.command.started", {"command": command})
+        event_callback(
+            "kernel.codex.command.completed",
+            {"command": command, "exit_code": 0},
+        )
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="帮我看看浏览器在哪",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=10,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert result["final_response"] == "done"
+    all_progress_text = "\n".join(
+        [entry["content"] for entry in adapter.sent]
+        + [entry["content"] for entry in adapter.edits]
+    )
+    assert f"💻 执行命令：{command}" in all_progress_text
+    assert f"✅ 命令完成：{command}" in all_progress_text
 
 
 @pytest.mark.asyncio

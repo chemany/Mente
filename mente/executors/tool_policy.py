@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from kernel.codex.bridge.tool_surface import (
     filter_vendored_native_tools,
     get_vendored_capability_surface,
+    get_vendored_native_tool_names,
 )
 from mente.executors.bridge_tools import get_bridge_tool_names, get_bridge_tool_registry
 from mente.feature_flags import filter_enabled_bridge_tools
@@ -19,25 +20,19 @@ _BRIDGE_TOOL_SOURCE_PATH = "mente/executors/bridge_tools.py"
 
 @dataclass(frozen=True)
 class _PolicyProfile:
-    native_tools: tuple[str, ...]
-    bridge_tools: tuple[str, ...]
+    native_tools: tuple[str, ...] = ()
+    bridge_tools: tuple[str, ...] = ()
     session_capable: bool = False
+    expose_all_native_tools: bool = False
 
 
 _POLICY_PROFILES: dict[tuple[str, str], _PolicyProfile] = {
     ("cron", "cron"): _PolicyProfile(
-        native_tools=("exec_command", "update_plan", "write_stdin"),
+        expose_all_native_tools=True,
         bridge_tools=("mente_schedule_cron", "mente_task_lookup"),
     ),
     ("gateway", "conversation"): _PolicyProfile(
-        native_tools=(
-            "apply_patch",
-            "exec_command",
-            "request_user_input",
-            "update_plan",
-            "view_image",
-            "write_stdin",
-        ),
+        expose_all_native_tools=True,
         bridge_tools=(
             "mente_memory_query",
             "mente_memory_save",
@@ -45,15 +40,10 @@ _POLICY_PROFILES: dict[tuple[str, str], _PolicyProfile] = {
             "mente_session_notify",
             "mente_wechat_publish_draft",
         ),
+        session_capable=True,
     ),
     ("api_server", "conversation"): _PolicyProfile(
-        native_tools=(
-            "apply_patch",
-            "exec_command",
-            "update_plan",
-            "view_image",
-            "write_stdin",
-        ),
+        expose_all_native_tools=True,
         bridge_tools=("mente_memory_query", "mente_memory_save"),
         session_capable=True,
     ),
@@ -88,6 +78,12 @@ def _filter_bridge_tools(allowed_names: tuple[str, ...]) -> list[str]:
     return [name for name in get_bridge_tool_names() if name in enabled_names]
 
 
+def _resolve_native_tools(profile: _PolicyProfile) -> list[str]:
+    if profile.expose_all_native_tools:
+        return get_vendored_native_tool_names()
+    return filter_vendored_native_tools(profile.native_tools)
+
+
 
 def resolve_tool_exposure_policy(*, source: str, task_type: str) -> ToolExposurePolicy:
     """Resolve a Mente outer policy over the vendored Codex native capability surface."""
@@ -97,7 +93,7 @@ def resolve_tool_exposure_policy(*, source: str, task_type: str) -> ToolExposure
     return ToolExposurePolicy(
         policy_id=f"{source}:{task_type}",
         source=source,
-        native_tools=filter_vendored_native_tools(profile.native_tools),
+        native_tools=_resolve_native_tools(profile),
         bridge_tools=_filter_bridge_tools(profile.bridge_tools),
         session_capable=profile.session_capable,
         native_tool_source=vendored_surface.native_tools.source_path,

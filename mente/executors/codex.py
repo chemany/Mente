@@ -19,7 +19,7 @@ from kernel.codex.session.protocol import KernelSessionMode, KernelSessionReques
 from mente.execution_events import ExecutionEventCallback, emit_execution_event
 from mente.executors.bridge_mcp import augment_runtime_config_for_bridge_tools
 from mente.executors.kernel_adapter import CodexKernelAdapter
-from mente.executors.prompting import render_execution_prompt
+from mente.executors.prompting import normalize_user_facing_summary, render_execution_prompt
 from mente.executors.runtime_auth import write_private_runtime_auth
 from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
 from mente.feature_flags import (
@@ -376,7 +376,10 @@ class CodexExecutor(CodexKernelAdapter):
         """Translate the vendored kernel result back into the Mente executor contract."""
         translated = ExecutionResult(
             status=result.status,
-            summary=result.assistant_summary,
+            summary=normalize_user_facing_summary(
+                result.assistant_summary,
+                user_request=request.user_request,
+            ),
             commands_run=list(result.commands_run),
             memory_candidates=list(result.memory_candidates),
             failure_reason=result.backend_failure,

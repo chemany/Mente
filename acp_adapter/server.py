@@ -1,4 +1,4 @@
-"""ACP agent server — exposes Hermes Agent via the Agent Client Protocol."""
+"""ACP agent server — exposes Mente via the Agent Client Protocol."""
 
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ class HermesACPAgent(acp.Agent):
         "context": "Show conversation context info",
         "reset": "Clear conversation history",
         "compact": "Compress conversation context",
-        "version": "Show Hermes version",
+        "version": "Show Mente version",
     }
 
     _ADVERTISED_COMMANDS = (
@@ -139,7 +139,7 @@ class HermesACPAgent(acp.Agent):
         },
         {
             "name": "version",
-            "description": "Show Hermes version",
+            "description": "Show Mente version",
         },
     )
 
@@ -348,7 +348,7 @@ class HermesACPAgent(acp.Agent):
 
         return InitializeResponse(
             protocol_version=acp.PROTOCOL_VERSION,
-            agent_info=Implementation(name="hermes-agent", version=HERMES_VERSION),
+            agent_info=Implementation(name="mente-agent", version=HERMES_VERSION),
             agent_capabilities=AgentCapabilities(
                 load_session=True,
                 session_capabilities=SessionCapabilities(
@@ -624,12 +624,20 @@ class HermesACPAgent(acp.Agent):
             try:
                 from agent.title_generator import maybe_auto_title
 
+                _title_main_runtime = None
+                _runtime_fn = getattr(state.agent, "_current_main_runtime", None)
+                if callable(_runtime_fn):
+                    try:
+                        _title_main_runtime = _runtime_fn()
+                    except Exception:
+                        _title_main_runtime = None
                 maybe_auto_title(
                     self.session_manager._get_db(),
                     session_id,
                     user_text,
                     final_response,
                     state.history,
+                    main_runtime=_title_main_runtime,
                 )
             except Exception:
                 logger.debug("Failed to auto-title ACP session %s", session_id, exc_info=True)
@@ -842,7 +850,7 @@ class HermesACPAgent(acp.Agent):
             return f"Compression failed: {e}"
 
     def _cmd_version(self, args: str, state: SessionState) -> str:
-        return f"Hermes Agent v{HERMES_VERSION}"
+        return f"Mente v{HERMES_VERSION}"
 
     # ---- Model switching (ACP protocol method) -------------------------------
 

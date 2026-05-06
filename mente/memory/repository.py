@@ -100,6 +100,7 @@ class MemoryRepository(Protocol):
         limit: int = 5,
         source: str | None = None,
         kind: str | None = None,
+        exclude_kinds: tuple[str, ...] | None = None,
         include_inactive: bool = False,
     ) -> list[MemoryRecord]:
         """Return memories for one scope ordered by deterministic relevance."""
@@ -328,6 +329,7 @@ class InMemoryMemoryRepository:
         limit: int = 5,
         source: str | None = None,
         kind: str | None = None,
+        exclude_kinds: tuple[str, ...] | None = None,
         include_inactive: bool = False,
     ) -> list[MemoryRecord]:
         if limit <= 0:
@@ -337,6 +339,8 @@ class InMemoryMemoryRepository:
             records = [record for record in records if record.source == source]
         if kind is not None:
             records = [record for record in records if record.kind == kind]
+        if exclude_kinds:
+            records = [record for record in records if record.kind not in exclude_kinds]
         if not include_inactive:
             records = [record for record in records if record.active]
         if memory_scope == "session":
@@ -736,6 +740,7 @@ class SQLiteMemoryRepository:
         limit: int = 5,
         source: str | None = None,
         kind: str | None = None,
+        exclude_kinds: tuple[str, ...] | None = None,
         include_inactive: bool = False,
     ) -> list[MemoryRecord]:
         if limit <= 0:
@@ -760,6 +765,10 @@ class SQLiteMemoryRepository:
         if kind is not None:
             clauses.append("kind = ?")
             params.append(kind)
+        if exclude_kinds:
+            placeholders = ", ".join("?" for _ in exclude_kinds)
+            clauses.append(f"kind NOT IN ({placeholders})")
+            params.extend(exclude_kinds)
         if not include_inactive:
             clauses.append("active = 1")
 

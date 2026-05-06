@@ -88,6 +88,56 @@ class TestSystemdServiceRefresh:
 
 
 class TestGeneratedSystemdUnits:
+    def test_default_gateway_branding_uses_mente_names(self, monkeypatch, tmp_path):
+        default_home = tmp_path / ".hermes"
+        default_home.mkdir()
+        monkeypatch.setattr(gateway_cli, "get_hermes_home", lambda: default_home)
+        monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda: default_home)
+
+        assert gateway_cli.get_service_name() == "mente-gateway"
+        assert gateway_cli.SERVICE_DESCRIPTION == "Mente Gateway - Messaging Platform Integration"
+        assert gateway_cli.get_launchd_label() == "ai.mente.gateway"
+
+    def test_user_unit_sets_explicit_runtime_override_for_source_checkout_when_artifact_missing(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(gateway_cli, "load_release_install_manifest", lambda project_root=None: None)
+        monkeypatch.setattr(
+            gateway_cli,
+            "expected_vendored_runtime_binary_path",
+            lambda repo_root=None: Path("/tmp/missing-vendored-runtime"),
+        )
+        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: "/opt/codex/bin/codex" if cmd == "codex" else None)
+
+        unit = gateway_cli.generate_systemd_unit(system=False)
+
+        assert 'Environment="MENTE_CODEX_RUNTIME_BIN=/opt/codex/bin/codex"' in unit
+
+    def test_user_unit_does_not_set_runtime_override_for_release_installs(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            gateway_cli,
+            "load_release_install_manifest",
+            lambda project_root=None: {"install_mode": "release"},
+        )
+        monkeypatch.setattr(
+            gateway_cli,
+            "expected_vendored_runtime_binary_path",
+            lambda repo_root=None: Path("/tmp/missing-vendored-runtime"),
+        )
+        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: "/opt/codex/bin/codex" if cmd == "codex" else None)
+
+        unit = gateway_cli.generate_systemd_unit(system=False)
+
+        assert 'Environment="MENTE_CODEX_RUNTIME_BIN=' not in unit
+
+    def test_user_unit_enables_mente_gateway_and_api_server_executors(self):
+        unit = gateway_cli.generate_systemd_unit(system=False)
+
+        assert 'Environment="HERMES_GATEWAY_EXECUTOR=mente"' in unit
+        assert 'Environment="HERMES_API_SERVER_EXECUTOR=mente"' in unit
+
     def test_user_unit_avoids_recursive_execstop_and_uses_extended_stop_timeout(self):
         unit = gateway_cli.generate_systemd_unit(system=False)
 
@@ -118,6 +168,12 @@ class TestGeneratedSystemdUnits:
         # systemd doesn't SIGKILL the cgroup before post-interrupt cleanup
         # (tool subprocess kill, adapter disconnect) runs — issue #8202.
         assert "TimeoutStopSec=90" in unit
+
+    def test_system_unit_enables_mente_gateway_and_api_server_executors(self):
+        unit = gateway_cli.generate_systemd_unit(system=True)
+
+        assert 'Environment="HERMES_GATEWAY_EXECUTOR=mente"' in unit
+        assert 'Environment="HERMES_API_SERVER_EXECUTOR=mente"' in unit
 
     def test_user_unit_exports_mente_home_alongside_hermes_home(self, monkeypatch, tmp_path):
         mente_home = tmp_path / ".mente"
@@ -702,7 +758,7 @@ class TestGatewaySystemServiceRouting:
 
         out = capsys.readouterr().out
         assert "not supported on Termux" in out
-        assert "Run manually: hermes gateway" in out
+        assert "Run manually: mente gateway" in out
 
     def test_gateway_status_prefers_system_service_when_only_system_unit_exists(self, monkeypatch):
         user_unit = SimpleNamespace(exists=lambda: False)
@@ -775,7 +831,7 @@ class TestGatewaySystemServiceRouting:
 
         out = capsys.readouterr().out
         assert "Gateway is not running" in out
-        assert "nohup hermes gateway" in out
+        assert "nohup mente gateway" in out
         assert "install as user service" not in out
 
     def test_gateway_restart_does_not_fallback_to_foreground_when_launchd_restart_fails(self, tmp_path, monkeypatch):
@@ -1179,7 +1235,7 @@ class TestPreflightUserSystemd:
 
         msg = str(exc_info.value)
         assert "sudo loginctl enable-linger" in msg
-        assert "hermes gateway run" in msg  # foreground fallback mentioned
+        assert "mente gateway run" in msg  # foreground fallback mentioned
         assert "Interactive authentication required" in msg
 
     def test_raises_when_loginctl_missing(self, monkeypatch):
@@ -1332,7 +1388,7 @@ class TestProfileArg:
 
         plist_path = gateway_cli.get_launchd_plist_path()
 
-        assert plist_path == machine_home / "Library" / "LaunchAgents" / "ai.hermes.gateway-orcha.plist"
+        assert plist_path == machine_home / "Library" / "LaunchAgents" / "ai.mente.gateway-orcha.plist"
 
 
 class TestRemapPathForUser:
@@ -1480,7 +1536,7 @@ class TestDockerAwareGateway:
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "docker" in out.lower()
-        assert "hermes gateway run" in out
+        assert "mente gateway run" in out
 
 
 class TestLegacyHermesUnitDetection:
@@ -1548,8 +1604,9 @@ class TestLegacyHermesUnitDetection:
         """CRITICAL: profile units must NOT be flagged as legacy.
 
         Teknium's concern — ``hermes-gateway-coder.service`` is our standard
-        naming for the ``coder`` profile. The legacy detector is an explicit
-        allowlist, not a glob, so profile units are safe.
+        legacy-era naming for the ``coder`` profile. The legacy detector is an
+        explicit allowlist, not a glob, so profile units are safe even though
+        the old default ``hermes-gateway.service`` is now migratable.
         """
         user_dir, system_dir = self._setup_search_paths(tmp_path, monkeypatch)
         # Drop profile units in BOTH scopes with our ExecStart
@@ -1566,8 +1623,9 @@ class TestLegacyHermesUnitDetection:
 
         results = gateway_cli._find_legacy_hermes_units()
 
-        assert results == []
-        assert gateway_cli.has_legacy_hermes_units() is False
+        assert len(results) == 2
+        assert {name for name, _, _ in results} == {"hermes-gateway.service"}
+        assert gateway_cli.has_legacy_hermes_units() is True
 
     def test_ignores_unrelated_hermes_service(self, tmp_path, monkeypatch):
         """Third-party ``hermes.service`` that isn't ours stays untouched.
@@ -1648,7 +1706,7 @@ class TestLegacyHermesUnitDetection:
 
         assert "Legacy" in out
         assert "hermes.service" in out
-        assert "hermes gateway migrate-legacy" in out
+        assert "mente gateway migrate-legacy" in out
 
     def test_handles_unreadable_unit_file_gracefully(self, tmp_path, monkeypatch):
         """A permission error reading a unit file must not crash detection."""
@@ -1752,7 +1810,7 @@ class TestRemoveLegacyHermesUnits:
         assert remaining == [legacy]
         assert legacy.exists()  # Not removed — requires sudo
         out = capsys.readouterr().out
-        assert "sudo hermes gateway migrate-legacy" in out
+        assert "sudo mente gateway migrate-legacy" in out
 
     def test_system_scope_with_root_removes(self, tmp_path, monkeypatch, capsys):
         _, system_dir, calls = self._setup(tmp_path, monkeypatch, as_root=True)
@@ -1801,11 +1859,11 @@ class TestRemoveLegacyHermesUnits:
 
         removed, remaining = gateway_cli.remove_legacy_hermes_units(interactive=False)
 
-        assert removed == 0
+        assert removed == 1
         assert remaining == []
-        # Both the profile unit and the current default unit must survive
+        # The profile unit survives, while the legacy default unit is removed.
         assert profile_unit.exists()
-        assert default_unit.exists()
+        assert not default_unit.exists()
 
     def test_interactive_prompt_no_skips_removal(self, tmp_path, monkeypatch, capsys):
         """When interactive=True and user answers no, no removal happens."""
