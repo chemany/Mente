@@ -1,20 +1,36 @@
 {
-  "name": "hermes-agent",
-  "version": "1.0.0",
-  "description": "An AI agent with advanced tool-calling capabilities, featuring a flexible toolsets system for organizing and managing tools.",
-  "private": true,
+  "name": "mente-agent",
+  "version": "0.11.0",
+  "description": "Thin npm bootstrapper for Mente Agent. Installs and launches the full Mente runtime with a single global command.",
   "scripts": {
-    "postinstall": "echo '✅ Browser tools ready. Run: python run_agent.py --help'"
+    "postinstall": "echo '✅ mente-agent bootstrapper installed. Run: mente'",
+    "test:npm-installer": "node --test tests/npm-installer/*.test.mjs"
   },
+  "bin": {
+    "mente": "npm/installer/bin/mente.cjs",
+    "mente-agent": "npm/installer/bin/mente.cjs"
+  },
+  "files": [
+    "npm/installer/bin",
+    "npm/installer/lib",
+    "scripts/install.sh",
+    "scripts/install.ps1",
+    "scripts/install.cmd",
+    "README.md",
+    "LICENSE"
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NousResearch/Hermes-Agent.git"
+    "url": "git+https://github.com/chemany/Mente.git"
   },
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/NousResearch/Hermes-Agent/issues"
+    "url": "https://github.com/chemany/Mente/issues"
   },
-  "homepage": "https://github.com/NousResearch/Hermes-Agent#readme",
+  "homepage": "https://github.com/chemany/Mente#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@askjo/camofox-browser": "^1.5.2",
     "agent-browser": "^0.26.0"

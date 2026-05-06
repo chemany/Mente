@@ -7,11 +7,22 @@
 <p align="center">
   <a href="https://mente-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-mente--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/NousResearch/mente-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://github.com/chemany/Mente/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
   <a href="https://nousresearch.com"><img src="https://img.shields.io/badge/Built%20by-Nous%20Research-blueviolet?style=for-the-badge" alt="Built by Nous Research"></a>
 </p>
 
 **The self-improving AI agent built by [Nous Research](https://nousresearch.com).** Mente is the primary product path and command surface. It creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
+
+This branch also completes a product-surface consolidation pass:
+
+- **External surface is uniformly Mente** across CLI, gateway progress, messaging, and user-facing replies.
+- **Internal execution still runs on the Codex-backed executor** — the rename is presentation-layer cleanup, not a runtime downgrade.
+- **Gateway progress is visible again** with Mente-facing step names while preserving detailed command/tool activity.
+- **Config/admin operations are now explicit** through a dedicated Mente skill for API keys, provider auth, `.env`, `config.yaml`, and gateway restart rules.
+
+<p align="center">
+  <img src="assets/mente-stack.svg" alt="Mente product surface with Codex-backed core and npm bootstrap installer" width="100%">
+</p>
 
 Use any model you want — [Nous Portal](https://portal.nousresearch.com), [OpenRouter](https://openrouter.ai) (200+ models), [NVIDIA NIM](https://build.nvidia.com) (Nemotron), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, or your own endpoint. Switch with `mente model` — no code changes, no lock-in.
 
@@ -29,8 +40,19 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), [Open
 
 ## Quick Install
 
+### Option 1: npm bootstrapper
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NousResearch/mente-agent/main/scripts/install.sh | bash
+npm install -g mente-agent
+mente
+```
+
+The npm package is intentionally **thin**. It publishes only the launcher and installer scripts, then bootstraps the full Mente runtime on first run. By default the bootstrapper installs from the repo's `main` branch, and you can force a tagged release with `MENTE_BOOTSTRAP_RELEASE=<tag> mente`. It does **not** publish your local `.env`, `auth.json`, `~/.mente`, `~/.hermes`, sessions, logs, or other machine-local state.
+
+### Option 2: direct installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash
 ```
 
 Works on Linux, macOS, WSL2, and Android via Termux. The one-click installer is release-pinned by default and can also bootstrap a matching vendored Codex runtime from local/offline assets via `--runtime-artifact-manifest` and `--runtime-wheel`.
@@ -65,6 +87,22 @@ mente doctor        # Diagnose any issues
 ```
 
 📖 **[Full documentation →](https://mente-agent.nousresearch.com/docs/)**
+
+## What This Refresh Changes
+
+This README tracks the current Mente packaging and runtime direction:
+
+- **One install command for GitHub visitors:** `npm install -g mente-agent`
+- **One visible agent identity:** user-facing replies and progress now present as `Mente`
+- **Same execution depth under the hood:** complex coding and tool work still route through the Codex-backed executor
+- **Safer operations surface:** packaging is whitelist-based, and config/admin actions now have explicit handling for API keys, provider auth, and restart boundaries
+
+If you are evaluating Mente from GitHub, the practical model is:
+
+1. Install the bootstrap package from npm.
+2. Launch `mente`.
+3. Let the bundled installer bring down the full runtime.
+4. Use Mente normally from CLI or gateway surfaces.
 
 ## CLI vs Messaging Quick Reference
 
@@ -146,8 +184,8 @@ We welcome contributions! See the [Contributing Guide](https://mente-agent.nousr
 Quick start for contributors — clone and go with `setup-hermes.sh`:
 
 ```bash
-git clone https://github.com/NousResearch/mente-agent.git
-cd mente-agent
+git clone https://github.com/chemany/Mente.git
+cd Mente
 ./setup-hermes.sh     # installs uv, creates venv, installs .[all], symlinks ~/.local/bin/mente
 ./mente               # auto-detects the venv, no need to `source` first
 ```
@@ -170,7 +208,7 @@ scripts/run_tests.sh
 
 - 💬 [Discord](https://discord.gg/NousResearch)
 - 📚 [Skills Hub](https://agentskills.io)
-- 🐛 [Issues](https://github.com/NousResearch/mente-agent/issues)
+- 🐛 [Issues](https://github.com/chemany/Mente/issues)
 - 🔌 [HermesClaw](https://github.com/AaronWong1999/hermesclaw) — Community WeChat bridge: Run Mente and OpenClaw on the same WeChat account.
 
 ---
