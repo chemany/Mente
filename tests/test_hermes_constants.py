@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 import hermes_constants
-from hermes_constants import get_default_hermes_root, is_container
+from hermes_constants import get_default_hermes_root, get_hermes_home, is_container
 
 
 class TestGetDefaultHermesRoot:
@@ -61,6 +61,23 @@ class TestGetDefaultHermesRoot:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("HERMES_HOME", str(profile))
         assert get_default_hermes_root() == docker_root
+
+
+class TestGetHermesHome:
+    def test_prefers_explicit_hermes_home_over_mente_home(self, tmp_path, monkeypatch):
+        mente_home = tmp_path / ".mente"
+        hermes_home = tmp_path / ".hermes"
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        assert get_hermes_home() == hermes_home
+
+    def test_falls_back_to_mente_home_when_hermes_home_unset(self, tmp_path, monkeypatch):
+        mente_home = tmp_path / ".mente"
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+        assert get_hermes_home() == mente_home
 
 
 class TestIsContainer:

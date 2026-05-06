@@ -11,15 +11,22 @@ from pathlib import Path
 def get_hermes_home() -> Path:
     """Return the primary home directory (default: ~/.mente).
 
-    Reads MENTE_HOME first for the new product root, then HERMES_HOME for
-    backward compatibility, and falls back to ~/.hermes.
-    This is the single source of truth — all other copies should import this.
+    Reads HERMES_HOME first for the runtime/config root, then falls back to
+    MENTE_HOME when no explicit HERMES_HOME is set. This preserves the split
+    between the legacy/runtime config home (gateway state, auth, config.yaml,
+    logs) and the newer Mente-owned home used for private runtime assets.
+
+    When neither env var is set, falls back to ~/.hermes.
     """
+    val = os.environ.get("HERMES_HOME", "").strip()
+    if val:
+        return Path(val).expanduser()
+
     mente_val = os.environ.get("MENTE_HOME", "").strip()
     if mente_val:
         return Path(mente_val).expanduser()
-    val = os.environ.get("HERMES_HOME", "").strip()
-    return Path(val).expanduser() if val else Path.home() / ".hermes"
+
+    return Path.home() / ".hermes"
 
 
 def get_mente_home() -> Path:

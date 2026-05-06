@@ -62,7 +62,7 @@ def test_get_mente_home_ignores_legacy_hermes_layout(monkeypatch, tmp_path):
     assert get_mente_home() == tmp_path / ".mente"
 
 
-def test_get_hermes_home_prefers_mente_home(monkeypatch, tmp_path):
+def test_get_hermes_home_prefers_explicit_hermes_home(monkeypatch, tmp_path):
     mente_home = tmp_path / ".mente"
     hermes_home = tmp_path / ".hermes"
     monkeypatch.setenv("MENTE_HOME", str(mente_home))
@@ -70,4 +70,4 @@ def test_get_hermes_home_prefers_mente_home(monkeypatch, tmp_path):
 
     from hermes_constants import get_hermes_home
 
-    assert get_hermes_home() == mente_home
+    assert get_hermes_home() == hermes_home
