@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import pkg from '../../package.json' with { type: 'json' };
 import installerPaths from '../../npm/installer/lib/paths.cjs';
+import publishCheck from '../../npm/installer/lib/publish-check.cjs';
 
 const {
   findInstalledMenteBinary,
@@ -12,6 +13,10 @@ const {
   getBundledInstallScript,
   getPackageRoot,
 } = installerPaths;
+const {
+  getExpectedPublishTag,
+  validatePublishContext,
+} = publishCheck;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,4 +76,22 @@ test('package metadata is publishable and locked down', () => {
       `missing published file entry: ${requiredEntry}`,
     );
   }
+});
+
+test('publish helper derives npm release tag from package version', () => {
+  assert.equal(getExpectedPublishTag(pkg.version), `npm-v${pkg.version}`);
+});
+
+test('publish helper rejects mismatched release tags', () => {
+  assert.throws(
+    () =>
+      validatePublishContext({
+        eventName: 'push',
+        refType: 'tag',
+        refName: 'npm-v9.9.9',
+        packageName: pkg.name,
+        packageVersion: pkg.version,
+      }),
+    /does not match package\.json version/i,
+  );
 });

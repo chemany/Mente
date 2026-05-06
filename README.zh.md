@@ -63,6 +63,8 @@ mente
 
 目前仓库里的 npm 包已经 **具备可发布状态，但还没有真正发布到 npm registry**。在首个公开 npm 版本上线前，请先使用上面的方案 1。等包真正发布后，`npm install -g mente-agent` 才是对外的一键安装主路径。
 
+如果你是发布操作人，最短 npm 发布说明见：[docs/releasing/npm.md](docs/releasing/npm.md)。
+
 > **Android / Termux：** 已验证的手动安装路径见 [Termux 指南](https://chemany.github.io/Mente/docs/getting-started/termux)。在 Termux 上，Mente 会安装精简过的 `.[termux]` 依赖集合，因为完整的 `.[all]` 目前会拉到 Android 不兼容的语音依赖。
 >
 > **Windows：** 暂不支持原生 Windows。请先安装 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)，再在 WSL2 里执行上面的命令。

@@ -4,7 +4,8 @@
   "description": "Thin npm bootstrapper for Mente Agent. Installs and launches the full Mente runtime with a single global command.",
   "scripts": {
     "postinstall": "echo '✅ mente-agent bootstrapper installed. Run: mente'",
-    "test:npm-installer": "node --test tests/npm-installer/*.test.mjs"
+    "test:npm-installer": "node --test tests/npm-installer/*.test.mjs",
+    "release:check:npm": "node scripts/validate-npm-publish.cjs --event workflow_dispatch"
   },
   "bin": {
     "mente": "npm/installer/bin/mente.cjs",

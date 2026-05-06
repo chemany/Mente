@@ -2,6 +2,11 @@ name: npm-publish
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_version:
+        description: "Optional package version to confirm during preflight, e.g. 0.11.0"
+        required: false
+        type: string
   push:
     tags:
       - "npm-v*"
@@ -27,10 +32,45 @@ jobs:
       - name: Verify npm installer tests
         run: npm run test:npm-installer
 
+      - name: Validate publish context
+        id: publish_context
+        run: node scripts/validate-npm-publish.cjs --github-output "$GITHUB_OUTPUT"
+        env:
+          INPUT_EXPECTED_VERSION: ${{ inputs.expected_version }}
+
       - name: Verify package contents
         run: npm pack --dry-run
 
+      - name: Check if version already exists on npm
+        id: npm_registry
+        run: |
+          PACKAGE_NAME="${{ steps.publish_context.outputs.package_name }}"
+          PACKAGE_VERSION="${{ steps.publish_context.outputs.package_version }}"
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            if [ "${{ steps.publish_context.outputs.should_publish }}" = "true" ]; then
+              echo "Version ${PACKAGE_NAME}@${PACKAGE_VERSION} already exists on npm." >&2
+              exit 1
+            fi
+            echo "Preflight note: ${PACKAGE_NAME}@${PACKAGE_VERSION} is already published."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "Version ${PACKAGE_NAME}@${PACKAGE_VERSION} is available for publish."
+          fi
+        shell: bash
+
+      - name: Preflight summary
+        if: ${{ steps.publish_context.outputs.should_publish != 'true' }}
+        run: |
+          echo "npm preflight passed."
+          echo "Package: ${{ steps.publish_context.outputs.package_name }}"
+          echo "Version: ${{ steps.publish_context.outputs.package_version }}"
+          echo "Expected publish tag: ${{ steps.publish_context.outputs.expected_tag }}"
+          echo "Already published: ${{ steps.npm_registry.outputs.already_published }}"
+        shell: bash
+
       - name: Publish package
+        if: ${{ steps.publish_context.outputs.should_publish == 'true' }}
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

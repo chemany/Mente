@@ -63,6 +63,8 @@ The npm package is intentionally **thin**. It publishes only the launcher and in
 
 At the moment, the repository is **ready for npm publish but not yet live on the npm registry**. Until the first public npm release is published, use Option 1 above. Once the package is published, the `npm install -g mente-agent` flow becomes the primary one-line install path.
 
+Release operators can use the short npm runbook here: [docs/releasing/npm.md](docs/releasing/npm.md).
+
 > **Android / Termux:** The tested manual path is documented in the [Termux guide](https://chemany.github.io/Mente/docs/getting-started/termux). On Termux, Mente installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
 >
 > **Windows:** Native Windows is not supported. Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and run the command above.
