@@ -39,7 +39,7 @@ docker run -d \
   nousresearch/hermes-agent gateway run
 ```
 
-Port 8642 exposes the gateway's [OpenAI-compatible API server](./api-server.md) and health endpoint. It's optional if you only use chat platforms (Telegram, Discord, etc.), but required if you want the dashboard or external tools to reach the gateway.
+Port 8642 exposes the gateway's [OpenAI-compatible API server](./features/api-server.md) and health endpoint. It's optional if you only use chat platforms (Telegram, Discord, etc.), but required if you want the dashboard or external tools to reach the gateway.
 
 Opening any port on an internet facing machine is a security risk. You should not do it unless you understand the risks.
 

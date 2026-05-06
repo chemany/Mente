@@ -1,14 +1,14 @@
 ---
-title: "Serving Llms Vllm — Serves LLMs with high throughput using vLLM's PagedAttention and continuous batching"
+title: "Serving Llms Vllm — vLLM: high-throughput LLM serving, OpenAI API, quantization"
 sidebar_label: "Serving Llms Vllm"
-description: "Serves LLMs with high throughput using vLLM's PagedAttention and continuous batching"
+description: "vLLM: high-throughput LLM serving, OpenAI API, quantization"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Serving Llms Vllm
 
-Serves LLMs with high throughput using vLLM's PagedAttention and continuous batching. Use when deploying production LLM APIs, optimizing inference latency/throughput, or serving models with limited GPU memory. Supports OpenAI-compatible endpoints, quantization (GPTQ/AWQ/FP8), and tensor parallelism.
+vLLM: high-throughput LLM serving, OpenAI API, quantization.
 
 ## Skill metadata
 
@@ -29,6 +29,10 @@ The following is the complete skill definition that Hermes loads when this skill
 :::
 
 # vLLM - High-Performance LLM Serving
+
+## When to use
+
+Use when deploying production LLM APIs, optimizing inference latency/throughput, or serving models with limited GPU memory. Supports OpenAI-compatible endpoints, quantization (GPTQ/AWQ/FP8), and tensor parallelism.
 
 ## Quick start
 
@@ -357,13 +361,13 @@ vllm serve MODEL --speculative-model DRAFT_MODEL
 
 ## Advanced topics
 
-**Server deployment patterns**: See [references/server-deployment.md](https://github.com/NousResearch/hermes-agent/blob/main/skills/mlops/inference/vllm/references/server-deployment.md) for Docker, Kubernetes, and load balancing configurations.
+**Server deployment patterns**: See [references/server-deployment.md](https://github.com/chemany/Mente/blob/main/skills/mlops/inference/vllm/references/server-deployment.md) for Docker, Kubernetes, and load balancing configurations.
 
-**Performance optimization**: See [references/optimization.md](https://github.com/NousResearch/hermes-agent/blob/main/skills/mlops/inference/vllm/references/optimization.md) for PagedAttention tuning, continuous batching details, and benchmark results.
+**Performance optimization**: See [references/optimization.md](https://github.com/chemany/Mente/blob/main/skills/mlops/inference/vllm/references/optimization.md) for PagedAttention tuning, continuous batching details, and benchmark results.
 
-**Quantization guide**: See [references/quantization.md](https://github.com/NousResearch/hermes-agent/blob/main/skills/mlops/inference/vllm/references/quantization.md) for AWQ/GPTQ/FP8 setup, model preparation, and accuracy comparisons.
+**Quantization guide**: See [references/quantization.md](https://github.com/chemany/Mente/blob/main/skills/mlops/inference/vllm/references/quantization.md) for AWQ/GPTQ/FP8 setup, model preparation, and accuracy comparisons.
 
-**Troubleshooting**: See [references/troubleshooting.md](https://github.com/NousResearch/hermes-agent/blob/main/skills/mlops/inference/vllm/references/troubleshooting.md) for detailed error messages, debugging steps, and performance diagnostics.
+**Troubleshooting**: See [references/troubleshooting.md](https://github.com/chemany/Mente/blob/main/skills/mlops/inference/vllm/references/troubleshooting.md) for detailed error messages, debugging steps, and performance diagnostics.
 
 ## Hardware requirements
 

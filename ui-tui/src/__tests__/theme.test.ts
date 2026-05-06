@@ -4,7 +4,7 @@ import { DARK_THEME, DEFAULT_THEME, detectLightMode, fromSkin, LIGHT_THEME } fro
 
 describe('DEFAULT_THEME', () => {
   it('has brand defaults', () => {
-    expect(DEFAULT_THEME.brand.name).toBe('Hermes Agent')
+    expect(DEFAULT_THEME.brand.name).toBe('Mente')
     expect(DEFAULT_THEME.brand.prompt).toBe('❯')
     expect(DEFAULT_THEME.brand.tool).toBe('┊')
   })

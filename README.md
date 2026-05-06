@@ -5,13 +5,13 @@
 # Mente Agent ☤
 
 <p align="center">
-  <a href="https://mente-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-mente--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href="https://chemany.github.io/Mente/docs/"><img src="https://img.shields.io/badge/Docs-chemany.github.io%2FMente%2Fdocs-FFD700?style=for-the-badge" alt="Documentation"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/chemany/Mente/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://nousresearch.com"><img src="https://img.shields.io/badge/Built%20by-Nous%20Research-blueviolet?style=for-the-badge" alt="Built by Nous Research"></a>
+  <a href="https://github.com/chemany/Mente"><img src="https://img.shields.io/badge/GitHub-chemany%2FMente-111827?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Repository"></a>
 </p>
 
-**The self-improving AI agent built by [Nous Research](https://nousresearch.com).** Mente is the primary product path and command surface. It creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
+**Mente is a unified AI agent for coding, automation, gateway workflows, and long-term memory.** It creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
 
 This branch also completes a product-surface consolidation pass:
 
@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.
 
 Works on Linux, macOS, WSL2, and Android via Termux. The one-click installer is release-pinned by default and can also bootstrap a matching vendored Codex runtime from local/offline assets via `--runtime-artifact-manifest` and `--runtime-wheel`.
 
-> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://mente-agent.nousresearch.com/docs/getting-started/termux). On Termux, Mente installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
+> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://chemany.github.io/Mente/docs/getting-started/termux). On Termux, Mente installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
 >
 > **Windows:** Native Windows is not supported. Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and run the command above.
 >
@@ -86,7 +86,7 @@ mente update        # Update to the latest version
 mente doctor        # Diagnose any issues
 ```
 
-📖 **[Full documentation →](https://mente-agent.nousresearch.com/docs/)**
+📖 **[Full documentation →](https://chemany.github.io/Mente/docs/)**
 
 ## What This Refresh Changes
 
@@ -120,31 +120,31 @@ Mente has two entry points: start the terminal UI with `mente`, or run the gatew
 | Interrupt current work | `Ctrl+C` or send a new message | `/stop` or send a new message |
 | Platform-specific status | `/platforms` | `/status`, `/sethome` |
 
-For the full command lists, see the [CLI guide](https://mente-agent.nousresearch.com/docs/user-guide/cli) and the [Messaging Gateway guide](https://mente-agent.nousresearch.com/docs/user-guide/messaging).
+For the full command lists, see the [CLI guide](https://chemany.github.io/Mente/docs/user-guide/cli) and the [Messaging Gateway guide](https://chemany.github.io/Mente/docs/user-guide/messaging).
 
 ---
 
 ## Documentation
 
-All documentation lives at **[mente-agent.nousresearch.com/docs](https://mente-agent.nousresearch.com/docs/)**:
+All documentation lives at **[chemany.github.io/Mente/docs](https://chemany.github.io/Mente/docs/)**:
 
 | Section | What's Covered |
 |---------|---------------|
-| [Quickstart](https://mente-agent.nousresearch.com/docs/getting-started/quickstart) | Install → setup → first conversation in 2 minutes |
-| [CLI Usage](https://mente-agent.nousresearch.com/docs/user-guide/cli) | Commands, keybindings, personalities, sessions |
-| [Configuration](https://mente-agent.nousresearch.com/docs/user-guide/configuration) | Config file, providers, models, all options |
-| [Messaging Gateway](https://mente-agent.nousresearch.com/docs/user-guide/messaging) | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant |
-| [Security](https://mente-agent.nousresearch.com/docs/user-guide/security) | Command approval, DM pairing, container isolation |
-| [Tools & Toolsets](https://mente-agent.nousresearch.com/docs/user-guide/features/tools) | 40+ tools, toolset system, terminal backends |
-| [Skills System](https://mente-agent.nousresearch.com/docs/user-guide/features/skills) | Procedural memory, Skills Hub, creating skills |
-| [Memory](https://mente-agent.nousresearch.com/docs/user-guide/features/memory) | Persistent memory, user profiles, best practices |
-| [MCP Integration](https://mente-agent.nousresearch.com/docs/user-guide/features/mcp) | Connect any MCP server for extended capabilities |
-| [Cron Scheduling](https://mente-agent.nousresearch.com/docs/user-guide/features/cron) | Scheduled tasks with platform delivery |
-| [Context Files](https://mente-agent.nousresearch.com/docs/user-guide/features/context-files) | Project context that shapes every conversation |
-| [Architecture](https://mente-agent.nousresearch.com/docs/developer-guide/architecture) | Project structure, agent loop, key classes |
-| [Contributing](https://mente-agent.nousresearch.com/docs/developer-guide/contributing) | Development setup, PR process, code style |
-| [CLI Reference](https://mente-agent.nousresearch.com/docs/reference/cli-commands) | All commands and flags |
-| [Environment Variables](https://mente-agent.nousresearch.com/docs/reference/environment-variables) | Complete env var reference |
+| [Quickstart](https://chemany.github.io/Mente/docs/getting-started/quickstart) | Install → setup → first conversation in 2 minutes |
+| [CLI Usage](https://chemany.github.io/Mente/docs/user-guide/cli) | Commands, keybindings, personalities, sessions |
+| [Configuration](https://chemany.github.io/Mente/docs/user-guide/configuration) | Config file, providers, models, all options |
+| [Messaging Gateway](https://chemany.github.io/Mente/docs/user-guide/messaging) | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant |
+| [Security](https://chemany.github.io/Mente/docs/user-guide/security) | Command approval, DM pairing, container isolation |
+| [Tools & Toolsets](https://chemany.github.io/Mente/docs/user-guide/features/tools) | 40+ tools, toolset system, terminal backends |
+| [Skills System](https://chemany.github.io/Mente/docs/user-guide/features/skills) | Procedural memory, Skills Hub, creating skills |
+| [Memory](https://chemany.github.io/Mente/docs/user-guide/features/memory) | Persistent memory, user profiles, best practices |
+| [MCP Integration](https://chemany.github.io/Mente/docs/user-guide/features/mcp) | Connect any MCP server for extended capabilities |
+| [Cron Scheduling](https://chemany.github.io/Mente/docs/user-guide/features/cron) | Scheduled tasks with platform delivery |
+| [Context Files](https://chemany.github.io/Mente/docs/user-guide/features/context-files) | Project context that shapes every conversation |
+| [Architecture](https://chemany.github.io/Mente/docs/developer-guide/architecture) | Project structure, agent loop, key classes |
+| [Contributing](https://chemany.github.io/Mente/docs/developer-guide/contributing) | Development setup, PR process, code style |
+| [CLI Reference](https://chemany.github.io/Mente/docs/reference/cli-commands) | All commands and flags |
+| [Environment Variables](https://chemany.github.io/Mente/docs/reference/environment-variables) | Complete env var reference |
 
 ---
 
@@ -179,7 +179,7 @@ See `mente claw migrate --help` for all options, or use the `openclaw-migration`
 
 ## Contributing
 
-We welcome contributions! See the [Contributing Guide](https://mente-agent.nousresearch.com/docs/developer-guide/contributing) for development setup, code style, and PR process.
+We welcome contributions! See the [Contributing Guide](https://chemany.github.io/Mente/docs/developer-guide/contributing) for development setup, code style, and PR process.
 
 Quick start for contributors — clone and go with `setup-hermes.sh`:
 
@@ -217,4 +217,4 @@ scripts/run_tests.sh
 
 MIT — see [LICENSE](LICENSE).
 
-Built by [Nous Research](https://nousresearch.com).
+Built for the Mente project.

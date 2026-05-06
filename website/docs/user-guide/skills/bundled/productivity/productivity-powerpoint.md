@@ -1,14 +1,14 @@
 ---
-title: "Powerpoint — Use this skill any time a"
+title: "Powerpoint — Create, read, edit"
 sidebar_label: "Powerpoint"
-description: "Use this skill any time a"
+description: "Create, read, edit"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Powerpoint
 
-Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions "deck," "slides," "presentation," or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill.
+Create, read, edit .pptx decks, slides, notes, templates.
 
 ## Skill metadata
 
@@ -26,13 +26,17 @@ The following is the complete skill definition that Hermes loads when this skill
 
 # Powerpoint Skill
 
+## When to use
+
+Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions "deck," "slides," "presentation," or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill.
+
 ## Quick Reference
 
 | Task | Guide |
 |------|-------|
 | Read/analyze content | `python -m markitdown presentation.pptx` |
-| Edit or create from template | Read [editing.md](https://github.com/NousResearch/hermes-agent/blob/main/skills/productivity/powerpoint/editing.md) |
-| Create from scratch | Read [pptxgenjs.md](https://github.com/NousResearch/hermes-agent/blob/main/skills/productivity/powerpoint/pptxgenjs.md) |
+| Edit or create from template | Read [editing.md](https://github.com/chemany/Mente/blob/main/skills/productivity/powerpoint/editing.md) |
+| Create from scratch | Read [pptxgenjs.md](https://github.com/chemany/Mente/blob/main/skills/productivity/powerpoint/pptxgenjs.md) |
 
 ---
 
@@ -53,7 +57,7 @@ python scripts/office/unpack.py presentation.pptx unpacked/
 
 ## Editing Workflow
 
-**Read [editing.md](https://github.com/NousResearch/hermes-agent/blob/main/skills/productivity/powerpoint/editing.md) for full details.**
+**Read [editing.md](https://github.com/chemany/Mente/blob/main/skills/productivity/powerpoint/editing.md) for full details.**
 
 1. Analyze template with `thumbnail.py`
 2. Unpack → manipulate slides → edit content → clean → pack
@@ -62,7 +66,7 @@ python scripts/office/unpack.py presentation.pptx unpacked/
 
 ## Creating from Scratch
 
-**Read [pptxgenjs.md](https://github.com/NousResearch/hermes-agent/blob/main/skills/productivity/powerpoint/pptxgenjs.md) for full details.**
+**Read [pptxgenjs.md](https://github.com/chemany/Mente/blob/main/skills/productivity/powerpoint/pptxgenjs.md) for full details.**
 
 Use when no template or reference presentation is available.
 

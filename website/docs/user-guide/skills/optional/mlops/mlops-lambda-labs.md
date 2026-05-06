@@ -293,6 +293,7 @@ Filesystems must be attached at instance launch time:
 
 ### Best practices
 
+<!-- ascii-guard-ignore -->
 ```bash
 # Store on filesystem (persists)
 /lambda/nfs/storage/
@@ -305,6 +306,7 @@ Filesystems must be attached at instance launch time:
 /home/ubuntu/
   └── working/  # Temporary files
 ```
+<!-- ascii-guard-ignore-end -->
 
 ## SSH configuration
 
@@ -553,8 +555,8 @@ python inference.py \
 
 ## References
 
-- **[Advanced Usage](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/lambda-labs/references/advanced-usage.md)** - Multi-node training, API automation
-- **[Troubleshooting](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/lambda-labs/references/troubleshooting.md)** - Common issues and solutions
+- **[Advanced Usage](https://github.com/chemany/Mente/blob/main/optional-skills/mlops/lambda-labs/references/advanced-usage.md)** - Multi-node training, API automation
+- **[Troubleshooting](https://github.com/chemany/Mente/blob/main/optional-skills/mlops/lambda-labs/references/troubleshooting.md)** - Common issues and solutions
 
 ## Resources
 

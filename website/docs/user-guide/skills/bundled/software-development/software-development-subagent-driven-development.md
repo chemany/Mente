@@ -1,14 +1,14 @@
 ---
-title: "Subagent Driven Development — Use when executing implementation plans with independent tasks"
+title: "Subagent Driven Development — Execute plans via delegate_task subagents (2-stage review)"
 sidebar_label: "Subagent Driven Development"
-description: "Use when executing implementation plans with independent tasks"
+description: "Execute plans via delegate_task subagents (2-stage review)"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Subagent Driven Development
 
-Use when executing implementation plans with independent tasks. Dispatches fresh delegate_task per task with two-stage review (spec compliance then code quality).
+Execute plans via delegate_task subagents (2-stage review).
 
 ## Skill metadata
 
@@ -20,7 +20,7 @@ Use when executing implementation plans with independent tasks. Dispatches fresh
 | Author | Hermes Agent (adapted from obra/superpowers) |
 | License | MIT |
 | Tags | `delegation`, `subagent`, `implementation`, `workflow`, `parallel` |
-| Related skills | [`writing-plans`](/docs/user-guide/skills/bundled/software-development/software-development-writing-plans), [`requesting-code-review`](/docs/user-guide/skills/bundled/software-development/software-development-requesting-code-review), [`test-driven-development`](/docs/user-guide/skills/bundled/software-development/software-development-test-driven-development) |
+| Related skills | [`writing-plans`](/user-guide/skills/bundled/software-development/software-development-writing-plans), [`requesting-code-review`](/user-guide/skills/bundled/software-development/software-development-requesting-code-review), [`test-driven-development`](/user-guide/skills/bundled/software-development/software-development-test-driven-development) |
 
 ## Reference: full SKILL.md
 

@@ -1,14 +1,14 @@
 ---
-title: "Writing Plans — Use when you have a spec or requirements for a multi-step task"
+title: "Writing Plans — Write implementation plans: bite-sized tasks, paths, code"
 sidebar_label: "Writing Plans"
-description: "Use when you have a spec or requirements for a multi-step task"
+description: "Write implementation plans: bite-sized tasks, paths, code"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Writing Plans
 
-Use when you have a spec or requirements for a multi-step task. Creates comprehensive implementation plans with bite-sized tasks, exact file paths, and complete code examples.
+Write implementation plans: bite-sized tasks, paths, code.
 
 ## Skill metadata
 
@@ -20,7 +20,7 @@ Use when you have a spec or requirements for a multi-step task. Creates comprehe
 | Author | Hermes Agent (adapted from obra/superpowers) |
 | License | MIT |
 | Tags | `planning`, `design`, `implementation`, `workflow`, `documentation` |
-| Related skills | [`subagent-driven-development`](/docs/user-guide/skills/bundled/software-development/software-development-subagent-driven-development), [`test-driven-development`](/docs/user-guide/skills/bundled/software-development/software-development-test-driven-development), [`requesting-code-review`](/docs/user-guide/skills/bundled/software-development/software-development-requesting-code-review) |
+| Related skills | [`subagent-driven-development`](/user-guide/skills/bundled/software-development/software-development-subagent-driven-development), [`test-driven-development`](/user-guide/skills/bundled/software-development/software-development-test-driven-development), [`requesting-code-review`](/user-guide/skills/bundled/software-development/software-development-requesting-code-review) |
 
 ## Reference: full SKILL.md
 

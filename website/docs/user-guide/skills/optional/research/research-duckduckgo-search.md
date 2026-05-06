@@ -20,7 +20,7 @@ Free web search via DuckDuckGo — text, news, images, videos. No API key needed
 | Author | gamedevCloudy |
 | License | MIT |
 | Tags | `search`, `duckduckgo`, `web-search`, `free`, `fallback` |
-| Related skills | [`arxiv`](/docs/user-guide/skills/bundled/research/research-arxiv) |
+| Related skills | [`arxiv`](/user-guide/skills/bundled/research/research-arxiv) |
 
 ## Reference: full SKILL.md
 

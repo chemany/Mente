@@ -12,7 +12,7 @@ displayed_sidebar: docs
 The self-improving AI agent built by [Nous Research](https://nousresearch.com). The only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, and builds a deepening model of who you are across sessions.
 
 <div style={{display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap'}}>
-  <a href="/docs/getting-started/installation" style={{display: 'inline-block', padding: '0.6rem 1.2rem', backgroundColor: '#FFD700', color: '#07070d', borderRadius: '8px', fontWeight: 600, textDecoration: 'none'}}>Get Started →</a>
+  <a href="/getting-started/installation" style={{display: 'inline-block', padding: '0.6rem 1.2rem', backgroundColor: '#FFD700', color: '#07070d', borderRadius: '8px', fontWeight: 600, textDecoration: 'none'}}>Get Started →</a>
   <a href="https://github.com/NousResearch/hermes-agent" style={{display: 'inline-block', padding: '0.6rem 1.2rem', border: '1px solid rgba(255,215,0,0.2)', borderRadius: '8px', textDecoration: 'none'}}>View on GitHub</a>
 </div>
 
@@ -24,24 +24,24 @@ It's not a coding copilot tethered to an IDE or a chatbot wrapper around a singl
 
 | | |
 |---|---|
-| 🚀 **[Installation](/docs/getting-started/installation)** | Install in 60 seconds on Linux, macOS, or WSL2 |
-| 📖 **[Quickstart Tutorial](/docs/getting-started/quickstart)** | Your first conversation and key features to try |
-| 🗺️ **[Learning Path](/docs/getting-started/learning-path)** | Find the right docs for your experience level |
-| ⚙️ **[Configuration](/docs/user-guide/configuration)** | Config file, providers, models, and options |
-| 💬 **[Messaging Gateway](/docs/user-guide/messaging)** | Set up Telegram, Discord, Slack, or WhatsApp |
-| 🔧 **[Tools & Toolsets](/docs/user-guide/features/tools)** | 47 built-in tools and how to configure them |
-| 🧠 **[Memory System](/docs/user-guide/features/memory)** | Persistent memory that grows across sessions |
-| 📚 **[Skills System](/docs/user-guide/features/skills)** | Procedural memory the agent creates and reuses |
-| 🔌 **[MCP Integration](/docs/user-guide/features/mcp)** | Connect to MCP servers, filter their tools, and extend Hermes safely |
-| 🧭 **[Use MCP with Hermes](/docs/guides/use-mcp-with-hermes)** | Practical MCP setup patterns, examples, and tutorials |
-| 🎙️ **[Voice Mode](/docs/user-guide/features/voice-mode)** | Real-time voice interaction in CLI, Telegram, Discord, and Discord VC |
-| 🗣️ **[Use Voice Mode with Hermes](/docs/guides/use-voice-mode-with-hermes)** | Hands-on setup and usage patterns for Hermes voice workflows |
-| 🎭 **[Personality & SOUL.md](/docs/user-guide/features/personality)** | Define Hermes' default voice with a global SOUL.md |
-| 📄 **[Context Files](/docs/user-guide/features/context-files)** | Project context files that shape every conversation |
-| 🔒 **[Security](/docs/user-guide/security)** | Command approval, authorization, container isolation |
-| 💡 **[Tips & Best Practices](/docs/guides/tips)** | Quick wins to get the most out of Hermes |
-| 🏗️ **[Architecture](/docs/developer-guide/architecture)** | How it works under the hood |
-| ❓ **[FAQ & Troubleshooting](/docs/reference/faq)** | Common questions and solutions |
+| 🚀 **[Installation](/getting-started/installation)** | Install in 60 seconds on Linux, macOS, or WSL2 |
+| 📖 **[Quickstart Tutorial](/getting-started/quickstart)** | Your first conversation and key features to try |
+| 🗺️ **[Learning Path](/getting-started/learning-path)** | Find the right docs for your experience level |
+| ⚙️ **[Configuration](/user-guide/configuration)** | Config file, providers, models, and options |
+| 💬 **[Messaging Gateway](/user-guide/messaging)** | Set up Telegram, Discord, Slack, or WhatsApp |
+| 🔧 **[Tools & Toolsets](/user-guide/features/tools)** | 47 built-in tools and how to configure them |
+| 🧠 **[Memory System](/user-guide/features/memory)** | Persistent memory that grows across sessions |
+| 📚 **[Skills System](/user-guide/features/skills)** | Procedural memory the agent creates and reuses |
+| 🔌 **[MCP Integration](/user-guide/features/mcp)** | Connect to MCP servers, filter their tools, and extend Hermes safely |
+| 🧭 **[Use MCP with Hermes](/guides/use-mcp-with-hermes)** | Practical MCP setup patterns, examples, and tutorials |
+| 🎙️ **[Voice Mode](/user-guide/features/voice-mode)** | Real-time voice interaction in CLI, Telegram, Discord, and Discord VC |
+| 🗣️ **[Use Voice Mode with Hermes](/guides/use-voice-mode-with-hermes)** | Hands-on setup and usage patterns for Hermes voice workflows |
+| 🎭 **[Personality & SOUL.md](/user-guide/features/personality)** | Define Hermes' default voice with a global SOUL.md |
+| 📄 **[Context Files](/user-guide/features/context-files)** | Project context files that shape every conversation |
+| 🔒 **[Security](/user-guide/security)** | Command approval, authorization, container isolation |
+| 💡 **[Tips & Best Practices](/guides/tips)** | Quick wins to get the most out of Hermes |
+| 🏗️ **[Architecture](/developer-guide/architecture)** | How it works under the hood |
+| ❓ **[FAQ & Troubleshooting](/reference/faq)** | Common questions and solutions |
 
 ## Key Features
 

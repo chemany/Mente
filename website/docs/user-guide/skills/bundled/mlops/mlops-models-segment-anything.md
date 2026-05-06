@@ -1,14 +1,14 @@
 ---
-title: "Segment Anything Model — Foundation model for image segmentation with zero-shot transfer"
+title: "Segment Anything Model — SAM: zero-shot image segmentation via points, boxes, masks"
 sidebar_label: "Segment Anything Model"
-description: "Foundation model for image segmentation with zero-shot transfer"
+description: "SAM: zero-shot image segmentation via points, boxes, masks"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Segment Anything Model
 
-Foundation model for image segmentation with zero-shot transfer. Use when you need to segment any object in images using points, boxes, or masks as prompts, or automatically generate all object masks in an image.
+SAM: zero-shot image segmentation via points, boxes, masks.
 
 ## Skill metadata
 
@@ -91,7 +91,7 @@ import numpy as np
 from segment_anything import sam_model_registry, SamPredictor
 
 # Load model
-sam = sam_model_registry["vit_h"](https://github.com/NousResearch/hermes-agent/blob/main/skills/mlops/models/segment-anything/checkpoint="sam_vit_h_4b8939.pth")
+sam = sam_model_registry["vit_h"](https://github.com/chemany/Mente/blob/main/skills/mlops/models/segment-anything/checkpoint="sam_vit_h_4b8939.pth")
 sam.to(device="cuda")
 
 # Create predictor
@@ -152,6 +152,7 @@ masks = processor.image_processor.post_process_masks(
 ### Model architecture
 
 <!-- ascii-guard-ignore -->
+<!-- ascii-guard-ignore -->
 ```
 SAM Architecture:
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
@@ -162,6 +163,7 @@ SAM Architecture:
    Image Embeddings      Prompt Embeddings         Masks + IoU
    (computed once)       (per prompt)             predictions
 ```
+<!-- ascii-guard-ignore-end -->
 <!-- ascii-guard-ignore-end -->
 
 ### Model variants
@@ -475,7 +477,7 @@ decoded_mask = mask_utils.decode(rle)
 
 ```python
 # Use smaller model for limited VRAM
-sam = sam_model_registry["vit_b"](https://github.com/NousResearch/hermes-agent/blob/main/skills/mlops/models/segment-anything/checkpoint="sam_vit_b_01ec64.pth")
+sam = sam_model_registry["vit_b"](https://github.com/chemany/Mente/blob/main/skills/mlops/models/segment-anything/checkpoint="sam_vit_b_01ec64.pth")
 
 # Process images in batches
 # Clear CUDA cache between large batches
@@ -510,8 +512,8 @@ mask_generator = SamAutomaticMaskGenerator(
 
 ## References
 
-- **[Advanced Usage](https://github.com/NousResearch/hermes-agent/blob/main/skills/mlops/models/segment-anything/references/advanced-usage.md)** - Batching, fine-tuning, integration
-- **[Troubleshooting](https://github.com/NousResearch/hermes-agent/blob/main/skills/mlops/models/segment-anything/references/troubleshooting.md)** - Common issues and solutions
+- **[Advanced Usage](https://github.com/chemany/Mente/blob/main/skills/mlops/models/segment-anything/references/advanced-usage.md)** - Batching, fine-tuning, integration
+- **[Troubleshooting](https://github.com/chemany/Mente/blob/main/skills/mlops/models/segment-anything/references/troubleshooting.md)** - Common issues and solutions
 
 ## Resources
 

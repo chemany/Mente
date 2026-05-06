@@ -20,7 +20,7 @@ SiYuan Note API for searching, reading, creating, and managing blocks and docume
 | Author | FEUAZUR |
 | License | MIT |
 | Tags | `SiYuan`, `Notes`, `Knowledge Base`, `PKM`, `API` |
-| Related skills | [`obsidian`](/docs/user-guide/skills/bundled/note-taking/note-taking-obsidian), [`notion`](/docs/user-guide/skills/bundled/productivity/productivity-notion) |
+| Related skills | [`obsidian`](/user-guide/skills/bundled/note-taking/note-taking-obsidian), [`notion`](/user-guide/skills/bundled/productivity/productivity-notion) |
 
 ## Reference: full SKILL.md
 

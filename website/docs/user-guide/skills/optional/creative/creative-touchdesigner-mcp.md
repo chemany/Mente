@@ -16,11 +16,11 @@ Control a running TouchDesigner instance via twozero MCP — create operators, s
 |---|---|
 | Source | Optional — install with `hermes skills install official/creative/touchdesigner-mcp` |
 | Path | `optional-skills/creative/touchdesigner-mcp` |
-| Version | `1.0.0` |
+| Version | `1.1.0` |
 | Author | kshitijk4poor |
 | License | MIT |
 | Tags | `TouchDesigner`, `MCP`, `twozero`, `creative-coding`, `real-time-visuals`, `generative-art`, `audio-reactive`, `VJ`, `installation`, `GLSL` |
-| Related skills | [`native-mcp`](/docs/user-guide/skills/bundled/mcp/mcp-native-mcp), [`ascii-video`](/docs/user-guide/skills/bundled/creative/creative-ascii-video), [`manim-video`](/docs/user-guide/skills/bundled/creative/creative-manim-video), `hermes-video` |
+| Related skills | [`native-mcp`](/user-guide/skills/bundled/mcp/mcp-native-mcp), [`ascii-video`](/user-guide/skills/bundled/creative/creative-ascii-video), [`manim-video`](/user-guide/skills/bundled/creative/creative-manim-video), `hermes-video` |
 
 ## Reference: full SKILL.md
 
@@ -349,6 +349,12 @@ See `references/network-patterns.md` for complete build scripts + shader code.
 | `references/mcp-tools.md` | Full twozero MCP tool parameter schemas |
 | `references/python-api.md` | TD Python: op(), scripting, extensions |
 | `references/troubleshooting.md` | Connection diagnostics, debugging |
+| `references/glsl.md` | GLSL uniforms, built-in functions, shader templates |
+| `references/postfx.md` | Post-FX: bloom, CRT, chromatic aberration, feedback glow |
+| `references/layout-compositor.md` | HUD layout patterns, panel grids, BSP-style layouts |
+| `references/operator-tips.md` | Wireframe rendering, feedback TOP setup |
+| `references/geometry-comp.md` | Geometry COMP: instancing, POP vs SOP, morphing |
+| `references/audio-reactive.md` | Audio band extraction, beat detection, envelope following |
 | `scripts/setup.sh` | Automated setup script |
 
 ---

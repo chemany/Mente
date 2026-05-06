@@ -80,7 +80,7 @@ Create an `AGENTS.md` in your project root with architecture decisions, coding c
 
 Want Hermes to have a stable default voice? Edit `~/.hermes/SOUL.md` (or `$HERMES_HOME/SOUL.md` if you use a custom Hermes home). Hermes now seeds a starter SOUL automatically and uses that global file as the instance-wide personality source.
 
-For a full walkthrough, see [Use SOUL.md with Hermes](/docs/guides/use-soul-with-hermes).
+For a full walkthrough, see [Use SOUL.md with Hermes](/guides/use-soul-with-hermes).
 
 ```markdown
 # Soul
@@ -172,6 +172,12 @@ Use `/verbose` to control how much tool activity you see. In messaging platforms
 :::tip
 On messaging platforms, sessions auto-reset after idle time (default: 24 hours) or daily at 4 AM. Adjust per-platform in `~/.hermes/config.yaml` if you need longer sessions.
 :::
+
+### Background Tasks
+
+Use `/background <prompt>` when you want Hermes to continue working without blocking the current conversation. This is useful for longer repo scans, batch edits, or research work that can finish asynchronously.
+
+Background tasks work especially well with a configured home channel, because the result can be delivered back after the task completes even if you've moved on to something else.
 
 ## Security
 
