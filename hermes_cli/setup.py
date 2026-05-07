@@ -570,13 +570,14 @@ def _print_setup_summary(config: dict, hermes_home):
     print()
 
     # Show file locations prominently
-    from hermes_constants import display_hermes_home as _dhh
-    print(color(f"📁 All your files are in {_dhh()}/:", Colors.CYAN, Colors.BOLD))
+    from hermes_constants import display_mente_home as _dmh, get_mente_home as _gmh
+    mente_home = _gmh()
+    print(color(f"📁 All your files are in {_dmh()}/:", Colors.CYAN, Colors.BOLD))
     print()
-    print(f"   {color('Settings:', Colors.YELLOW)}  {get_config_path()}")
-    print(f"   {color('API Keys:', Colors.YELLOW)}  {get_env_path()}")
+    print(f"   {color('Settings:', Colors.YELLOW)}  {mente_home / 'config.yaml'}")
+    print(f"   {color('API Keys:', Colors.YELLOW)}  {mente_home / '.env'}")
     print(
-        f"   {color('Data:', Colors.YELLOW)}      {hermes_home}/cron/, sessions/, logs/"
+        f"   {color('Data:', Colors.YELLOW)}      {mente_home}/cron/, sessions/, logs/"
     )
     print()
 
@@ -584,31 +585,31 @@ def _print_setup_summary(config: dict, hermes_home):
     print()
     print(color("📝 To edit your configuration:", Colors.CYAN, Colors.BOLD))
     print()
-    print(f"   {color('hermes setup', Colors.GREEN)}          Re-run the full wizard")
-    print(f"   {color('hermes setup model', Colors.GREEN)}    Change model/provider")
-    print(f"   {color('hermes setup terminal', Colors.GREEN)} Change terminal backend")
-    print(f"   {color('hermes setup gateway', Colors.GREEN)}  Configure messaging")
-    print(f"   {color('hermes setup tools', Colors.GREEN)}    Configure tool providers")
+    print(f"   {color('mente setup', Colors.GREEN)}          Re-run the full wizard")
+    print(f"   {color('mente setup model', Colors.GREEN)}    Change model/provider")
+    print(f"   {color('mente setup terminal', Colors.GREEN)} Change terminal backend")
+    print(f"   {color('mente setup gateway', Colors.GREEN)}  Configure messaging")
+    print(f"   {color('mente setup tools', Colors.GREEN)}    Configure tool providers")
     print()
-    print(f"   {color('hermes config', Colors.GREEN)}         View current settings")
+    print(f"   {color('mente config', Colors.GREEN)}         View current settings")
     print(
-        f"   {color('hermes config edit', Colors.GREEN)}    Open config in your editor"
+        f"   {color('mente config edit', Colors.GREEN)}    Open config in your editor"
     )
-    print(f"   {color('hermes config set <key> <value>', Colors.GREEN)}")
+    print(f"   {color('mente config set <key> <value>', Colors.GREEN)}")
     print("                          Set a specific value")
     print()
     print("   Or edit the files directly:")
-    print(f"   {color(f'nano {get_config_path()}', Colors.DIM)}")
-    print(f"   {color(f'nano {get_env_path()}', Colors.DIM)}")
+    print(f"   {color('nano ' + str(mente_home / 'config.yaml'), Colors.DIM)}")
+    print(f"   {color('nano ' + str(mente_home / '.env'), Colors.DIM)}")
     print()
 
     print(color("─" * 60, Colors.DIM))
     print()
     print(color("🚀 Ready to go!", Colors.CYAN, Colors.BOLD))
     print()
-    print(f"   {color('hermes', Colors.GREEN)}              Start chatting")
-    print(f"   {color('hermes gateway', Colors.GREEN)}      Start messaging gateway")
-    print(f"   {color('hermes doctor', Colors.GREEN)}       Check for issues")
+    print(f"   {color('mente', Colors.GREEN)}              Start chatting")
+    print(f"   {color('mente gateway', Colors.GREEN)}      Start messaging gateway")
+    print(f"   {color('mente doctor', Colors.GREEN)}       Check for issues")
     print()
 
 
@@ -3145,12 +3146,12 @@ def _offer_launch_chat():
             return
 
     print()
-    if not prompt_yes_no("Launch hermes chat now?", True):
+    if not prompt_yes_no("Launch mente chat now?", True):
         return
 
     chat_argv = _resolve_hermes_chat_argv()
     if not chat_argv:
-        print_info("Could not relaunch Hermes automatically. Run 'hermes chat' manually.")
+        print_info("Could not relaunch Mente automatically. Run 'mente chat' manually.")
         return
 
     os.execvp(chat_argv[0], chat_argv)

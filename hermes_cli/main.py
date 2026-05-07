@@ -814,9 +814,9 @@ def _print_tui_exit_summary(session_id: Optional[str], active_session_file: Opti
 
     print()
     print("Resume this session with:")
-    print(f"  hermes --tui --resume {target}")
+    print(f"  mente --tui --resume {target}")
     if title:
-        print(f'  hermes --tui -c "{title}"')
+        print(f'  mente --tui -c "{title}"')
     print()
     print(f"Session:        {target}")
     if title:
