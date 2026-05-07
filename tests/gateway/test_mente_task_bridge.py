@@ -407,7 +407,7 @@ async def test_run_agent_registers_post_delivery_reviews_and_sends_compact_follo
 
 
 @pytest.mark.asyncio
-async def test_run_agent_mente_emits_progress_protocol_messages(monkeypatch):
+async def test_run_agent_mente_suppresses_static_progress_protocol_messages_by_default(monkeypatch):
     monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
     monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
 
@@ -472,17 +472,8 @@ async def test_run_agent_mente_emits_progress_protocol_messages(monkeypatch):
     await asyncio.sleep(0.1)
 
     assert result["final_response"] == "done"
-    all_progress_text = "\n".join(
-        [entry["content"] for entry in adapter.sent]
-        + [entry["content"] for entry in adapter.edits]
-    )
-    assert "🏠 已锁定私有 runtime" in all_progress_text
-    assert "🔐 已准备运行时鉴权" in all_progress_text
-    assert "📦 已准备隔离工作区" in all_progress_text
-    assert "🚀 正在调用 Mente runtime" in all_progress_text
-    assert "🤖 Mente 已开始执行" in all_progress_text
-    assert "🧮 Mente 回合完成" in all_progress_text
-    assert "📨 Mente runtime 已返回" in all_progress_text
+    assert adapter.sent == []
+    assert adapter.edits == []
 
 
 @pytest.mark.asyncio
@@ -552,6 +543,11 @@ async def test_run_agent_mente_emits_codex_command_detail_progress(monkeypatch):
         [entry["content"] for entry in adapter.sent]
         + [entry["content"] for entry in adapter.edits]
     )
+    assert "⏳ Mente 正在执行" not in all_progress_text
+    assert "🚀 正在调用 Mente runtime" not in all_progress_text
+    assert "🤖 Mente 已开始执行" not in all_progress_text
+    assert "🧮 Mente 回合完成" not in all_progress_text
+    assert "📨 Mente runtime 已返回" not in all_progress_text
     assert f"💻 执行命令：{command}" in all_progress_text
     assert f"✅ 命令完成：{command}" in all_progress_text
 

@@ -880,14 +880,9 @@ def _resolve_mente_gateway_progress_detail(
     return None
 
 
-def _render_mente_gateway_progress(steps: dict[int, str], details: list[str]) -> str:
-    """Render the accumulated Mente execution protocol as one editable message."""
-    lines = ["⏳ Mente 正在执行"]
-    for step_no in sorted(steps):
-        lines.append(f"{step_no}. {steps[step_no]}")
-    for index, detail in enumerate(details, start=len(steps) + 1):
-        lines.append(f"{index}. {detail}")
-    return "\n".join(lines)
+def _render_mente_gateway_progress(details: list[str]) -> str:
+    """Render only runtime action details for the editable gateway message."""
+    return "\n".join(detail for detail in details if str(detail or "").strip())
 
 
 async def _send_mente_gateway_progress_messages(
@@ -909,7 +904,6 @@ async def _send_mente_gateway_progress_messages(
                 break
         return
 
-    progress_steps: dict[int, str] = {}
     progress_details: list[str] = []
     progress_msg_id: str | None = None
 
@@ -929,12 +923,12 @@ async def _send_mente_gateway_progress_messages(
             continue
 
         if raw is _MENTE_PROGRESS_DONE_SENTINEL:
-            if progress_msg_id and progress_steps:
+            if progress_msg_id and progress_details:
                 try:
                     await adapter.edit_message(
                         chat_id=chat_id,
                         message_id=progress_msg_id,
-                        content=_render_mente_gateway_progress(progress_steps),
+                        content=_render_mente_gateway_progress(progress_details),
                         finalize=True,
                     )
                 except Exception:
@@ -945,21 +939,16 @@ async def _send_mente_gateway_progress_messages(
             continue
 
         kind, value = raw
-        if kind == "step":
-            step_no, step_text = value
-            if not isinstance(step_no, int) or not isinstance(step_text, str):
-                continue
-            if progress_steps.get(step_no) == step_text:
-                continue
-            progress_steps[step_no] = step_text
-        elif kind == "detail":
+        if kind == "detail":
             detail_text = str(value or "").strip()
             if not detail_text:
                 continue
             progress_details.append(detail_text)
         else:
             continue
-        full_text = _render_mente_gateway_progress(progress_steps, progress_details)
+        full_text = _render_mente_gateway_progress(progress_details)
+        if not full_text:
+            continue
 
         try:
             if progress_msg_id is None:
