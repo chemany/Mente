@@ -555,12 +555,18 @@ def test_render_execution_prompt_and_fingerprint_are_stable():
 
     prompt = render_execution_prompt(request)
     fingerprint = build_prompt_fingerprint(prompt)
+    second_request = request.model_copy()
+    second_prompt = render_execution_prompt(second_request)
 
     assert "Memory Facts:" in prompt
     assert "assistant_summary" in prompt
     assert "memory_candidates" in prompt
     assert fingerprint == build_prompt_fingerprint(prompt)
+    assert prompt == second_prompt
+    assert fingerprint == build_prompt_fingerprint(second_prompt)
     assert len(fingerprint) == 64
+    assert prompt.index("Memory Facts:") < prompt.index("Response Contract:")
+    assert prompt.index("Response Contract:") < prompt.index("User Request:")
 
 
 def test_render_execution_prompt_forbids_fabricated_preferences_without_memory():

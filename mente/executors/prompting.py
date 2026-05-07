@@ -67,7 +67,6 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
     lines = [
         f"Objective: {request.objective}",
         f"Task Type: {request.task_type}",
-        f"User Request: {request.user_request}",
     ]
 
     if request.constraints:
@@ -91,6 +90,7 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
             "- If no memory facts are provided, do not fabricate prior user preferences or project conventions.",
         ]
     )
+    lines.append(f"User Request: {request.user_request}")
 
     return "\n".join(lines)
 
