@@ -1,6 +1,6 @@
 {
   "name": "mente-agent",
-  "version": "0.11.4",
+  "version": "0.11.5",
   "description": "Thin npm bootstrapper for Mente Agent. Installs and launches the full Mente runtime with a single global command.",
   "scripts": {
     "prepack": "python3 scripts/build_npm_source_bundle.py",
@@ -35,7 +35,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
+  "devDependencies": {
     "@askjo/camofox-browser": "^1.5.2",
     "agent-browser": "^0.26.0"
   },

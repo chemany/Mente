@@ -127,6 +127,18 @@ test('package metadata is publishable and locked down', () => {
   assert.equal(pkg.repository.url, 'git+https://github.com/chemany/Mente.git');
   assert.equal(pkg.bugs.url, 'https://github.com/chemany/Mente/issues');
   assert.equal(pkg.homepage, 'https://github.com/chemany/Mente#readme');
+  assert.equal(
+    pkg.dependencies?.['agent-browser'],
+    undefined,
+    'published bootstrapper must not install browser runtime dependencies',
+  );
+  assert.equal(
+    pkg.dependencies?.['@askjo/camofox-browser'],
+    undefined,
+    'published bootstrapper must not install camofox postinstall hooks',
+  );
+  assert.equal(pkg.devDependencies['agent-browser'], '^0.26.0');
+  assert.equal(pkg.devDependencies['@askjo/camofox-browser'], '^1.5.2');
 
   for (const requiredEntry of [
     'npm/installer/bin',
