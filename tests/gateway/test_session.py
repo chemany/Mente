@@ -733,6 +733,27 @@ class TestSessionStoreRuntimeContinuity:
         assert switched.session_id == "target-session"
         assert store.get_runtime_continuity(switched.session_id)["continuity_id"] == "thread-2"
 
+    def test_runtime_continuity_reloads_from_disk_in_fresh_store(self, tmp_path):
+        first = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        first._db = None
+        first.bind_runtime_continuity(
+            session_id="sess-1",
+            runtime="codex",
+            continuity_id="thread-1",
+            status="active",
+            last_mode="start",
+        )
+
+        second = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        second._db = None
+
+        payload = second.get_runtime_continuity("sess-1")
+        assert payload is not None
+        assert payload["runtime"] == "codex"
+        assert payload["continuity_id"] == "thread-1"
+        assert payload["status"] == "active"
+        assert payload["last_mode"] == "start"
+
 
 class TestWhatsAppSessionKeyConsistency:
     """Regression: WhatsApp session keys must collapse JID/LID aliases to a

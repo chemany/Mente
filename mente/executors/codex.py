@@ -178,9 +178,10 @@ class CodexExecutor(CodexKernelAdapter):
         runtime_fallback_reason: str | None = None
         if self._should_retry_stateless(enriched_request, session_request, kernel_result):
             runtime_fallback_reason = kernel_result.backend_failure or "resume_failed"
+            fallback_request = self._build_resume_fallback_request(enriched_request)
             session_request = KernelSessionRequest(mode=KernelSessionMode.STATELESS)
             kernel_result = self._runner.run(
-                payload=self._build_kernel_payload(enriched_request),
+                payload=self._build_kernel_payload(fallback_request),
                 session=session_request,
                 runtime_config=runtime_config,
             )
@@ -256,6 +257,20 @@ class CodexExecutor(CodexKernelAdapter):
             and request.execution_session is not None
             and request.execution_session.mode is SessionMode.RESUME
             and result.status != "success"
+        )
+
+    def _build_resume_fallback_request(self, request: ExecutionRequest) -> ExecutionRequest:
+        """Synthesize the stateless retry request for bounded resume failures."""
+        fallback_history_fact = str(request.metadata.get("fallback_history_fact") or "").strip()
+        memory_facts = list(request.memory_facts)
+        if fallback_history_fact and fallback_history_fact not in memory_facts:
+            memory_facts.append(fallback_history_fact)
+        return request.model_copy(
+            update={
+                "execution_mode": ExecutionMode.STATELESS,
+                "execution_session": None,
+                "memory_facts": memory_facts,
+            }
         )
 
     def _execution_session_metadata(

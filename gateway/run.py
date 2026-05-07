@@ -105,6 +105,9 @@ load_hermes_dotenv(hermes_home=_hermes_home, project_env=Path(__file__).resolve(
 from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
 
 
+_GATEWAY_RUNTIME_CONTINUITY_RUNTIME = "codex"
+
+
 def _build_gateway_fallback_history_fact(history: List[Dict[str, Any]]) -> str | None:
     """Serialize gateway history deterministically for one fallback replay seed."""
     if not history:
@@ -139,11 +142,17 @@ def _resolve_gateway_runtime_continuity_plan(
     """Resolve whether one gateway turn should start or resume runtime continuity."""
     continuity_id = ""
     continuity_status = ""
+    continuity_runtime = ""
     if isinstance(continuity_payload, dict):
+        continuity_runtime = str(continuity_payload.get("runtime") or "").strip().lower()
         continuity_id = str(continuity_payload.get("continuity_id") or "").strip()
         continuity_status = str(continuity_payload.get("status") or "").strip().lower()
 
-    if continuity_status == "active" and continuity_id:
+    if (
+        continuity_status == "active"
+        and continuity_id
+        and continuity_runtime == _GATEWAY_RUNTIME_CONTINUITY_RUNTIME
+    ):
         return {
             "execution_mode": ExecutionMode.SESSIONFUL,
             "execution_session": ExecutionSession(
@@ -180,11 +189,14 @@ def _record_gateway_runtime_continuity_result(
     mode = str(execution_session_payload.get("mode") or "").strip().lower() or None
     fallback_reason = str(execution_session_payload.get("fallback_reason") or "").strip() or None
     requested_mode = str(execution_session_payload.get("requested_mode") or "").strip().lower()
+    previous_runtime = ""
+    if isinstance(previous_continuity_payload, dict):
+        previous_runtime = str(previous_continuity_payload.get("runtime") or "").strip().lower()
 
     if continuity_status in {"started", "resumed"} and continuity_id:
         session_store.bind_runtime_continuity(
             session_id,
-            runtime="codex",
+            runtime=_GATEWAY_RUNTIME_CONTINUITY_RUNTIME,
             continuity_id=continuity_id,
             status="active",
             last_task_id=task_id,
@@ -198,6 +210,7 @@ def _record_gateway_runtime_continuity_result(
         and requested_mode == SessionMode.RESUME.value
         and isinstance(previous_continuity_payload, dict)
         and previous_continuity_payload.get("continuity_id")
+        and previous_runtime == _GATEWAY_RUNTIME_CONTINUITY_RUNTIME
     ):
         session_store.invalidate_runtime_continuity(
             session_id,

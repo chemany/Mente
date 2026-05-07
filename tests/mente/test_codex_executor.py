@@ -222,6 +222,140 @@ def test_codex_executor_falls_back_to_stateless_when_resume_fails(monkeypatch, t
     }
 
 
+def test_codex_executor_resume_failure_retries_with_fallback_history_fact(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "gateway")
+    payloads: list[tuple[str, KernelSessionRequest]] = []
+    fallback_history_fact = 'Conversation history (JSON):\n[{"role":"user","content":"before"}]'
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            payloads.append((payload.prompt, session))
+            if session.mode is KernelSessionMode.SESSION:
+                return KernelExecutionResult(
+                    status="failed",
+                    assistant_summary="thread not found",
+                    backend_failure="thread_not_found",
+                )
+            return KernelExecutionResult(status="success", assistant_summary="fallback ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(
+            mode=SessionMode.RESUME,
+            continuity_id="thread-stale",
+        ),
+        tool_policy={"session_capable": True},
+        metadata={
+            "source": "gateway",
+            "fallback_history_fact": fallback_history_fact,
+        },
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert len(payloads) == 2
+    assert payloads[0][1].mode is KernelSessionMode.SESSION
+    assert fallback_history_fact not in payloads[0][0]
+    assert payloads[1][1].mode is KernelSessionMode.STATELESS
+    assert fallback_history_fact in payloads[1][0]
+
+
+def test_codex_executor_resume_failure_does_not_duplicate_fallback_history(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "gateway")
+    prompts: list[str] = []
+    fallback_history_fact = 'Conversation history (JSON):\n[{"role":"user","content":"before"}]'
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            prompts.append(payload.prompt)
+            if session.mode is KernelSessionMode.SESSION:
+                return KernelExecutionResult(
+                    status="failed",
+                    assistant_summary="thread not found",
+                    backend_failure="thread_not_found",
+                )
+            return KernelExecutionResult(status="success", assistant_summary="fallback ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(
+            mode=SessionMode.RESUME,
+            continuity_id="thread-stale",
+        ),
+        memory_facts=[fallback_history_fact],
+        tool_policy={"session_capable": True},
+        metadata={
+            "source": "gateway",
+            "fallback_history_fact": fallback_history_fact,
+        },
+    )
+
+    executor.execute(request)
+
+    assert len(prompts) == 2
+    assert prompts[1].count(fallback_history_fact) == 1
+
+
+def test_codex_executor_successful_resume_does_not_inject_fallback_history(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "gateway")
+    payloads: list[tuple[str, KernelSessionRequest]] = []
+    fallback_history_fact = 'Conversation history (JSON):\n[{"role":"user","content":"before"}]'
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            payloads.append((payload.prompt, session))
+            return KernelExecutionResult(
+                status="success",
+                assistant_summary="ok",
+                debug={"thread_id": "thread-123"},
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(
+            mode=SessionMode.RESUME,
+            continuity_id="thread-123",
+        ),
+        tool_policy={"session_capable": True},
+        metadata={
+            "source": "gateway",
+            "fallback_history_fact": fallback_history_fact,
+        },
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert len(payloads) == 1
+    assert payloads[0][1].mode is KernelSessionMode.SESSION
+    assert fallback_history_fact not in payloads[0][0]
+
+
 def test_codex_executor_fails_closed_for_disallowed_continuity_source(monkeypatch, tmp_path):
     monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
     monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "api_server")

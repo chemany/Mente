@@ -58,6 +58,23 @@ def test_resolve_gateway_runtime_continuity_plan_with_invalidated_continuity_rep
     assert plan["replay_history_in_memory_facts"] is False
 
 
+def test_resolve_gateway_runtime_continuity_plan_ignores_active_other_runtime():
+    plan = gateway_run._resolve_gateway_runtime_continuity_plan(
+        session_entry=MagicMock(session_id="sess-1"),
+        history=_history(),
+        continuity_payload={
+            "runtime": "other-runtime",
+            "continuity_id": "thread-123",
+            "status": "active",
+        },
+    )
+
+    assert plan["execution_mode"] is ExecutionMode.SESSIONFUL
+    assert plan["execution_session"] == ExecutionSession(mode=SessionMode.START)
+    assert plan["fallback_history_fact"].startswith("Conversation history (JSON):")
+    assert plan["replay_history_in_memory_facts"] is False
+
+
 def test_record_gateway_runtime_continuity_result_binds_active_continuity():
     session_store = MagicMock()
 
@@ -111,6 +128,31 @@ def test_record_gateway_runtime_continuity_result_invalidates_previous_resume_on
         "sess-1",
         reason="thread_not_found",
     )
+    session_store.bind_runtime_continuity.assert_not_called()
+
+
+def test_record_gateway_runtime_continuity_result_does_not_invalidate_other_runtime():
+    session_store = MagicMock()
+
+    gateway_run._record_gateway_runtime_continuity_result(
+        session_store=session_store,
+        session_id="sess-1",
+        task_id="task-1",
+        previous_continuity_payload={
+            "runtime": "other-runtime",
+            "continuity_id": "thread-stale",
+            "status": "active",
+        },
+        execution_session_payload={
+            "mode": "stateless",
+            "continuity_id": None,
+            "continuity_status": "fallback_stateless",
+            "fallback_reason": "thread_not_found",
+            "requested_mode": "resume",
+        },
+    )
+
+    session_store.invalidate_runtime_continuity.assert_not_called()
     session_store.bind_runtime_continuity.assert_not_called()
 
 
