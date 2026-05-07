@@ -155,6 +155,21 @@ def is_sessionful_execution_enabled(
     )
 
 
+def is_gateway_runtime_continuity_enabled(
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    """Return whether gateway runtime continuity should be requested."""
+
+    return is_sessionful_execution_enabled(
+        environment=environment,
+    ) and is_env_flag_enabled(
+        "MENTE_GATEWAY_CONTINUITY_ENABLED",
+        default=False,
+        environment=environment,
+    )
+
+
 def is_api_server_conversation_adoption_enabled(
     *,
     environment: Mapping[str, str] | None = None,

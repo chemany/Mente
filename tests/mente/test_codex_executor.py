@@ -170,6 +170,47 @@ def test_codex_executor_passes_sessionful_resume_intent_to_kernel_seam_when_enab
     }
 
 
+def test_codex_executor_allows_gateway_sessionful_resume_when_source_is_allowlisted(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "api_server,gateway")
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            captured["session"] = session
+            return KernelExecutionResult(
+                status="success",
+                assistant_summary="ok",
+                debug={"thread_id": "thread-456"},
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(
+            mode=SessionMode.RESUME,
+            continuity_id="thread-456",
+        ),
+        tool_policy={"session_capable": True},
+        metadata={"source": "gateway"},
+    )
+
+    result = executor.execute(request)
+
+    assert captured["session"].mode is KernelSessionMode.SESSION
+    assert captured["session"].session_id == "thread-456"
+    assert result.metadata["execution_session"]["continuity_status"] == "resumed"
+    assert result.metadata["execution_session"]["continuity_id"] == "thread-456"
+
+
 def test_codex_executor_falls_back_to_stateless_when_resume_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
     calls: list[KernelSessionRequest] = []

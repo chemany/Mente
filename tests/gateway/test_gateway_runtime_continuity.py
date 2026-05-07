@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 import gateway.run as gateway_run
 from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
 
@@ -8,7 +10,47 @@ def _history():
     return [{"role": "user", "content": "before"}]
 
 
+@pytest.fixture(autouse=True)
+def _enable_gateway_continuity_by_default(monkeypatch):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_GATEWAY_CONTINUITY_ENABLED", "1")
+
+
+def test_resolve_gateway_runtime_continuity_plan_disabled_flag_stays_stateless(monkeypatch):
+    monkeypatch.delenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", raising=False)
+    monkeypatch.delenv("MENTE_GATEWAY_CONTINUITY_ENABLED", raising=False)
+
+    plan = gateway_run._resolve_gateway_runtime_continuity_plan(
+        session_entry=MagicMock(session_id="sess-1"),
+        history=_history(),
+        continuity_payload=None,
+    )
+
+    assert plan["execution_mode"] is ExecutionMode.STATELESS
+    assert plan["execution_session"] is None
+    assert plan["fallback_history_fact"] is None
+    assert plan["replay_history_in_memory_facts"] is True
+
+
 def test_resolve_gateway_runtime_continuity_plan_without_continuity_replays_history_once():
+    plan = gateway_run._resolve_gateway_runtime_continuity_plan(
+        session_entry=MagicMock(session_id="sess-1"),
+        history=_history(),
+        continuity_payload=None,
+    )
+
+    assert plan["execution_mode"] is ExecutionMode.SESSIONFUL
+    assert plan["execution_session"] == ExecutionSession(mode=SessionMode.START)
+    assert plan["fallback_history_fact"].startswith("Conversation history (JSON):")
+    assert plan["replay_history_in_memory_facts"] is False
+
+
+def test_resolve_gateway_runtime_continuity_plan_enabled_flag_uses_sessionful_start(
+    monkeypatch,
+):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_GATEWAY_CONTINUITY_ENABLED", "1")
+
     plan = gateway_run._resolve_gateway_runtime_continuity_plan(
         session_entry=MagicMock(session_id="sess-1"),
         history=_history(),

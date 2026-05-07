@@ -91,6 +91,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Resolve Hermes home directory (respects HERMES_HOME override)
 from hermes_constants import get_hermes_home
 from utils import atomic_yaml_write, base_url_host_matches, is_truthy_value
+from mente.feature_flags import is_gateway_runtime_continuity_enabled
 from mente.task_core.task_query import execute_task_query, parse_gateway_task_query
 from mente.task_core.repository import SQLiteTaskRepository
 _hermes_home = get_hermes_home()
@@ -140,6 +141,14 @@ def _resolve_gateway_runtime_continuity_plan(
     continuity_payload: Dict[str, Any] | None,
 ) -> Dict[str, Any]:
     """Resolve whether one gateway turn should start or resume runtime continuity."""
+    if not is_gateway_runtime_continuity_enabled():
+        return {
+            "execution_mode": ExecutionMode.STATELESS,
+            "execution_session": None,
+            "fallback_history_fact": None,
+            "replay_history_in_memory_facts": True,
+        }
+
     continuity_id = ""
     continuity_status = ""
     continuity_runtime = ""
