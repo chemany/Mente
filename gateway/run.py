@@ -234,6 +234,25 @@ def _record_gateway_runtime_continuity_result(
         )
 
 
+def _invalidate_gateway_runtime_continuity(
+    *,
+    session_store,
+    session_id: str | None,
+    reason: str,
+) -> bool:
+    """Best-effort invalidation for transcript rewrites on one gateway session."""
+    if not session_id or session_store is None or not hasattr(session_store, "invalidate_runtime_continuity"):
+        return False
+    try:
+        return bool(session_store.invalidate_runtime_continuity(session_id, reason=reason))
+    except Exception:
+        logger.exception(
+            "Failed to invalidate gateway runtime continuity for session %s",
+            session_id,
+        )
+        return False
+
+
 def _run_mente_gateway_turn(
     *,
     message: str,
@@ -5397,6 +5416,11 @@ class GatewayRunner:
                                     self.session_store.rewrite_transcript(
                                         session_entry.session_id, _compressed
                                     )
+                                    _invalidate_gateway_runtime_continuity(
+                                        session_store=self.session_store,
+                                        session_id=session_entry.session_id,
+                                        reason="session_hygiene_compress_rewrite",
+                                    )
                                     # Reset stored token count — transcript was rewritten
                                     session_entry.last_prompt_tokens = 0
                                     history = _compressed
@@ -6916,6 +6940,11 @@ class GatewayRunner:
         # Truncate history to before the last user message and persist
         truncated = history[:last_user_idx]
         self.session_store.rewrite_transcript(session_entry.session_id, truncated)
+        _invalidate_gateway_runtime_continuity(
+            session_store=self.session_store,
+            session_id=session_entry.session_id,
+            reason="retry_rewrite",
+        )
         # Reset stored token count — transcript was truncated
         session_entry.last_prompt_tokens = 0
         
@@ -6950,6 +6979,11 @@ class GatewayRunner:
         removed_msg = history[last_user_idx].get("content", "")
         removed_count = len(history) - last_user_idx
         self.session_store.rewrite_transcript(session_entry.session_id, history[:last_user_idx])
+        _invalidate_gateway_runtime_continuity(
+            session_store=self.session_store,
+            session_id=session_entry.session_id,
+            reason="undo_rewrite",
+        )
         # Reset stored token count — transcript was truncated
         session_entry.last_prompt_tokens = 0
         
@@ -7965,6 +7999,11 @@ class GatewayRunner:
                     self.session_store._save()
 
                 self.session_store.rewrite_transcript(new_session_id, compressed)
+                _invalidate_gateway_runtime_continuity(
+                    session_store=self.session_store,
+                    session_id=new_session_id,
+                    reason="compress_rewrite",
+                )
                 # Reset stored token count — transcript changed, old value is stale
                 self.session_store.update_session(
                     session_entry.session_key, last_prompt_tokens=0

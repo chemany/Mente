@@ -83,6 +83,10 @@ async def test_compress_command_reports_noop_without_success_banner():
     assert "No changes from compression" in result
     assert "Compressed:" not in result
     assert "Rough transcript estimate: ~100 tokens (unchanged)" in result
+    runner.session_store.invalidate_runtime_continuity.assert_called_once_with(
+        "sess-1",
+        reason="compress_rewrite",
+    )
     agent_instance.shutdown_memory_provider.assert_called_once()
     agent_instance.close.assert_called_once()
 
@@ -121,5 +125,9 @@ async def test_compress_command_explains_when_token_estimate_rises():
     assert "Compressed: 4 → 3 messages" in result
     assert "Rough transcript estimate: ~100 → ~120 tokens" in result
     assert "denser summaries" in result
+    runner.session_store.invalidate_runtime_continuity.assert_called_once_with(
+        "sess-1",
+        reason="compress_rewrite",
+    )
     agent_instance.shutdown_memory_provider.assert_called_once()
     agent_instance.close.assert_called_once()
