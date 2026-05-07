@@ -648,6 +648,92 @@ class TestSessionStoreSwitchSession:
         db.close()
 
 
+class TestSessionStoreRuntimeContinuity:
+    def _make_source(self) -> SessionSource:
+        return SessionSource(
+            platform=Platform.LOCAL,
+            chat_id="cli",
+            chat_name="CLI terminal",
+            chat_type="dm",
+        )
+
+    def test_runtime_continuity_round_trip(self, tmp_path):
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        store._db = None
+
+        store.bind_runtime_continuity(
+            session_id="sess-1",
+            runtime="codex",
+            continuity_id="thread-1",
+            status="active",
+            last_mode="start",
+        )
+
+        payload = store.get_runtime_continuity("sess-1")
+        assert payload["continuity_id"] == "thread-1"
+        assert payload["status"] == "active"
+        assert payload["runtime"] == "codex"
+        assert payload["last_mode"] == "start"
+        assert payload["created_at"]
+        assert payload["updated_at"]
+
+    def test_runtime_continuity_invalidation_marks_entry_but_keeps_record(self, tmp_path):
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        store._db = None
+
+        store.bind_runtime_continuity(
+            session_id="sess-1",
+            runtime="codex",
+            continuity_id="thread-1",
+            status="active",
+        )
+
+        assert store.invalidate_runtime_continuity("sess-1", reason="retry_rewrite") is True
+
+        payload = store.get_runtime_continuity("sess-1")
+        assert payload["status"] == "invalidated"
+        assert payload["invalidation_reason"] == "retry_rewrite"
+        assert payload["continuity_id"] == "thread-1"
+
+    def test_reset_session_does_not_carry_runtime_continuity_to_new_session_id(self, tmp_path):
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        store._db = None
+
+        entry = store.get_or_create_session(self._make_source())
+        old_session_id = entry.session_id
+        store.bind_runtime_continuity(
+            session_id=old_session_id,
+            runtime="codex",
+            continuity_id="thread-1",
+            status="active",
+        )
+
+        new_entry = store.reset_session(entry.session_key)
+
+        assert new_entry is not None
+        assert new_entry.session_id != old_session_id
+        assert store.get_runtime_continuity(new_entry.session_id) is None
+        assert store.get_runtime_continuity(old_session_id)["continuity_id"] == "thread-1"
+
+    def test_switch_session_reuses_target_session_runtime_continuity(self, tmp_path):
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        store._db = None
+
+        current_entry = store.get_or_create_session(self._make_source())
+        store.bind_runtime_continuity(
+            session_id="target-session",
+            runtime="codex",
+            continuity_id="thread-2",
+            status="active",
+        )
+
+        switched = store.switch_session(current_entry.session_key, "target-session")
+
+        assert switched is not None
+        assert switched.session_id == "target-session"
+        assert store.get_runtime_continuity(switched.session_id)["continuity_id"] == "thread-2"
+
+
 class TestWhatsAppSessionKeyConsistency:
     """Regression: WhatsApp session keys must collapse JID/LID aliases to a
     single stable identity for both DM chat_ids and group participant_ids."""

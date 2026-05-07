@@ -650,6 +650,7 @@ class SessionStore:
         self.sessions_dir = sessions_dir
         self.config = config
         self._entries: Dict[str, SessionEntry] = {}
+        self._runtime_continuity: Dict[str, Dict[str, Any]] = {}
         self._loaded = False
         self._lock = threading.Lock()
         self._has_active_processes_fn = has_active_processes_fn
@@ -674,6 +675,7 @@ class SessionStore:
 
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         sessions_file = self.sessions_dir / "sessions.json"
+        runtime_continuity_file = self.sessions_dir / "runtime_continuity.json"
 
         if sessions_file.exists():
             try:
@@ -688,30 +690,53 @@ class SessionStore:
             except Exception as e:
                 print(f"[gateway] Warning: Failed to load sessions: {e}")
 
-        self._loaded = True
-    
-    def _save(self) -> None:
-        """Save sessions index to disk (kept for session key -> ID mapping)."""
-        import tempfile
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
-        sessions_file = self.sessions_dir / "sessions.json"
+        if runtime_continuity_file.exists():
+            try:
+                with open(runtime_continuity_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        for session_id, payload in data.items():
+                            if isinstance(payload, dict):
+                                self._runtime_continuity[str(session_id)] = dict(payload)
+            except Exception as e:
+                print(f"[gateway] Warning: Failed to load runtime continuity: {e}")
 
-        data = {key: entry.to_dict() for key, entry in self._entries.items()}
+        self._loaded = True
+
+    def _atomic_write_json(self, path: Path, payload: Dict[str, Any]) -> None:
+        """Persist one JSON payload atomically."""
+        import tempfile
+
         fd, tmp_path = tempfile.mkstemp(
-            dir=str(self.sessions_dir), suffix=".tmp", prefix=".sessions_"
+            dir=str(self.sessions_dir), suffix=".tmp", prefix=f".{path.stem}_"
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(payload, f, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp_path, sessions_file)
+            os.replace(tmp_path, path)
         except BaseException:
             try:
                 os.unlink(tmp_path)
             except OSError as e:
                 logger.debug("Could not remove temp file %s: %s", tmp_path, e)
             raise
+    
+    def _save(self) -> None:
+        """Save session and runtime continuity indexes to disk."""
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        sessions_file = self.sessions_dir / "sessions.json"
+        runtime_continuity_file = self.sessions_dir / "runtime_continuity.json"
+
+        self._atomic_write_json(
+            sessions_file,
+            {key: entry.to_dict() for key, entry in self._entries.items()},
+        )
+        self._atomic_write_json(
+            runtime_continuity_file,
+            {key: dict(payload) for key, payload in self._runtime_continuity.items()},
+        )
     
     def _generate_session_key(self, source: SessionSource) -> str:
         """Generate a session key from a source."""
@@ -1199,6 +1224,66 @@ class SessionStore:
                 logger.debug("Session DB reopen_session failed: %s", e)
 
         return new_entry
+
+    def get_runtime_continuity(self, session_id: str) -> Dict[str, Any] | None:
+        """Return the persisted runtime continuity payload for a gateway session."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            payload = self._runtime_continuity.get(session_id)
+            return dict(payload) if payload is not None else None
+
+    def bind_runtime_continuity(
+        self,
+        session_id: str,
+        *,
+        runtime: str,
+        continuity_id: str,
+        status: str = "active",
+        last_task_id: str | None = None,
+        last_mode: str | None = None,
+        last_fallback_reason: str | None = None,
+    ) -> None:
+        """Create or update one runtime continuity binding for a session ID."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            now = _now().isoformat()
+            existing = dict(self._runtime_continuity.get(session_id) or {})
+            payload = {
+                "runtime": runtime,
+                "continuity_id": continuity_id,
+                "status": status,
+                "last_task_id": last_task_id,
+                "last_mode": last_mode,
+                "last_fallback_reason": last_fallback_reason,
+                "invalidation_reason": None if status != "invalidated" else existing.get("invalidation_reason"),
+                "created_at": existing.get("created_at") or now,
+                "updated_at": now,
+            }
+            self._runtime_continuity[session_id] = payload
+            self._save()
+
+    def invalidate_runtime_continuity(self, session_id: str, *, reason: str) -> bool:
+        """Mark one runtime continuity binding invalidated but keep it for diagnostics."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            payload = self._runtime_continuity.get(session_id)
+            if payload is None:
+                return False
+            payload["status"] = "invalidated"
+            payload["invalidation_reason"] = reason
+            payload["updated_at"] = _now().isoformat()
+            self._save()
+            return True
+
+    def clear_runtime_continuity(self, session_id: str) -> bool:
+        """Delete one runtime continuity binding entirely."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            if session_id not in self._runtime_continuity:
+                return False
+            self._runtime_continuity.pop(session_id, None)
+            self._save()
+            return True
 
     def list_sessions(self, active_minutes: Optional[int] = None) -> List[SessionEntry]:
         """List all sessions, optionally filtered by activity."""
