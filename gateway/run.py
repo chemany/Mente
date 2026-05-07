@@ -15,6 +15,7 @@ Usage:
 
 import asyncio
 import dataclasses
+import inspect
 import json
 import logging
 import os
@@ -101,6 +102,115 @@ from hermes_cli.env_loader import load_hermes_dotenv
 _env_path = _hermes_home / '.env'
 load_hermes_dotenv(hermes_home=_hermes_home, project_env=Path(__file__).resolve().parents[1] / '.env')
 
+from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
+
+
+def _build_gateway_fallback_history_fact(history: List[Dict[str, Any]]) -> str | None:
+    """Serialize gateway history deterministically for one fallback replay seed."""
+    if not history:
+        return None
+    normalized: list[dict[str, Any]] = []
+    for message in history:
+        if not isinstance(message, dict):
+            continue
+        normalized.append(
+            {
+                key: value
+                for key, value in sorted(message.items())
+                if key != "timestamp"
+            }
+        )
+    if not normalized:
+        return None
+    return "Conversation history (JSON):\n" + json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _resolve_gateway_runtime_continuity_plan(
+    session_entry,
+    history: List[Dict[str, Any]],
+    continuity_payload: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    """Resolve whether one gateway turn should start or resume runtime continuity."""
+    continuity_id = ""
+    continuity_status = ""
+    if isinstance(continuity_payload, dict):
+        continuity_id = str(continuity_payload.get("continuity_id") or "").strip()
+        continuity_status = str(continuity_payload.get("status") or "").strip().lower()
+
+    if continuity_status == "active" and continuity_id:
+        return {
+            "execution_mode": ExecutionMode.SESSIONFUL,
+            "execution_session": ExecutionSession(
+                mode=SessionMode.RESUME,
+                continuity_id=continuity_id,
+            ),
+            "fallback_history_fact": None,
+            "replay_history_in_memory_facts": False,
+        }
+
+    fallback_history_fact = _build_gateway_fallback_history_fact(history)
+    return {
+        "execution_mode": ExecutionMode.SESSIONFUL,
+        "execution_session": ExecutionSession(mode=SessionMode.START),
+        "fallback_history_fact": fallback_history_fact,
+        "replay_history_in_memory_facts": False,
+    }
+
+
+def _record_gateway_runtime_continuity_result(
+    *,
+    session_store,
+    session_id: str,
+    task_id: str | None,
+    previous_continuity_payload: Dict[str, Any] | None,
+    execution_session_payload: Dict[str, Any] | None,
+) -> None:
+    """Persist or invalidate runtime continuity based on one Mente execution result."""
+    if not isinstance(execution_session_payload, dict):
+        return
+
+    continuity_status = str(execution_session_payload.get("continuity_status") or "").strip().lower()
+    continuity_id = str(execution_session_payload.get("continuity_id") or "").strip()
+    mode = str(execution_session_payload.get("mode") or "").strip().lower() or None
+    fallback_reason = str(execution_session_payload.get("fallback_reason") or "").strip() or None
+    requested_mode = str(execution_session_payload.get("requested_mode") or "").strip().lower()
+
+    if continuity_status in {"started", "resumed"} and continuity_id:
+        session_store.bind_runtime_continuity(
+            session_id,
+            runtime="codex",
+            continuity_id=continuity_id,
+            status="active",
+            last_task_id=task_id,
+            last_mode=mode,
+            last_fallback_reason=fallback_reason,
+        )
+        return
+
+    if (
+        continuity_status == "fallback_stateless"
+        and requested_mode == SessionMode.RESUME.value
+        and isinstance(previous_continuity_payload, dict)
+        and previous_continuity_payload.get("continuity_id")
+    ):
+        session_store.invalidate_runtime_continuity(
+            session_id,
+            reason=fallback_reason or "resume_failed",
+        )
+        return
+
+    if continuity_status == "missing_continuity_id":
+        logger.warning(
+            "Gateway runtime continuity start returned no continuity_id for session %s",
+            session_id,
+        )
+
 
 def _run_mente_gateway_turn(
     *,
@@ -111,20 +221,42 @@ def _run_mente_gateway_turn(
     session_id: str,
     session_key: str | None = None,
     channel_prompt: str | None = None,
+    execution_mode: ExecutionMode | str | None = None,
+    execution_session: ExecutionSession | dict[str, Any] | None = None,
+    fallback_history_fact: str | None = None,
+    replay_history_in_memory_facts: bool = True,
     event_callback=None,
 ) -> Dict[str, Any]:
     """Run a gateway turn through the Mente task bridge."""
     from mente.integrations.bridge import run_gateway_task
 
+    run_kwargs = {
+        "message": message,
+        "context_prompt": context_prompt,
+        "history": history,
+        "source": source,
+        "session_id": session_id,
+        "session_key": session_key,
+        "channel_prompt": channel_prompt,
+        "event_callback": event_callback,
+    }
+    optional_kwargs = {
+        "execution_mode": execution_mode,
+        "execution_session": execution_session,
+        "fallback_history_fact": fallback_history_fact,
+        "replay_history_in_memory_facts": replay_history_in_memory_facts,
+    }
+    supported_params = inspect.signature(run_gateway_task).parameters
+    accepts_var_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in supported_params.values()
+    )
+    for key, value in optional_kwargs.items():
+        if accepts_var_kwargs or key in supported_params:
+            run_kwargs[key] = value
+
     result = run_gateway_task(
-        message=message,
-        context_prompt=context_prompt,
-        history=history,
-        source=source,
-        session_id=session_id,
-        session_key=session_key,
-        channel_prompt=channel_prompt,
-        event_callback=event_callback,
+        **run_kwargs,
     )
 
     if result.status == "success":
@@ -150,6 +282,7 @@ def _run_mente_gateway_turn(
         "session_id": session_id,
         "response_previewed": False,
         "mente_task_id": result.metadata.get("task_id"),
+        "execution_session": result.metadata.get("execution_session"),
     }
 
 
@@ -10085,6 +10218,14 @@ class GatewayRunner:
         from gateway.display_config import resolve_display_setting
 
         if os.getenv("HERMES_GATEWAY_EXECUTOR", "").strip().lower() == "mente":
+            continuity_payload = None
+            if self.session_store is not None and hasattr(self.session_store, "get_runtime_continuity"):
+                continuity_payload = self.session_store.get_runtime_continuity(session_id)
+            continuity_plan = _resolve_gateway_runtime_continuity_plan(
+                session_entry=None,
+                history=history,
+                continuity_payload=continuity_payload,
+            )
             _resolved_tp = resolve_display_setting(user_config, platform_key, "tool_progress")
             progress_mode = (
                 _resolved_tp
@@ -10134,8 +10275,20 @@ class GatewayRunner:
                     session_id=session_id,
                     session_key=session_key,
                     channel_prompt=channel_prompt,
+                    execution_mode=continuity_plan["execution_mode"],
+                    execution_session=continuity_plan["execution_session"],
+                    fallback_history_fact=continuity_plan["fallback_history_fact"],
+                    replay_history_in_memory_facts=continuity_plan["replay_history_in_memory_facts"],
                     event_callback=_mente_event_callback if progress_queue is not None else None,
                 )
+                if self.session_store is not None and hasattr(self.session_store, "bind_runtime_continuity"):
+                    _record_gateway_runtime_continuity_result(
+                        session_store=self.session_store,
+                        session_id=session_id,
+                        task_id=result.get("mente_task_id"),
+                        previous_continuity_payload=continuity_payload,
+                        execution_session_payload=result.get("execution_session"),
+                    )
                 if progress_queue is not None:
                     progress_queue.put(("step", _MENTE_GATEWAY_PROGRESS_PROTOCOL["__gateway.completed__"]))
             finally:

@@ -9,6 +9,7 @@ from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.session import SessionSource
 from mente.integrations.bridge import build_gateway_task
+from mente.task_core.models import ExecutionMode, ExecutionResult, ExecutionSession, SessionMode
 from mente.task_core.repository import SQLiteTaskRepository
 
 
@@ -133,6 +134,101 @@ class _ProgressAdapter(BasePlatformAdapter):
 
     async def get_chat_info(self, chat_id: str):
         return {"id": chat_id}
+
+
+def test_run_mente_gateway_turn_without_continuity_uses_sessionful_start_with_seeded_history(
+    monkeypatch,
+):
+    captured = {}
+
+    def _fake_run_gateway_task(**kwargs):
+        captured.update(kwargs)
+        return ExecutionResult(status="success", summary="done")
+
+    monkeypatch.setattr("mente.integrations.bridge.run_gateway_task", _fake_run_gateway_task)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    fallback_history_fact = 'Conversation history (JSON):\n[{"role":"user","content":"before"}]'
+
+    result = gateway_run._run_mente_gateway_turn(
+        message="latest question",
+        context_prompt="session context",
+        history=[{"role": "user", "content": "before"}],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
+        fallback_history_fact=fallback_history_fact,
+        replay_history_in_memory_facts=False,
+    )
+
+    assert result["final_response"] == "done"
+    assert captured["execution_mode"] is ExecutionMode.SESSIONFUL
+    assert captured["execution_session"] == ExecutionSession(mode=SessionMode.START)
+    assert captured["fallback_history_fact"] == fallback_history_fact
+    assert captured["replay_history_in_memory_facts"] is False
+
+
+def test_run_mente_gateway_turn_with_active_continuity_uses_resume_without_history_replay(
+    monkeypatch,
+):
+    captured = {}
+
+    def _fake_run_gateway_task(**kwargs):
+        captured.update(kwargs)
+        return ExecutionResult(
+            status="success",
+            summary="done",
+            metadata={
+                "execution_session": {
+                    "mode": "resume",
+                    "continuity_id": "thread-123",
+                    "continuity_status": "resumed",
+                    "fallback_reason": None,
+                }
+            },
+        )
+
+    monkeypatch.setattr("mente.integrations.bridge.run_gateway_task", _fake_run_gateway_task)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = gateway_run._run_mente_gateway_turn(
+        message="latest question",
+        context_prompt="session context",
+        history=[{"role": "user", "content": "before"}],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(
+            mode=SessionMode.RESUME,
+            continuity_id="thread-123",
+        ),
+        fallback_history_fact=None,
+        replay_history_in_memory_facts=False,
+    )
+
+    assert result["final_response"] == "done"
+    assert captured["execution_session"] == ExecutionSession(
+        mode=SessionMode.RESUME,
+        continuity_id="thread-123",
+    )
+    assert captured["fallback_history_fact"] is None
+    assert captured["replay_history_in_memory_facts"] is False
 
 
 def test_format_mente_memory_review_outcome_persisted():
