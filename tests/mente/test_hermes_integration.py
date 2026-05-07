@@ -15,7 +15,13 @@ from mente.integrations.hermes import (
     run_gateway_task,
 )
 from mente.memory.repository import SQLiteMemoryRepository
-from mente.task_core.models import ExecutionRequest, ExecutionResult
+from mente.task_core.models import (
+    ExecutionMode,
+    ExecutionRequest,
+    ExecutionResult,
+    ExecutionSession,
+    SessionMode,
+)
 from mente.task_core.repository import SQLiteTaskRepository
 
 
@@ -100,6 +106,71 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     )
     assert '"role":"user"' in history_fact
     assert "timestamp" not in history_fact
+
+
+def test_build_gateway_task_accepts_sessionful_start_without_replay(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="latest question",
+        context_prompt="session summary",
+        history=[{"role": "user", "content": "previous question"}],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        channel_prompt="be concise",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
+        fallback_history_fact=None,
+        replay_history_in_memory_facts=False,
+    )
+
+    assert task.execution_mode is ExecutionMode.SESSIONFUL
+    assert task.execution_session.mode is SessionMode.START
+    assert not any(
+        fact.startswith("Conversation history (JSON):") for fact in task.memory_facts
+    )
+
+
+def test_build_gateway_task_includes_fallback_history_fact_when_requested(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    fallback_history_fact = 'Conversation history (JSON):\n[{"role":"user","content":"before"}]'
+
+    task = build_gateway_task(
+        message="latest question",
+        context_prompt="session summary",
+        history=[{"role": "user", "content": "previous question"}],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        channel_prompt="be concise",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(
+            mode=SessionMode.RESUME,
+            continuity_id="thread-1",
+        ),
+        fallback_history_fact=fallback_history_fact,
+        replay_history_in_memory_facts=False,
+    )
+
+    assert task.metadata["fallback_history_fact"] == fallback_history_fact
+    assert not any(
+        fact.startswith("Conversation history (JSON):") for fact in task.memory_facts
+    )
 
 
 def test_build_api_server_task_sets_api_server_source(tmp_path):
@@ -342,6 +413,53 @@ def test_second_run_receives_first_run_memory(monkeypatch, tmp_path):
 
     assert len(seen_requests) == 2
     assert "Memory: User prefers concise replies." in seen_requests[1].memory_facts
+
+
+def test_run_gateway_task_threads_continuity_controls_into_task(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(tmp_path / "tasks.db"))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+
+    captured = {}
+
+    class _FakeOrchestrator:
+        def run(self, task):
+            captured["task"] = task
+            return ExecutionResult(status="success", summary="done")
+
+    monkeypatch.setattr(
+        hermes_bridge,
+        "_build_orchestrator",
+        lambda *args, **kwargs: _FakeOrchestrator(),
+    )
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    fallback_history_fact = 'Conversation history (JSON):\n[{"role":"user","content":"before"}]'
+
+    result = run_gateway_task(
+        message="latest question",
+        context_prompt="session summary",
+        history=[{"role": "user", "content": "previous question"}],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        channel_prompt="be concise",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
+        fallback_history_fact=fallback_history_fact,
+        replay_history_in_memory_facts=False,
+    )
+
+    assert result.status == "success"
+    assert captured["task"].execution_mode is ExecutionMode.SESSIONFUL
+    assert captured["task"].execution_session == ExecutionSession(mode=SessionMode.START)
+    assert captured["task"].metadata["fallback_history_fact"] == fallback_history_fact
 
 
 def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_path):

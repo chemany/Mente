@@ -325,20 +325,43 @@ def build_gateway_task(
     session_key: str | None = None,
     channel_prompt: str | None = None,
     workspace: str | None = None,
+    execution_mode: ExecutionMode | str | None = None,
+    execution_session: ExecutionSession | dict[str, Any] | None = None,
+    fallback_history_fact: str | None = None,
+    replay_history_in_memory_facts: bool = True,
 ) -> Task:
     """Create a normalized Mente task for a gateway turn."""
     resolved_workspace = _resolve_workspace(workspace)
     memory_facts: list[str] = []
+    normalized_execution_mode, normalized_execution_session = normalize_api_execution_continuity(
+        execution_mode=execution_mode,
+        execution_session=execution_session,
+    )
 
     if context_prompt:
         memory_facts.append(f"Session context:\n{context_prompt}")
     if channel_prompt:
         memory_facts.append(f"Channel prompt:\n{channel_prompt}")
     history_fact = _build_conversation_history_fact(history)
-    if history_fact:
+    if history_fact and replay_history_in_memory_facts:
         memory_facts.append(history_fact)
 
     platform = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
+    metadata = {
+        "source": "gateway",
+        "tool_policy": _resolve_tool_policy(source="gateway", task_type="conversation"),
+        "platform": platform,
+        "session_key": session_key,
+        "user_id": getattr(source, "user_id", None),
+        "user_name": getattr(source, "user_name", None),
+        "chat_id": getattr(source, "chat_id", None),
+        "chat_name": getattr(source, "chat_name", None),
+        "chat_type": getattr(source, "chat_type", None),
+        "thread_id": getattr(source, "thread_id", None),
+    }
+    if fallback_history_fact:
+        metadata["fallback_history_fact"] = fallback_history_fact
+
     return Task(
         task_id=f"mente_gateway_{uuid.uuid4().hex}",
         session_id=session_id,
@@ -350,19 +373,9 @@ def build_gateway_task(
         acceptance_criteria=[
             "Respond directly to the latest user message.",
         ],
-        execution_mode=ExecutionMode.STATELESS,
-        metadata={
-            "source": "gateway",
-            "tool_policy": _resolve_tool_policy(source="gateway", task_type="conversation"),
-            "platform": platform,
-            "session_key": session_key,
-            "user_id": getattr(source, "user_id", None),
-            "user_name": getattr(source, "user_name", None),
-            "chat_id": getattr(source, "chat_id", None),
-            "chat_name": getattr(source, "chat_name", None),
-            "chat_type": getattr(source, "chat_type", None),
-            "thread_id": getattr(source, "thread_id", None),
-        },
+        execution_mode=normalized_execution_mode,
+        execution_session=normalized_execution_session,
+        metadata=metadata,
     )
 
 
@@ -426,6 +439,10 @@ def run_gateway_task(
     session_key: str | None = None,
     channel_prompt: str | None = None,
     workspace: str | None = None,
+    execution_mode: ExecutionMode | str | None = None,
+    execution_session: ExecutionSession | dict[str, Any] | None = None,
+    fallback_history_fact: str | None = None,
+    replay_history_in_memory_facts: bool = True,
     event_callback: ExecutionEventCallback | None = None,
 ) -> ExecutionResult:
     """Execute a gateway turn through Mente."""
@@ -438,6 +455,10 @@ def run_gateway_task(
         session_key=session_key,
         channel_prompt=channel_prompt,
         workspace=workspace,
+        execution_mode=execution_mode,
+        execution_session=execution_session,
+        fallback_history_fact=fallback_history_fact,
+        replay_history_in_memory_facts=replay_history_in_memory_facts,
     )
     repository = _build_task_repository()
     memory_repository = _build_memory_repository()
