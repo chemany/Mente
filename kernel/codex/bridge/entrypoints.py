@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 from kernel.codex.release.runtime import (
@@ -142,6 +143,7 @@ def invoke_vendored_front_door(
     add_dirs: list[str] | None = None,
     codex_binary_override: str | Path | None = None,
     stdout_line_callback: Callable[[str], None] | None = None,
+    cancel_event: threading.Event | None = None,
     subprocess_run: Any = subprocess.run,
     subprocess_popen: Any = subprocess.Popen,
 ) -> CodexBridgeInvocationResult:
@@ -183,12 +185,14 @@ def invoke_vendored_front_door(
                 check=False,
                 env=env,
             )
+            cancelled = False
         else:
-            completed = _run_streaming_subprocess(
+            completed, cancelled = _run_streaming_subprocess(
                 command=command,
                 cwd=cwd,
                 env=env,
                 stdout_line_callback=stdout_line_callback,
+                cancel_event=cancel_event,
                 subprocess_popen=subprocess_popen,
             )
     except OSError as exc:
@@ -208,6 +212,7 @@ def invoke_vendored_front_door(
         stdout=completed.stdout,
         stderr=completed.stderr,
         raw_output=raw_output,
+        backend_failure="interrupted_by_user" if cancelled else None,
     )
 
 
@@ -217,8 +222,9 @@ def _run_streaming_subprocess(
     cwd: str,
     env: dict[str, str],
     stdout_line_callback: Callable[[str], None],
+    cancel_event: threading.Event | None,
     subprocess_popen: Any,
-) -> subprocess.CompletedProcess[str]:
+) -> tuple[subprocess.CompletedProcess[str], bool]:
     process = subprocess_popen(
         command,
         stdout=subprocess.PIPE,
@@ -230,6 +236,7 @@ def _run_streaming_subprocess(
     )
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
+    cancelled = False
 
     def _read_stdout() -> None:
         if process.stdout is None:
@@ -250,7 +257,21 @@ def _run_streaming_subprocess(
     stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
     stdout_thread.start()
     stderr_thread.start()
-    returncode = process.wait()
+    returncode: int | None = None
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            cancelled = True
+            try:
+                process.terminate()
+                returncode = process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                returncode = process.wait(timeout=1)
+            break
+        returncode = process.poll()
+        if returncode is not None:
+            break
+        time.sleep(0.05)
     stdout_thread.join()
     stderr_thread.join()
     return subprocess.CompletedProcess(
@@ -258,4 +279,4 @@ def _run_streaming_subprocess(
         returncode,
         stdout="".join(stdout_lines),
         stderr="".join(stderr_lines),
-    )
+    ), cancelled

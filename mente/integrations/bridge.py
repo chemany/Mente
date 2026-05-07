@@ -68,12 +68,14 @@ def _build_kernel_adapter(
     runtime_config: RuntimeConfig | None = None,
     memory_repository: SQLiteMemoryRepository | None = None,
     event_callback: ExecutionEventCallback | None = None,
+    cancel_event: Any | None = None,
 ) -> CodexKernelAdapter:
     """Create the default Codex-backed kernel adapter."""
     return CodexExecutor(
         runtime_config=runtime_config or _resolve_runtime_config_for_workspace(workspace),
         memory_repository=memory_repository,
         event_callback=event_callback,
+        cancel_event=cancel_event,
     )
 
 
@@ -83,6 +85,7 @@ def _build_orchestrator(
     memory_repository: SQLiteMemoryRepository | None = None,
     executor: Executor | None = None,
     event_callback: ExecutionEventCallback | None = None,
+    cancel_event: Any | None = None,
 ) -> Orchestrator:
     """Create the default Phase 2 orchestrator stack."""
     memory_repository = memory_repository or _build_memory_repository()
@@ -98,6 +101,7 @@ def _build_orchestrator(
             workspace,
             memory_repository=memory_repository,
             event_callback=event_callback,
+            cancel_event=cancel_event,
         ),
         memory_repository=memory_repository,
         memory_promoter=MemoryPromoter(),
@@ -429,6 +433,53 @@ def build_api_server_task(
     )
 
 
+def build_tui_task(
+    *,
+    user_message: str,
+    conversation_history: list[dict[str, Any]],
+    session_id: str,
+    workspace: str | None = None,
+    execution_mode: ExecutionMode | str | None = None,
+    execution_session: ExecutionSession | dict[str, Any] | None = None,
+    fallback_history_fact: str | None = None,
+    replay_history_in_memory_facts: bool = True,
+) -> Task:
+    """Create a normalized Mente task for one TUI conversation turn."""
+    resolved_workspace = _resolve_workspace(workspace)
+    memory_facts: list[str] = []
+    normalized_execution_mode, normalized_execution_session = normalize_api_execution_continuity(
+        execution_mode=execution_mode,
+        execution_session=execution_session,
+    )
+
+    history_fact = _build_conversation_history_fact(conversation_history)
+    if history_fact and replay_history_in_memory_facts:
+        memory_facts.append(history_fact)
+
+    metadata = {
+        "source": "tui",
+        "tool_policy": _resolve_tool_policy(source="tui", task_type="conversation"),
+    }
+    if fallback_history_fact:
+        metadata["fallback_history_fact"] = fallback_history_fact
+
+    return Task(
+        task_id=f"mente_tui_{uuid.uuid4().hex}",
+        session_id=session_id,
+        task_type="conversation",
+        objective="Continue the active TUI conversation and answer the latest user message.",
+        user_request=user_message,
+        workspace=resolved_workspace,
+        memory_facts=memory_facts,
+        acceptance_criteria=[
+            "Respond directly to the latest user message.",
+        ],
+        execution_mode=normalized_execution_mode,
+        execution_session=normalized_execution_session,
+        metadata=metadata,
+    )
+
+
 def run_gateway_task(
     *,
     message: str,
@@ -549,6 +600,54 @@ def run_api_server_task(
                 repository=repository,
                 memory_repository=memory_repository,
             )
+        return result
+    finally:
+        for repo in (memory_repository, repository):
+            close = getattr(repo, "close", None)
+            if callable(close):
+                close()
+
+
+def run_tui_task(
+    *,
+    user_message: str,
+    conversation_history: list[dict[str, Any]],
+    session_id: str,
+    workspace: str | None = None,
+    execution_mode: ExecutionMode | str | None = None,
+    execution_session: ExecutionSession | dict[str, Any] | None = None,
+    fallback_history_fact: str | None = None,
+    replay_history_in_memory_facts: bool = True,
+    event_callback: ExecutionEventCallback | None = None,
+    cancel_event: Any | None = None,
+) -> ExecutionResult:
+    """Execute one TUI turn through Mente."""
+    task = build_tui_task(
+        user_message=user_message,
+        conversation_history=conversation_history,
+        session_id=session_id,
+        workspace=workspace,
+        execution_mode=execution_mode,
+        execution_session=execution_session,
+        fallback_history_fact=fallback_history_fact,
+        replay_history_in_memory_facts=replay_history_in_memory_facts,
+    )
+    repository = _build_task_repository()
+    memory_repository = _build_memory_repository()
+    try:
+        result = _build_orchestrator(
+            task.workspace or ".",
+            repository,
+            memory_repository,
+            event_callback=event_callback,
+            cancel_event=cancel_event,
+        ).run(task)
+        _persist_remember_intent_direct_write(
+            task=task,
+            result=result,
+            repository=repository,
+            memory_repository=memory_repository,
+        )
         return result
     finally:
         for repo in (memory_repository, repository):

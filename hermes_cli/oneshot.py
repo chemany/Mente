@@ -75,14 +75,9 @@ def run_oneshot(
     # We'll print the final response to the real stdout at the end.
     real_stdout = sys.stdout
     devnull = open(os.devnull, "w")
-    route_to_mente = os.getenv("HERMES_ONESHOT_EXECUTOR", "").strip().lower() == "mente"
-
     try:
         with redirect_stdout(devnull), redirect_stderr(devnull):
-            if route_to_mente:
-                response = _run_mente(prompt, model=model, provider=provider)
-            else:
-                response = _run_agent(prompt, model=model, provider=provider)
+            response = _run_mente(prompt, model=model, provider=provider)
     finally:
         try:
             devnull.close()

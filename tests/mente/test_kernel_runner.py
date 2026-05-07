@@ -388,3 +388,78 @@ def test_kernel_runner_forwards_codex_jsonl_events_during_bridge_execution(monke
     ]
     assert events[3][1]["command"] == "node scripts/publisher/create-article.js"
     assert events[5][1]["tool"] == "mente_wechat_publish_draft"
+
+
+def test_kernel_runner_forwards_reasoning_and_agent_message_events(monkeypatch, tmp_path):
+    runtime_workdir = tmp_path / "isolated-workdir"
+    runtime_workdir.mkdir()
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def fake_invoke_vendored_front_door(**kwargs):
+        stdout_line_callback = kwargs["stdout_line_callback"]
+        stdout_line_callback(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_reasoning",
+                        "type": "reasoning",
+                        "text": "checked the repository layout",
+                        "status": "completed",
+                    },
+                }
+            )
+        )
+        stdout_line_callback(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_message",
+                        "type": "agent_message",
+                        "text": "done",
+                        "status": "completed",
+                    },
+                }
+            )
+        )
+        return type(
+            "_BridgeResult",
+            (),
+            {
+                "command": ["/vendored/codex", "exec", "--ephemeral", "--json"],
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+                "raw_output": '{"assistant_summary":"done","memory_candidates":[]}',
+                "backend_failure": None,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "kernel.codex.runtime.runner.prepare_isolated_workspace",
+        lambda: runtime_workdir,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "kernel.codex.runtime.runner.invoke_vendored_front_door",
+        fake_invoke_vendored_front_door,
+        raising=False,
+    )
+
+    runner = KernelRunner(
+        event_callback=lambda event_type, payload: events.append((event_type, payload)),
+    )
+    result = runner.run(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+    )
+
+    assert result.status == "success"
+    assert ("kernel.codex.reasoning.completed", {"item_id": "item_reasoning", "status": "completed", "text": "checked the repository layout"}) in events
+    assert ("kernel.codex.agent_message.completed", {"item_id": "item_message", "status": "completed", "text": "done"}) in events

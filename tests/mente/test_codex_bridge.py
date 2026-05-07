@@ -270,3 +270,37 @@ def test_bridge_invokes_bridge_selected_front_door_and_normalizes_subprocess_res
     assert captured["env"]["MENTE_CODEX_API_KEY"] == "sk-private"
     assert result.front_door_mode == "vendored_runtime_binary"
     assert result.front_door_strategy == "bridge_selected"
+
+
+def test_bridge_marks_streaming_cancellation_as_interrupted(monkeypatch, tmp_path):
+    output_path = tmp_path / "out.txt"
+    fake_runtime = _write_fake_runtime(tmp_path)
+    monkeypatch.setenv("MENTE_CODEX_RUNTIME_BIN", str(fake_runtime))
+    monkeypatch.setattr(
+        "kernel.codex.bridge.entrypoints._run_streaming_subprocess",
+        lambda **kwargs: (
+            subprocess.CompletedProcess(kwargs["command"], 130, stdout="", stderr=""),
+            True,
+        ),
+    )
+
+    result = invoke_vendored_front_door(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+        sandbox="workspace-write",
+        approval_policy="never",
+        cwd=str(tmp_path),
+        workdir=str(tmp_path / "isolated-workdir"),
+        output_last_message=str(output_path),
+        output_schema=str(tmp_path / "schema.json"),
+        add_dirs=[str(tmp_path)],
+        stdout_line_callback=lambda _line: None,
+    )
+
+    assert result.returncode == 130
+    assert result.backend_failure == "interrupted_by_user"

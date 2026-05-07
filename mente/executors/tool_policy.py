@@ -47,6 +47,16 @@ _POLICY_PROFILES: dict[tuple[str, str], _PolicyProfile] = {
         bridge_tools=("mente_memory_query", "mente_memory_save"),
         session_capable=True,
     ),
+    ("tui", "conversation"): _PolicyProfile(
+        expose_all_native_tools=True,
+        bridge_tools=(
+            "mente_memory_query",
+            "mente_memory_save",
+            "mente_task_lookup",
+            "mente_wechat_publish_draft",
+        ),
+        session_capable=True,
+    ),
 }
 
 _DEFAULT_POLICY_PROFILE = _PolicyProfile(native_tools=(), bridge_tools=())

@@ -54,6 +54,7 @@ class CodexExecutor(CodexKernelAdapter):
         memory_limit: int = 5,
         memory_policy_resolver: MemoryPolicyResolver | None = None,
         event_callback: ExecutionEventCallback | None = None,
+        cancel_event: Any | None = None,
     ) -> None:
         self.codex_binary = codex_binary
         self.sandbox = sandbox
@@ -65,6 +66,7 @@ class CodexExecutor(CodexKernelAdapter):
             sandbox=sandbox,
             approval_policy=approval_policy,
             event_callback=event_callback,
+            cancel_event=cancel_event,
         )
         self._memory_repository = memory_repository
         self._memory_limit = memory_limit

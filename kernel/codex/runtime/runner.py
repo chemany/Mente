@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -176,7 +177,27 @@ def _emit_codex_exec_item_event(
             logger=logger,
         )
         return
-    if item_type in {"reasoning", "agent_message"}:
+    if item_type == "agent_message":
+        emit_execution_event(
+            callback,
+            f"kernel.codex.agent_message.{phase}",
+            {
+                **base_payload,
+                "text": item.get("text"),
+            },
+            logger=logger,
+        )
+        return
+    if item_type == "reasoning":
+        emit_execution_event(
+            callback,
+            f"kernel.codex.reasoning.{phase}",
+            {
+                **base_payload,
+                "text": item.get("text"),
+            },
+            logger=logger,
+        )
         return
     emit_execution_event(
         callback,
@@ -220,12 +241,14 @@ class KernelRunner:
         sandbox: str = "workspace-write",
         approval_policy: str = "never",
         event_callback: ExecutionEventCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         self.transport = transport
         self.codex_binary = codex_binary
         self.sandbox = sandbox
         self.approval_policy = approval_policy
         self.event_callback = event_callback
+        self.cancel_event = cancel_event
 
     def run(
         self,
@@ -315,6 +338,7 @@ class KernelRunner:
                     )
                     if self.event_callback is not None
                     else None,
+                    cancel_event=self.cancel_event,
                 )
                 emit_execution_event(
                     self.event_callback,

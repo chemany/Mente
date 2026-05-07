@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from hermes_constants import get_hermes_home
 from hermes_cli.env_loader import load_hermes_dotenv
+from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
 from tui_gateway.transport import (
     StdioTransport,
     Transport,
@@ -1400,6 +1401,357 @@ def _reset_session_agent(sid: str, session: dict) -> dict:
     return info
 
 
+def _build_tui_fallback_history_fact(history: list[dict[str, Any]]) -> str | None:
+    normalized: list[dict[str, Any]] = []
+    for message in history or []:
+        if not isinstance(message, dict):
+            continue
+        normalized.append(
+            {
+                key: value
+                for key, value in sorted(message.items())
+                if key != "timestamp"
+            }
+        )
+    if not normalized:
+        return None
+    return "Conversation history (JSON):\n" + json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+class _MenteTuiTurnController:
+    def __init__(self) -> None:
+        self.cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+
+class MenteTuiAgent:
+    """TUI-facing wrapper that preserves session shell compatibility while routing turns through Mente."""
+
+    _WRAPPER_ATTRS = {
+        "_inner_agent",
+        "_sid",
+        "_session_key",
+        "_active_turn_controller",
+        "_continuity_payload",
+        "_last_reasoning",
+    }
+
+    def __init__(self, inner_agent, *, sid: str, session_key: str) -> None:
+        object.__setattr__(self, "_inner_agent", inner_agent)
+        object.__setattr__(self, "_sid", sid)
+        object.__setattr__(self, "_session_key", session_key)
+        object.__setattr__(self, "_active_turn_controller", None)
+        object.__setattr__(self, "_continuity_payload", None)
+        object.__setattr__(self, "_last_reasoning", None)
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner_agent, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name in self._WRAPPER_ATTRS or name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._inner_agent, name, value)
+
+    def interrupt(self, message=None) -> None:
+        controller = self._active_turn_controller
+        if controller is not None:
+            controller.cancel()
+        inner_interrupt = getattr(self._inner_agent, "interrupt", None)
+        if callable(inner_interrupt):
+            inner_interrupt(message)
+
+    def run_conversation(
+        self,
+        user_message: Any,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        **_kwargs,
+    ) -> dict[str, Any]:
+        from mente.feature_flags import (
+            is_sessionful_execution_enabled,
+            sessionful_execution_sources,
+        )
+        from mente.integrations.bridge import (
+            extract_execution_session_handoff,
+            run_tui_task,
+        )
+
+        del system_message, task_id
+        history = list(conversation_history or [])
+        prompt = self._normalize_user_message(user_message)
+        controller = _MenteTuiTurnController()
+        self._active_turn_controller = controller
+        self._last_reasoning = None
+
+        sessionful_enabled = is_sessionful_execution_enabled() and "tui" in sessionful_execution_sources()
+        continuity_id = ""
+        if isinstance(self._continuity_payload, dict):
+            continuity_id = str(self._continuity_payload.get("continuity_id") or "").strip()
+
+        if sessionful_enabled and continuity_id:
+            execution_mode = ExecutionMode.SESSIONFUL
+            execution_session = ExecutionSession(
+                mode=SessionMode.RESUME,
+                continuity_id=continuity_id,
+            )
+            fallback_history_fact = None
+            replay_history_in_memory_facts = False
+        elif sessionful_enabled:
+            execution_mode = ExecutionMode.SESSIONFUL
+            execution_session = ExecutionSession(mode=SessionMode.START)
+            fallback_history_fact = _build_tui_fallback_history_fact(history)
+            replay_history_in_memory_facts = False
+        else:
+            execution_mode = ExecutionMode.STATELESS
+            execution_session = None
+            fallback_history_fact = None
+            replay_history_in_memory_facts = True
+
+        def _event_callback(event_type: str, payload: dict[str, Any]) -> None:
+            self._apply_usage_event(event_type, payload)
+            self._emit_progress_event(event_type, payload)
+            if event_type == "kernel.codex.reasoning.completed":
+                text = str(payload.get("text") or "").strip()
+                if text:
+                    self._last_reasoning = text
+            if event_type == "kernel.codex.agent_message.completed" and callable(stream_callback):
+                text = str(payload.get("text") or "")
+                if text.strip():
+                    stream_callback(text)
+
+        try:
+            result = run_tui_task(
+                user_message=prompt,
+                conversation_history=history,
+                session_id=str(getattr(self._inner_agent, "session_id", "") or self._session_key),
+                workspace=os.getenv("TERMINAL_CWD") or os.getcwd(),
+                execution_mode=execution_mode,
+                execution_session=execution_session,
+                fallback_history_fact=fallback_history_fact,
+                replay_history_in_memory_facts=replay_history_in_memory_facts,
+                event_callback=_event_callback,
+                cancel_event=controller.cancel_event,
+            )
+        finally:
+            self._active_turn_controller = None
+
+        handoff = extract_execution_session_handoff(result)
+        self._update_continuity_state(handoff)
+
+        interrupted = result.failure_reason == "interrupted_by_user"
+        final_response = "" if interrupted else (result.summary or "")
+        messages = history
+        if result.status == "success" and final_response:
+            messages = history + [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": final_response},
+            ]
+        return {
+            "final_response": final_response,
+            "messages": messages,
+            "last_reasoning": self._last_reasoning,
+            "interrupted": interrupted,
+            "error": None if interrupted or result.status == "success" else (
+                result.failure_reason or result.summary
+            ),
+        }
+
+    def _normalize_user_message(self, user_message: Any) -> str:
+        if isinstance(user_message, str):
+            return user_message
+        if isinstance(user_message, list):
+            parts: list[str] = []
+            for item in user_message:
+                if not isinstance(item, dict):
+                    continue
+                item_type = str(item.get("type") or "").strip().lower()
+                if item_type == "text":
+                    text = str(item.get("text") or "")
+                    if text.strip():
+                        parts.append(text)
+                    continue
+                if item_type != "image_url":
+                    continue
+                raw_image = item.get("image_url")
+                if isinstance(raw_image, dict):
+                    image_url = str(raw_image.get("url") or "").strip()
+                else:
+                    image_url = str(raw_image or "").strip()
+                if image_url:
+                    parts.append(f"[Attached image: {image_url}]")
+            return "\n\n".join(parts).strip()
+        return str(user_message)
+
+    def _update_continuity_state(self, handoff: dict[str, Any] | None) -> None:
+        if not isinstance(handoff, dict):
+            self._continuity_payload = None
+            return
+        continuity_id = str(handoff.get("continuity_id") or "").strip()
+        continuity_status = str(handoff.get("continuity_status") or "").strip().lower()
+        if continuity_status in {"started", "resumed"} and continuity_id:
+            self._continuity_payload = {
+                "runtime": "mente_codex_executor",
+                "status": "active",
+                "continuity_id": continuity_id,
+            }
+            return
+        if continuity_status == "fallback_stateless":
+            self._continuity_payload = None
+
+    def _apply_usage_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        if event_type != "kernel.codex.turn.completed":
+            return
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return
+        inner = self._inner_agent
+
+        def _ival(key: str) -> int:
+            try:
+                return int(usage.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        input_tokens = _ival("input_tokens")
+        output_tokens = _ival("output_tokens")
+        cache_read_tokens = _ival("cached_input_tokens")
+        cache_write_tokens = _ival("cache_write_tokens")
+
+        for key, delta in (
+            ("session_input_tokens", input_tokens),
+            ("session_output_tokens", output_tokens),
+            ("session_cache_read_tokens", cache_read_tokens),
+            ("session_cache_write_tokens", cache_write_tokens),
+            ("session_prompt_tokens", input_tokens),
+            ("session_completion_tokens", output_tokens),
+        ):
+            current = int(getattr(inner, key, 0) or 0)
+            setattr(inner, key, current + delta)
+
+        total = (
+            int(getattr(inner, "session_input_tokens", 0) or 0)
+            + int(getattr(inner, "session_output_tokens", 0) or 0)
+            + int(getattr(inner, "session_cache_read_tokens", 0) or 0)
+            + int(getattr(inner, "session_cache_write_tokens", 0) or 0)
+        )
+        setattr(inner, "session_total_tokens", total)
+        setattr(
+            inner,
+            "session_api_calls",
+            int(getattr(inner, "session_api_calls", 0) or 0) + 1,
+        )
+
+    def _emit_progress_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        item_id = str(payload.get("item_id") or payload.get("tool_id") or "").strip() or None
+        if event_type == "kernel.codex.command.started":
+            _emit(
+                "tool.start",
+                self._sid,
+                {
+                    "tool_id": item_id or f"command:{payload.get('command')}",
+                    "name": "command_execution",
+                    "context": str(payload.get("command") or ""),
+                },
+            )
+            return
+        if event_type == "kernel.codex.command.completed":
+            command = str(payload.get("command") or "").strip()
+            exit_code = payload.get("exit_code")
+            summary = command
+            if exit_code is not None:
+                summary = f"{command} (exit {exit_code})".strip()
+            _emit(
+                "tool.complete",
+                self._sid,
+                {
+                    "tool_id": item_id or f"command:{command}",
+                    "name": "command_execution",
+                    "summary": summary,
+                },
+            )
+            return
+        if event_type == "kernel.codex.mcp_tool.started":
+            _emit(
+                "tool.start",
+                self._sid,
+                {
+                    "tool_id": item_id or f"mcp:{payload.get('tool')}",
+                    "name": str(payload.get("tool") or "mcp_tool"),
+                    "context": str(payload.get("server") or ""),
+                },
+            )
+            return
+        if event_type == "kernel.codex.mcp_tool.completed":
+            _emit(
+                "tool.complete",
+                self._sid,
+                {
+                    "tool_id": item_id or f"mcp:{payload.get('tool')}",
+                    "name": str(payload.get("tool") or "mcp_tool"),
+                    "summary": str(payload.get("error") or "completed"),
+                },
+            )
+            return
+        if event_type == "kernel.codex.web_search.started":
+            _emit(
+                "tool.start",
+                self._sid,
+                {
+                    "tool_id": item_id or f"web_search:{payload.get('query')}",
+                    "name": "web_search",
+                    "context": str(payload.get("query") or ""),
+                },
+            )
+            return
+        if event_type == "kernel.codex.web_search.completed":
+            _emit(
+                "tool.complete",
+                self._sid,
+                {
+                    "tool_id": item_id or f"web_search:{payload.get('query')}",
+                    "name": "web_search",
+                    "summary": str(payload.get("query") or "completed"),
+                },
+            )
+            return
+        if event_type in {"kernel.codex.todo.updated", "kernel.codex.todo.completed"}:
+            _emit(
+                "tool.complete",
+                self._sid,
+                {
+                    "tool_id": item_id or "todo",
+                    "name": "todo",
+                    "todos": payload.get("items") or [],
+                },
+            )
+            return
+        if event_type == "kernel.codex.file_change.completed":
+            changes = payload.get("changes") if isinstance(payload.get("changes"), list) else []
+            paths = [str(change.get("path") or "").strip() for change in changes if isinstance(change, dict)]
+            summary = ", ".join(path for path in paths if path) or "files updated"
+            _emit(
+                "tool.complete",
+                self._sid,
+                {
+                    "tool_id": item_id or "file_change",
+                    "name": "file_change",
+                    "summary": summary,
+                },
+            )
+            return
+
+
 def _make_agent(sid: str, key: str, session_id: str | None = None):
     from run_agent import AIAgent
     from hermes_cli.runtime_provider import resolve_runtime_provider
@@ -1411,7 +1763,7 @@ def _make_agent(sid: str, key: str, session_id: str | None = None):
         requested=requested_provider,
         target_model=model or None,
     )
-    return AIAgent(
+    inner_agent = AIAgent(
         model=model,
         provider=runtime.get("provider"),
         base_url=runtime.get("base_url"),
@@ -1430,6 +1782,11 @@ def _make_agent(sid: str, key: str, session_id: str | None = None):
         session_db=_get_db(),
         ephemeral_system_prompt=system_prompt or None,
         **_agent_cbs(sid),
+    )
+    return MenteTuiAgent(
+        inner_agent,
+        sid=sid,
+        session_key=session_id or key,
     )
 
 
