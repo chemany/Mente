@@ -12,6 +12,7 @@ const {
   getBootstrapInstallArgs,
   getBootstrapStatePath,
   getBundledInstallScript,
+  getBundledRuntimeSourceTarball,
   shouldRefreshInstalledRuntime,
   getPackageRoot,
 } = installerPaths;
@@ -29,6 +30,10 @@ test('installer helper resolves package root and bundled install script', () => 
   assert.equal(
     getBundledInstallScript(),
     path.join(packageRoot, 'scripts', 'install.sh'),
+  );
+  assert.equal(
+    getBundledRuntimeSourceTarball(),
+    path.join(packageRoot, 'npm', 'installer', 'bundles', 'mente-runtime-source.tar.gz'),
   );
 });
 
@@ -56,6 +61,20 @@ test('installer helper defaults bootstrap install to main and allows release ove
   assert.deepEqual(
     getBootstrapInstallArgs({}, { skipSetup: true }),
     ['--branch', 'main', '--skip-setup'],
+  );
+  assert.deepEqual(
+    getBootstrapInstallArgs(
+      { MENTE_BOOTSTRAP_CHINA: '1' },
+      { skipSetup: true, bundledSourceTarball: '/tmp/mente-runtime-source.tar.gz' },
+    ),
+    [
+      '--branch',
+      'main',
+      '--skip-setup',
+      '--china',
+      '--source-tarball',
+      '/tmp/mente-runtime-source.tar.gz',
+    ],
   );
 });
 
@@ -104,16 +123,19 @@ test('package metadata is publishable and locked down', () => {
   assert.equal(pkg.private, undefined);
   assert.equal(pkg.bin.mente, 'npm/installer/bin/mente.cjs');
   assert.equal(pkg.bin['mente-agent'], 'npm/installer/bin/mente.cjs');
+  assert.equal(pkg.scripts.prepack, 'python3 scripts/build_npm_source_bundle.py');
   assert.equal(pkg.repository.url, 'git+https://github.com/chemany/Mente.git');
   assert.equal(pkg.bugs.url, 'https://github.com/chemany/Mente/issues');
   assert.equal(pkg.homepage, 'https://github.com/chemany/Mente#readme');
 
   for (const requiredEntry of [
     'npm/installer/bin',
+    'npm/installer/bundles',
     'npm/installer/lib',
     'scripts/install.sh',
     'scripts/install.ps1',
     'scripts/install.cmd',
+    'scripts/build_npm_source_bundle.py',
     'README.md',
     'LICENSE',
   ]) {

@@ -30,6 +30,9 @@ REPO_URL_SSH="git@github.com:chemany/Mente.git"
 REPO_URL_HTTPS="https://github.com/chemany/Mente.git"
 MENTE_HOME="${MENTE_HOME:-${HERMES_HOME:-$HOME/.mente}}"
 HERMES_HOME="${HERMES_HOME:-$MENTE_HOME}"
+UV_INSTALL_URL="${MENTE_UV_INSTALL_URL:-https://astral.sh/uv/install.sh}"
+NODE_DIST_BASE_URL="${MENTE_NODE_DIST_BASE_URL:-https://nodejs.org/dist}"
+SOURCE_ARCHIVE_BASE_URL="${MENTE_SOURCE_ARCHIVE_BASE_URL:-https://codeload.github.com/chemany/Mente/tar.gz}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
 # explicit directory — if so we never override it.
@@ -52,11 +55,15 @@ ROOT_FHS_LAYOUT=false
 # Options
 USE_VENV=true
 RUN_SETUP=true
+INSTALL_NODE_DEPS=false
+PREFER_SSH_CLONE=false
+NETWORK_MODE="${MENTE_INSTALL_NETWORK_MODE:-auto}"
 INSTALL_MODE="release"
 RELEASE_REF="${HERMES_RELEASE_VERSION:-latest}"
 BRANCH="main"
 RUNTIME_ARTIFACT_MANIFEST=""
 RUNTIME_WHEEL=""
+SOURCE_TARBALL="${MENTE_SOURCE_TARBALL:-}"
 CURRENT_RELEASE_REF=""
 
 # Detect non-interactive mode (e.g. curl | bash)
@@ -79,6 +86,22 @@ while [[ $# -gt 0 ]]; do
             RUN_SETUP=false
             shift
             ;;
+        --with-node-deps)
+            INSTALL_NODE_DEPS=true
+            shift
+            ;;
+        --ssh-first)
+            PREFER_SSH_CLONE=true
+            shift
+            ;;
+        --china)
+            NETWORK_MODE="china"
+            shift
+            ;;
+        --official-network)
+            NETWORK_MODE="official"
+            shift
+            ;;
         --release)
             INSTALL_MODE="release"
             RELEASE_REF="$2"
@@ -95,6 +118,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --runtime-wheel)
             RUNTIME_WHEEL="$2"
+            shift 2
+            ;;
+        --source-tarball)
+            SOURCE_TARBALL="$2"
             shift 2
             ;;
         --dir)
@@ -114,10 +141,15 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --no-venv      Don't create virtual environment"
             echo "  --skip-setup   Skip interactive setup wizard"
+            echo "  --with-node-deps  Preinstall optional Node.js/browser/TUI dependencies"
+            echo "  --ssh-first    Try SSH clone before HTTPS"
+            echo "  --china        Force China-friendly mirror defaults and archive-first install"
+            echo "  --official-network  Disable China auto-fallback and stay on official sources"
             echo "  --release TAG  Release tag to install (default: latest)"
             echo "  --branch NAME  Developer/source checkout branch to install (default: main)"
             echo "  --runtime-artifact-manifest PATH  Local/offline vendored runtime artifact manifest"
             echo "  --runtime-wheel PATH  Local/offline vendored runtime wheel to bootstrap"
+            echo "  --source-tarball PATH  Install from a local runtime source tarball before GitHub/git"
             echo "  --dir PATH     Installation directory"
             echo "                   default (non-root):  ~/.mente/mente-agent"
             echo "                   default (root, Linux): /usr/local/lib/mente-agent"
@@ -171,6 +203,178 @@ log_warn() {
 
 log_error() {
     echo -e "${RED}✗${NC} $1"
+}
+
+probe_url() {
+    local url="$1"
+    if ! command -v curl >/dev/null 2>&1; then
+        return 1
+    fi
+
+    curl -fsSLI \
+        --connect-timeout 3 \
+        --max-time 6 \
+        --retry 0 \
+        "$url" >/dev/null 2>&1
+}
+
+should_enable_china_mirrors() {
+    if ! command -v curl >/dev/null 2>&1; then
+        log_info "curl not available for network probe; staying on official sources"
+        return 1
+    fi
+
+    local probe_urls=(
+        "https://astral.sh/uv/install.sh"
+        "https://registry.npmjs.org/-/ping"
+        "https://nodejs.org/dist/latest-v${NODE_VERSION}.x/"
+    )
+    local url
+    for url in "${probe_urls[@]}"; do
+        if ! probe_url "$url"; then
+            log_warn "Official endpoint probe failed: $url"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+apply_china_network_defaults() {
+    log_info "China mode enabled"
+
+    export PIP_INDEX_URL="${PIP_INDEX_URL:-${MENTE_PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}}"
+    export UV_INDEX_URL="${UV_INDEX_URL:-${MENTE_UV_INDEX_URL:-$PIP_INDEX_URL}}"
+    export NPM_CONFIG_REGISTRY="${NPM_CONFIG_REGISTRY:-${MENTE_NPM_REGISTRY:-https://registry.npmmirror.com}}"
+    export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-${MENTE_PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright}}"
+    NODE_DIST_BASE_URL="${MENTE_NODE_DIST_BASE_URL:-https://npmmirror.com/mirrors/node}"
+
+    log_info "  Python index: $PIP_INDEX_URL"
+    log_info "  npm registry: $NPM_CONFIG_REGISTRY"
+    log_info "  Playwright mirror: $PLAYWRIGHT_DOWNLOAD_HOST"
+}
+
+configure_network_defaults() {
+    case "$NETWORK_MODE" in
+        china)
+            apply_china_network_defaults
+            ;;
+        official)
+            log_info "Official network mode forced; skipping China mirror auto-detection"
+            ;;
+        auto|"")
+            log_info "Auto-detecting whether China mirrors are needed..."
+            if should_enable_china_mirrors; then
+                log_warn "Official network path looks degraded; switching to China mirrors"
+                apply_china_network_defaults
+            else
+                log_success "Official network path looks healthy"
+            fi
+            ;;
+        *)
+            log_warn "Unknown network mode '$NETWORK_MODE' — staying on official sources"
+            ;;
+    esac
+}
+
+can_use_archive_install() {
+    [ "$INSTALL_MODE" = "source" ] || [ "$RELEASE_REF" != "latest" ]
+}
+
+should_require_git() {
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        return 0
+    fi
+
+    if [ -n "$SOURCE_TARBALL" ] && [ -f "$SOURCE_TARBALL" ]; then
+        return 1
+    fi
+
+    if can_use_archive_install; then
+        return 1
+    fi
+
+    return 0
+}
+
+install_from_source_tarball() {
+    local tarball_path="$1"
+    if [ -z "$tarball_path" ] || [ ! -f "$tarball_path" ]; then
+        return 1
+    fi
+
+    log_info "Trying local bundled source..."
+
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    if ! "$PYTHON_PATH" - "$tarball_path" "$tmp_dir" <<'PY'
+import shutil
+import sys
+import tarfile
+from pathlib import Path
+
+tarball = Path(sys.argv[1])
+dest = Path(sys.argv[2])
+
+with tarfile.open(tarball, "r:gz") as archive:
+    archive.extractall(dest)
+PY
+    then
+        rm -rf "$tmp_dir"
+        log_warn "Failed to extract local bundled source"
+        return 1
+    fi
+
+    local extracted_root
+    extracted_root="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    if [ -z "$extracted_root" ] || [ ! -d "$extracted_root" ]; then
+        rm -rf "$tmp_dir"
+        log_warn "Local bundled source did not contain an installable project root"
+        return 1
+    fi
+
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$(dirname "$INSTALL_DIR")"
+    mv "$extracted_root" "$INSTALL_DIR"
+    rm -rf "$tmp_dir"
+
+    log_success "Loaded local bundled source"
+    return 0
+}
+
+download_source_archive() {
+    local archive_url=""
+
+    if [ "$INSTALL_MODE" = "source" ]; then
+        archive_url="${SOURCE_ARCHIVE_BASE_URL}/refs/heads/$BRANCH"
+    elif [ "$RELEASE_REF" != "latest" ]; then
+        archive_url="${SOURCE_ARCHIVE_BASE_URL}/refs/tags/$RELEASE_REF"
+        CURRENT_RELEASE_REF="$RELEASE_REF"
+    else
+        return 1
+    fi
+
+    log_info "Trying source archive download..."
+
+    local tmp_dir archive_path
+    tmp_dir="$(mktemp -d)"
+    archive_path="$tmp_dir/mente-source.tar.gz"
+
+    if ! curl -fsSL "$archive_url" -o "$archive_path"; then
+        rm -rf "$tmp_dir"
+        log_warn "Source archive download failed"
+        return 1
+    fi
+
+    SOURCE_TARBALL="$archive_path"
+    if ! install_from_source_tarball "$SOURCE_TARBALL"; then
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    rm -rf "$tmp_dir"
+    return 0
 }
 
 prompt_yes_no() {
@@ -373,7 +577,7 @@ install_uv() {
 
     # Install uv
     log_info "Installing uv (fast Python package manager)..."
-    if curl -LsSf https://astral.sh/uv/install.sh | sh 2>/dev/null; then
+    if curl -LsSf "$UV_INSTALL_URL" | sh 2>/dev/null; then
         # uv installs to ~/.local/bin by default
         if [ -x "$HOME/.local/bin/uv" ]; then
             UV_CMD="$HOME/.local/bin/uv"
@@ -558,7 +762,7 @@ install_node() {
     esac
 
     # Resolve the latest v22.x.x tarball name from the index page
-    local index_url="https://nodejs.org/dist/latest-v${NODE_VERSION}.x/"
+    local index_url="${NODE_DIST_BASE_URL}/latest-v${NODE_VERSION}.x/"
     local tarball_name
     tarball_name=$(curl -fsSL "$index_url" \
         | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" \
@@ -932,38 +1136,60 @@ clone_repo() {
                     log_info "Restore manually with: git stash apply $autostash_ref"
                 fi
             fi
+        elif install_from_source_tarball "$SOURCE_TARBALL"; then
+            :
+        elif download_source_archive; then
+            :
         else
             log_error "Directory exists but is not a git repository: $INSTALL_DIR"
-            log_info "Remove it or choose a different directory with --dir"
+            log_info "Remove it, use --source-tarball, or choose a different directory with --dir"
             exit 1
         fi
     else
-        # Try SSH first (for private repo access), fall back to HTTPS
-        # GIT_SSH_COMMAND disables interactive prompts and sets a short timeout
-        # so SSH fails fast instead of hanging when no key is configured.
-        log_info "Trying SSH clone..."
         local clone_args=()
         if [ "$INSTALL_MODE" = "source" ]; then
             clone_args=(--branch "$BRANCH")
         fi
-        if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
-           git clone "${clone_args[@]}" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
-            log_success "Cloned via SSH"
+        if install_from_source_tarball "$SOURCE_TARBALL"; then
+            :
+        elif download_source_archive; then
+            :
+        elif [ "$PREFER_SSH_CLONE" = true ]; then
+            log_info "Trying SSH clone..."
+            if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
+               git clone "${clone_args[@]}" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
+                log_success "Cloned via SSH"
+            else
+                rm -rf "$INSTALL_DIR" 2>/dev/null
+                log_info "SSH failed, trying HTTPS..."
+                if git clone "${clone_args[@]}" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
+                    log_success "Cloned via HTTPS"
+                else
+                    log_error "Failed to clone repository"
+                    exit 1
+                fi
+            fi
         else
-            rm -rf "$INSTALL_DIR" 2>/dev/null  # Clean up partial SSH clone
-            log_info "SSH failed, trying HTTPS..."
+            log_info "Trying HTTPS clone..."
             if git clone "${clone_args[@]}" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
                 log_success "Cloned via HTTPS"
             else
-                log_error "Failed to clone repository"
-                exit 1
+                rm -rf "$INSTALL_DIR" 2>/dev/null
+                log_info "HTTPS failed, trying SSH..."
+                if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
+                   git clone "${clone_args[@]}" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
+                    log_success "Cloned via SSH"
+                else
+                    log_error "Failed to clone repository"
+                    exit 1
+                fi
             fi
         fi
     fi
 
     cd "$INSTALL_DIR"
 
-    if [ "$INSTALL_MODE" = "release" ]; then
+    if [ -d "$INSTALL_DIR/.git" ] && [ "$INSTALL_MODE" = "release" ]; then
         git fetch origin --tags >/dev/null 2>&1 || true
         CURRENT_RELEASE_REF="$(resolve_target_release_ref "$RELEASE_REF")" || {
             log_error "Could not resolve a release tag after clone"
@@ -1338,6 +1564,13 @@ install_node_deps() {
         return 0
     fi
 
+    if [ "$INSTALL_NODE_DEPS" != true ]; then
+        log_info "Skipping Node.js/browser dependency install during bootstrap"
+        log_info "TUI dependencies install automatically on first 'mente --tui' run."
+        log_info "Browser tools install on demand; use --with-node-deps if you want them preinstalled."
+        return 0
+    fi
+
     if [ "$DISTRO" = "termux" ]; then
         log_info "Skipping automatic Node/browser dependency setup on Termux"
         log_info "Browser automation is not part of the tested Termux install path yet."
@@ -1640,9 +1873,14 @@ main() {
 
     detect_os
     resolve_install_layout
+    configure_network_defaults
     install_uv
     check_python
-    check_git
+    if should_require_git; then
+        check_git
+    else
+        log_info "Skipping Git check (local source bundle/archive path available)"
+    fi
     check_node
     install_system_packages
 

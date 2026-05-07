@@ -1,8 +1,9 @@
 {
   "name": "mente-agent",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "description": "Thin npm bootstrapper for Mente Agent. Installs and launches the full Mente runtime with a single global command.",
   "scripts": {
+    "prepack": "python3 scripts/build_npm_source_bundle.py",
     "postinstall": "echo '✅ mente-agent bootstrapper installed. Run: mente'",
     "test:npm-installer": "node --test tests/npm-installer/*.test.mjs",
     "release:check:npm": "node scripts/validate-npm-publish.cjs --event workflow_dispatch"
@@ -13,7 +14,9 @@
   },
   "files": [
     "npm/installer/bin",
+    "npm/installer/bundles",
     "npm/installer/lib",
+    "scripts/build_npm_source_bundle.py",
     "scripts/install.sh",
     "scripts/install.ps1",
     "scripts/install.cmd",

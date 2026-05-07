@@ -10,6 +10,7 @@ const {
   getBootstrapStatePath,
   getBundledInstallPowerShellScript,
   getBundledInstallScript,
+  getBundledRuntimeSourceTarball,
   getEffectiveMenteHome,
   shouldRefreshInstalledRuntime,
 } = require('../lib/paths.cjs');
@@ -39,6 +40,14 @@ function run(command, args, options = {}) {
 }
 
 function bootstrapInstall(options = {}) {
+  const bundledSourceTarball = getBundledRuntimeSourceTarball();
+  const installArgs = getBootstrapInstallArgs(process.env, {
+    ...options,
+    bundledSourceTarball: fs.existsSync(bundledSourceTarball)
+      ? bundledSourceTarball
+      : '',
+  });
+
   if (process.platform === 'win32') {
     const powershellScript = getBundledInstallPowerShellScript();
     return run('powershell', [
@@ -46,12 +55,12 @@ function bootstrapInstall(options = {}) {
       'Bypass',
       '-File',
       powershellScript,
-      ...getBootstrapInstallArgs(process.env, options),
+      ...installArgs,
     ]);
   }
 
   const installScript = getBundledInstallScript();
-  return run('bash', [installScript, ...getBootstrapInstallArgs(process.env, options)]);
+  return run('bash', [installScript, ...installArgs]);
 }
 
 function writeBootstrapState() {

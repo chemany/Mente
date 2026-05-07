@@ -8,20 +8,27 @@
 #   irm https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.ps1 | iex
 #
 # Or download and run with options:
-#   .\install.ps1 -Release latest -NoVenv -SkipSetup
+#   .\install.ps1 -Release latest -NoVenv -SkipSetup -China
+#   .\install.ps1 -Branch main -SourceTarball .\mente-runtime-source.tar.gz
+#   .\install.ps1 -OfficialNetwork
 #
 # ============================================================================
 
 param(
     [switch]$NoVenv,
     [switch]$SkipSetup,
+    [switch]$WithNodeDeps,
+    [switch]$SshFirst,
+    [switch]$China,
+    [switch]$OfficialNetwork,
     [string]$Release = "latest",
     [string]$Branch = "main",
     [string]$MenteHome = $(if ($env:MENTE_HOME) { $env:MENTE_HOME } elseif ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\mente" }),
-    [string]$InstallDir = $(if ($env:MENTE_INSTALL_DIR) { $env:MENTE_INSTALL_DIR } else { Join-Path $MenteHome "mente-agent" })
+    [string]$InstallDir = $(if ($env:MENTE_INSTALL_DIR) { $env:MENTE_INSTALL_DIR } else { Join-Path $MenteHome "mente-agent" }),
     [string]$InstallMode = "release",
     [string]$RuntimeArtifactManifest = "",
     [string]$RuntimeWheel = "",
+    [string]$SourceTarball = $(if ($env:MENTE_SOURCE_TARBALL) { $env:MENTE_SOURCE_TARBALL } else { "" }),
     [string]$HermesHome = $(if ($env:HERMES_HOME) { $env:HERMES_HOME } elseif ($env:MENTE_HOME) { $env:MENTE_HOME } else { "$env:LOCALAPPDATA\mente" })
 )
 
@@ -33,6 +40,9 @@ $ErrorActionPreference = "Stop"
 
 $RepoUrlSsh = "git@github.com:chemany/Mente.git"
 $RepoUrlHttps = "https://github.com/chemany/Mente.git"
+$UvInstallUrl = if ($env:MENTE_UV_INSTALL_URL) { $env:MENTE_UV_INSTALL_URL } else { "https://astral.sh/uv/install.ps1" }
+$NodeDistBaseUrl = if ($env:MENTE_NODE_DIST_BASE_URL) { $env:MENTE_NODE_DIST_BASE_URL } else { "https://nodejs.org/dist" }
+$SourceArchiveBaseUrl = if ($env:MENTE_SOURCE_ARCHIVE_BASE_URL) { $env:MENTE_SOURCE_ARCHIVE_BASE_URL } else { "https://codeload.github.com/chemany/Mente/tar.gz" }
 $PythonVersion = "3.11"
 $NodeVersion = "22"
 
@@ -70,6 +80,181 @@ function Write-Err {
     Write-Host "✗ $Message" -ForegroundColor Red
 }
 
+function Test-OfficialEndpoint {
+    param([string]$Url)
+
+    try {
+        Invoke-WebRequest -Uri $Url -Method Head -TimeoutSec 5 -UseBasicParsing | Out-Null
+        return $true
+    } catch {
+        try {
+            Invoke-WebRequest -Uri $Url -TimeoutSec 5 -UseBasicParsing | Out-Null
+            return $true
+        } catch {
+            return $false
+        }
+    }
+}
+
+function Should-EnableChinaMirrors {
+    $probeUrls = @(
+        "https://astral.sh/uv/install.ps1",
+        "https://registry.npmjs.org/-/ping",
+        "https://nodejs.org/dist/latest-v${NodeVersion}.x/"
+    )
+
+    foreach ($url in $probeUrls) {
+        if (-not (Test-OfficialEndpoint -Url $url)) {
+            Write-Warn "Official endpoint probe failed: $url"
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Apply-ChinaNetworkDefaults {
+    Write-Info "China mode enabled"
+
+    if (-not $env:PIP_INDEX_URL) {
+        $env:PIP_INDEX_URL = if ($env:MENTE_PYPI_INDEX_URL) { $env:MENTE_PYPI_INDEX_URL } else { "https://pypi.tuna.tsinghua.edu.cn/simple" }
+    }
+    if (-not $env:UV_INDEX_URL) {
+        $env:UV_INDEX_URL = if ($env:MENTE_UV_INDEX_URL) { $env:MENTE_UV_INDEX_URL } else { $env:PIP_INDEX_URL }
+    }
+    if (-not $env:NPM_CONFIG_REGISTRY) {
+        $env:NPM_CONFIG_REGISTRY = if ($env:MENTE_NPM_REGISTRY) { $env:MENTE_NPM_REGISTRY } else { "https://registry.npmmirror.com" }
+    }
+    if (-not $env:PLAYWRIGHT_DOWNLOAD_HOST) {
+        $env:PLAYWRIGHT_DOWNLOAD_HOST = if ($env:MENTE_PLAYWRIGHT_DOWNLOAD_HOST) { $env:MENTE_PLAYWRIGHT_DOWNLOAD_HOST } else { "https://npmmirror.com/mirrors/playwright" }
+    }
+    if (-not $env:MENTE_NODE_DIST_BASE_URL) {
+        $script:NodeDistBaseUrl = "https://npmmirror.com/mirrors/node"
+    }
+
+    Write-Info "  Python index: $env:PIP_INDEX_URL"
+    Write-Info "  npm registry: $env:NPM_CONFIG_REGISTRY"
+    Write-Info "  Playwright mirror: $env:PLAYWRIGHT_DOWNLOAD_HOST"
+}
+
+function Configure-NetworkDefaults {
+    if ($China) {
+        Apply-ChinaNetworkDefaults
+        return
+    }
+
+    if ($OfficialNetwork) {
+        Write-Info "Official network mode forced; skipping China mirror auto-detection"
+        return
+    }
+
+    Write-Info "Auto-detecting whether China mirrors are needed..."
+    if (Should-EnableChinaMirrors) {
+        Write-Warn "Official network path looks degraded; switching to China mirrors"
+        Apply-ChinaNetworkDefaults
+    } else {
+        Write-Success "Official network path looks healthy"
+    }
+}
+
+function Can-UseArchiveInstall {
+    return $InstallMode -eq "source" -or $Release -ne "latest"
+}
+
+function Should-RequireGit {
+    if (Test-Path (Join-Path $InstallDir ".git")) {
+        return $true
+    }
+    if ($SourceTarball -and (Test-Path $SourceTarball)) {
+        return $false
+    }
+    return -not (Can-UseArchiveInstall)
+}
+
+function Get-InstallerPython {
+    try {
+        $pythonPath = & $UvCmd python find $PythonVersion 2>$null
+        if ($pythonPath) {
+            return $pythonPath.Trim()
+        }
+    } catch { }
+
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        return (Get-Command python).Source
+    }
+
+    throw "Python interpreter not available for source extraction"
+}
+
+function Install-FromSourceTarball {
+    param([string]$TarballPath)
+
+    if (-not $TarballPath -or -not (Test-Path $TarballPath)) {
+        return $false
+    }
+
+    Write-Info "Trying local bundled source..."
+
+    $tmpDir = Join-Path $env:TEMP ("mente-source-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+
+    try {
+        $pythonExe = Get-InstallerPython
+        & $pythonExe -c "import pathlib, sys, tarfile; tarfile.open(sys.argv[1], 'r:gz').extractall(pathlib.Path(sys.argv[2]))" $TarballPath $tmpDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "python extraction failed"
+        }
+
+        $extractedDir = Get-ChildItem $tmpDir -Directory | Select-Object -First 1
+        if (-not $extractedDir) {
+            throw "source tarball did not contain an installable project root"
+        }
+
+        if (Test-Path $InstallDir) {
+            Remove-Item -Recurse -Force $InstallDir
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) | Out-Null
+        Move-Item $extractedDir.FullName $InstallDir -Force
+        Write-Success "Loaded local bundled source"
+        return $true
+    } catch {
+        Write-Warn "Failed to extract local bundled source: $_"
+        return $false
+    } finally {
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    }
+}
+
+function Download-SourceArchive {
+    $archiveUrl = $null
+
+    if ($InstallMode -eq "source") {
+        $archiveUrl = "$SourceArchiveBaseUrl/refs/heads/$Branch"
+    } elseif ($Release -ne "latest") {
+        $archiveUrl = "$SourceArchiveBaseUrl/refs/tags/$Release"
+        $script:CurrentReleaseRef = $Release
+    } else {
+        return $false
+    }
+
+    Write-Info "Trying source archive download..."
+
+    $tmpDir = Join-Path $env:TEMP ("mente-source-download-" + [guid]::NewGuid().ToString("N"))
+    $archivePath = Join-Path $tmpDir "mente-source.tar.gz"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+
+    try {
+        Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath -UseBasicParsing
+        $script:SourceTarball = $archivePath
+        return Install-FromSourceTarball -TarballPath $script:SourceTarball
+    } catch {
+        Write-Warn "Source archive download failed: $_"
+        return $false
+    } finally {
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    }
+}
+
 # ============================================================================
 # Dependency checks
 # ============================================================================
@@ -102,7 +287,7 @@ function Install-Uv {
     # Install uv
     Write-Info "Installing uv (fast Python package manager)..."
     try {
-        powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex" 2>&1 | Out-Null
+        powershell -ExecutionPolicy ByPass -c "irm $UvInstallUrl | iex" 2>&1 | Out-Null
         
         # Find the installed binary
         $uvExe = "$env:USERPROFILE\.local\bin\uv.exe"
@@ -253,7 +438,7 @@ function Test-Node {
     Write-Info "Downloading Node.js $NodeVersion binary..."
     try {
         $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
-        $indexUrl = "https://nodejs.org/dist/latest-v${NodeVersion}.x/"
+        $indexUrl = "$NodeDistBaseUrl/latest-v${NodeVersion}.x/"
         $indexPage = Invoke-WebRequest -Uri $indexUrl -UseBasicParsing
         $zipName = ($indexPage.Content | Select-String -Pattern "node-v${NodeVersion}\.\d+\.\d+-win-${arch}\.zip" -AllMatches).Matches[0].Value
 
@@ -478,40 +663,61 @@ function Install-Repository {
                 git -c windows.appendAtomically=false pull origin $Branch
             }
             Pop-Location
+        } elseif (Install-FromSourceTarball -TarballPath $SourceTarball) {
+            # Local bundle refresh path.
+        } elseif (Download-SourceArchive) {
+            # Archive refresh path.
         } else {
             Write-Err "Directory exists but is not a git repository: $InstallDir"
-            Write-Info "Remove it or choose a different directory with -InstallDir"
+            Write-Info "Remove it, use -SourceTarball, or choose a different directory with -InstallDir"
             throw "Directory exists but is not a git repository: $InstallDir"
         }
     } else {
         $cloneSuccess = $false
 
+        if ((Install-FromSourceTarball -TarballPath $SourceTarball) -or (Download-SourceArchive)) {
+            $cloneSuccess = $true
+        }
+
         # Fix Windows git "copy-fd: write returned: Invalid argument" error.
         # Git for Windows can fail on atomic file operations (hook templates,
         # config lock files) due to antivirus, OneDrive, or NTFS filter drivers.
         # The -c flag injects config before any file I/O occurs.
-        Write-Info "Configuring git for Windows compatibility..."
-        $env:GIT_CONFIG_COUNT = "1"
-        $env:GIT_CONFIG_KEY_0 = "windows.appendAtomically"
-        $env:GIT_CONFIG_VALUE_0 = "false"
-        git config --global windows.appendAtomically false 2>$null
-
-        # Try SSH first, then HTTPS, with -c flag for atomic write fix
-        Write-Info "Trying SSH clone..."
-        $env:GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=5"
-        try {
-            if ($InstallMode -eq "release") {
-                git -c windows.appendAtomically=false clone --recurse-submodules $RepoUrlSsh $InstallDir
-            } else {
-                git -c windows.appendAtomically=false clone --branch $Branch --recurse-submodules $RepoUrlSsh $InstallDir
-            }
-            if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
-        } catch { }
-        $env:GIT_SSH_COMMAND = $null
-        
         if (-not $cloneSuccess) {
-            if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue }
-            Write-Info "SSH failed, trying HTTPS..."
+            Write-Info "Configuring git for Windows compatibility..."
+            $env:GIT_CONFIG_COUNT = "1"
+            $env:GIT_CONFIG_KEY_0 = "windows.appendAtomically"
+            $env:GIT_CONFIG_VALUE_0 = "false"
+            git config --global windows.appendAtomically false 2>$null
+        }
+
+        if (-not $cloneSuccess -and $SshFirst) {
+            Write-Info "Trying SSH clone..."
+            $env:GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=5"
+            try {
+                if ($InstallMode -eq "release") {
+                    git -c windows.appendAtomically=false clone --recurse-submodules $RepoUrlSsh $InstallDir
+                } else {
+                    git -c windows.appendAtomically=false clone --branch $Branch --recurse-submodules $RepoUrlSsh $InstallDir
+                }
+                if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
+            } catch { }
+            $env:GIT_SSH_COMMAND = $null
+            
+            if (-not $cloneSuccess) {
+                if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue }
+                Write-Info "SSH failed, trying HTTPS..."
+                try {
+                    if ($InstallMode -eq "release") {
+                        git -c windows.appendAtomically=false clone --recurse-submodules $RepoUrlHttps $InstallDir
+                    } else {
+                        git -c windows.appendAtomically=false clone --branch $Branch --recurse-submodules $RepoUrlHttps $InstallDir
+                    }
+                    if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
+                } catch { }
+            }
+        } elseif (-not $cloneSuccess) {
+            Write-Info "Trying HTTPS clone..."
             try {
                 if ($InstallMode -eq "release") {
                     git -c windows.appendAtomically=false clone --recurse-submodules $RepoUrlHttps $InstallDir
@@ -520,6 +726,21 @@ function Install-Repository {
                 }
                 if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
             } catch { }
+
+            if (-not $cloneSuccess) {
+                if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue }
+                Write-Info "HTTPS failed, trying SSH..."
+                $env:GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=5"
+                try {
+                    if ($InstallMode -eq "release") {
+                        git -c windows.appendAtomically=false clone --recurse-submodules $RepoUrlSsh $InstallDir
+                    } else {
+                        git -c windows.appendAtomically=false clone --branch $Branch --recurse-submodules $RepoUrlSsh $InstallDir
+                    }
+                    if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
+                } catch { }
+                $env:GIT_SSH_COMMAND = $null
+            }
         }
 
         # Fallback: download ZIP archive (bypasses git file I/O issues entirely)
@@ -568,19 +789,21 @@ function Install-Repository {
     
     # Set per-repo config (harmless if it fails)
     Push-Location $InstallDir
-    git -c windows.appendAtomically=false config windows.appendAtomically false 2>$null
+    if (Test-Path ".git") {
+        git -c windows.appendAtomically=false config windows.appendAtomically false 2>$null
 
-    # Ensure submodules are initialized and updated
-    Write-Info "Initializing submodules..."
-    git -c windows.appendAtomically=false submodule update --init --recursive 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "Submodule init failed (terminal/RL tools may need manual setup)"
-    } else {
-        Write-Success "Submodules ready"
-    }
-    if ($InstallMode -eq "release") {
-        $script:CurrentReleaseRef = Resolve-TargetReleaseRef $Release
-        git -c windows.appendAtomically=false checkout $script:CurrentReleaseRef 2>$null
+        # Ensure submodules are initialized and updated
+        Write-Info "Initializing submodules..."
+        git -c windows.appendAtomically=false submodule update --init --recursive 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Submodule init failed (terminal/RL tools may need manual setup)"
+        } else {
+            Write-Success "Submodules ready"
+        }
+        if ($InstallMode -eq "release") {
+            $script:CurrentReleaseRef = Resolve-TargetReleaseRef $Release
+            git -c windows.appendAtomically=false checkout $script:CurrentReleaseRef 2>$null
+        }
     }
     Write-InstallManifest
     Pop-Location
@@ -783,6 +1006,13 @@ function Install-NodeDeps {
         Write-Info "Skipping Node.js dependencies (Node not installed)"
         return
     }
+
+    if (-not $WithNodeDeps) {
+        Write-Info "Skipping Node.js/browser dependency install during bootstrap"
+        Write-Info "TUI dependencies install automatically on first 'mente --tui' run."
+        Write-Info "Browser tools install on demand; use -WithNodeDeps if you want them preinstalled."
+        return
+    }
     
     Push-Location $InstallDir
     
@@ -969,9 +1199,14 @@ function Write-Completion {
 function Main {
     Write-Banner
     
+    Configure-NetworkDefaults
     if (-not (Install-Uv)) { throw "uv installation failed — cannot continue" }
     if (-not (Test-Python)) { throw "Python $PythonVersion not available — cannot continue" }
-    if (-not (Test-Git)) { throw "Git not found — install from https://git-scm.com/download/win" }
+    if (Should-RequireGit) {
+        if (-not (Test-Git)) { throw "Git not found — install from https://git-scm.com/download/win" }
+    } else {
+        Write-Info "Skipping Git check (local source bundle/archive path available)"
+    }
     Test-Node              # Auto-installs if missing
     Install-SystemPackages  # ripgrep + ffmpeg in one step
     

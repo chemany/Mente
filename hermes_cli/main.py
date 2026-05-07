@@ -6097,7 +6097,7 @@ def _cmd_update_check():
     """Implement ``hermes update --check``: fetch and report without installing."""
     git_dir = PROJECT_ROOT / ".git"
     if not git_dir.exists():
-        print("✗ Not a git repository — cannot check for updates.")
+        _print_non_git_update_hint(check_only=True)
         sys.exit(1)
 
     git_cmd = ["git"]
@@ -6367,6 +6367,45 @@ def _get_current_release_tag(git_cmd: list[str], cwd: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def _load_npm_bootstrap_state() -> dict | None:
+    """Return npm bootstrap metadata when this install came from mente-agent."""
+    try:
+        from hermes_constants import get_hermes_home
+
+        state_path = get_hermes_home() / ".mente-npm-bootstrap.json"
+        if not state_path.exists():
+            return None
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _print_non_git_update_hint(*, check_only: bool) -> None:
+    """Explain how to update installs that do not have a git checkout."""
+    npm_state = _load_npm_bootstrap_state()
+    action = "check for updates" if check_only else "update this install"
+
+    if npm_state is not None:
+        package_version = str(npm_state.get("package_version", "")).strip()
+        suffix = f" (current npm bootstrapper: {package_version})" if package_version else ""
+        print(f"✗ npm bundle install detected — cannot {action} with git{suffix}.")
+        print("  Upgrade with:")
+        print("    npm install -g mente-agent@latest")
+        print("    mente")
+        return
+
+    if check_only:
+        print("✗ Not a git repository — cannot check for updates.")
+    else:
+        print("✗ Not a git repository. Please reinstall with the release-pinned installer:")
+        print(
+            "  curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash -s -- --release latest"
+        )
+
+
 def _cmd_update_impl(args, gateway_mode: bool):
     """Body of ``cmd_update`` — kept separate so the wrapper can always
     restore stdio even on ``sys.exit``."""
@@ -6395,10 +6434,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         if sys.platform == "win32":
             use_zip_update = True
         else:
-            print("✗ Not a git repository. Please reinstall with the release-pinned installer:")
-            print(
-                "  curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --release latest"
-            )
+            _print_non_git_update_hint(check_only=False)
             sys.exit(1)
 
     # On Windows, git can fail with "unable to write loose object file: Invalid argument"

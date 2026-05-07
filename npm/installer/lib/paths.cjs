@@ -17,6 +17,16 @@ function getBundledInstallCmdScript() {
   return path.join(getPackageRoot(), 'scripts', 'install.cmd');
 }
 
+function getBundledRuntimeSourceTarball() {
+  return path.join(
+    getPackageRoot(),
+    'npm',
+    'installer',
+    'bundles',
+    'mente-runtime-source.tar.gz',
+  );
+}
+
 function getBootstrapInstallArgs(env = process.env, options = {}) {
   const args = [];
   const release = String(env.MENTE_BOOTSTRAP_RELEASE || '').trim();
@@ -29,6 +39,16 @@ function getBootstrapInstallArgs(env = process.env, options = {}) {
 
   if (options.skipSetup) {
     args.push('--skip-setup');
+  }
+
+  const chinaMode = String(env.MENTE_BOOTSTRAP_CHINA || '').trim().toLowerCase();
+  if (chinaMode && !['0', 'false', 'no', 'off'].includes(chinaMode)) {
+    args.push('--china');
+  }
+
+  const bundledSourceTarball = String(options.bundledSourceTarball || '').trim();
+  if (bundledSourceTarball) {
+    args.push('--source-tarball', bundledSourceTarball);
   }
 
   return args;
@@ -125,6 +145,7 @@ module.exports = {
   getBundledInstallCmdScript,
   getBundledInstallPowerShellScript,
   getBundledInstallScript,
+  getBundledRuntimeSourceTarball,
   getBootstrapInstallArgs,
   getEffectiveMenteHome,
   getInstalledProjectRoot,

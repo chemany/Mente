@@ -704,3 +704,27 @@ def test_cmd_update_release_install_noops_when_already_on_latest_tag(monkeypatch
     out = capsys.readouterr().out
     assert "release-pinned install detected" in out.lower()
     assert "already up to date" in out.lower()
+
+
+def test_cmd_update_npm_bundle_install_shows_npm_upgrade_hint(monkeypatch, tmp_path, capsys):
+    project_root = tmp_path / "mente-agent"
+    project_root.mkdir()
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir()
+    (mente_home / ".mente-npm-bootstrap.json").write_text(
+        '{"package_version":"0.11.3"}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(hermes_main, "PROJECT_ROOT", project_root)
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        hermes_main.cmd_update(SimpleNamespace())
+
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "npm bundle install detected" in out.lower()
+    assert "npm install -g mente-agent@latest" in out
+    assert "mente" in out
