@@ -828,10 +828,17 @@ function Invoke-SetupWizard {
     Push-Location $InstallDir
     
     # Run mente setup using the venv Python directly (no activation needed)
-    if (-not $NoVenv) {
-        & ".\venv\Scripts\python.exe" -m hermes_cli.main setup
-    } else {
-        python -m hermes_cli.main setup
+    $env:MENTE_SETUP_SKIP_AUTO_CHAT = "1"
+    $env:HERMES_SETUP_SKIP_AUTO_CHAT = "1"
+    try {
+        if (-not $NoVenv) {
+            & ".\venv\Scripts\python.exe" -m hermes_cli.main setup
+        } else {
+            python -m hermes_cli.main setup
+        }
+    } finally {
+        Remove-Item Env:MENTE_SETUP_SKIP_AUTO_CHAT -ErrorAction SilentlyContinue
+        Remove-Item Env:HERMES_SETUP_SKIP_AUTO_CHAT -ErrorAction SilentlyContinue
     }
     
     Pop-Location

@@ -3139,6 +3139,11 @@ def _resolve_hermes_chat_argv() -> Optional[list[str]]:
 
 def _offer_launch_chat():
     """Prompt the user to jump straight into chat after setup."""
+    for env_name in ("MENTE_SETUP_SKIP_AUTO_CHAT", "HERMES_SETUP_SKIP_AUTO_CHAT"):
+        value = os.getenv(env_name, "").strip().lower()
+        if value and value not in {"0", "false", "no", "off"}:
+            return
+
     print()
     if not prompt_yes_no("Launch hermes chat now?", True):
         return

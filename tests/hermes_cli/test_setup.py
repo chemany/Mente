@@ -517,6 +517,31 @@ def test_offer_launch_chat_execs_fresh_process(monkeypatch):
     assert exec_calls == [("/usr/local/bin/hermes", ["/usr/local/bin/hermes", "chat"])]
 
 
+def test_offer_launch_chat_skips_when_auto_chat_disabled(monkeypatch):
+    from hermes_cli import setup as setup_mod
+
+    monkeypatch.setenv("MENTE_SETUP_SKIP_AUTO_CHAT", "1")
+
+    prompt_calls = []
+    exec_calls = []
+
+    monkeypatch.setattr(
+        setup_mod,
+        "prompt_yes_no",
+        lambda *_args, **_kwargs: prompt_calls.append(True),
+    )
+    monkeypatch.setattr(
+        setup_mod.os,
+        "execvp",
+        lambda *args, **kwargs: exec_calls.append((args, kwargs)),
+    )
+
+    setup_mod._offer_launch_chat()
+
+    assert prompt_calls == []
+    assert exec_calls == []
+
+
 def test_offer_launch_chat_manual_fallback_when_unresolvable(monkeypatch, capsys):
     from hermes_cli import setup as setup_mod
 

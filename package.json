@@ -1,6 +1,6 @@
 {
   "name": "mente-agent",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Thin npm bootstrapper for Mente Agent. Installs and launches the full Mente runtime with a single global command.",
   "scripts": {
     "postinstall": "echo '✅ mente-agent bootstrapper installed. Run: mente'",

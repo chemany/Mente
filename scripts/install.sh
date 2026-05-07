@@ -1448,9 +1448,11 @@ run_setup_wizard() {
     # Run mente setup using the venv Python directly (no activation needed).
     # Redirect stdin from /dev/tty so interactive prompts work when piped from curl.
     if [ "$USE_VENV" = true ]; then
-        "$INSTALL_DIR/venv/bin/python" -m hermes_cli.main setup < /dev/tty
+        MENTE_SETUP_SKIP_AUTO_CHAT=1 HERMES_SETUP_SKIP_AUTO_CHAT=1 \
+            "$INSTALL_DIR/venv/bin/python" -m hermes_cli.main setup < /dev/tty
     else
-        python -m hermes_cli.main setup < /dev/tty
+        MENTE_SETUP_SKIP_AUTO_CHAT=1 HERMES_SETUP_SKIP_AUTO_CHAT=1 \
+            python -m hermes_cli.main setup < /dev/tty
     fi
 }
 
