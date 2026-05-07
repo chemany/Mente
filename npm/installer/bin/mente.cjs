@@ -7,9 +7,13 @@ const { spawnSync } = require('node:child_process');
 const {
   findInstalledMenteBinary,
   getBootstrapInstallArgs,
+  getBootstrapStatePath,
   getBundledInstallPowerShellScript,
   getBundledInstallScript,
+  getEffectiveMenteHome,
+  shouldRefreshInstalledRuntime,
 } = require('../lib/paths.cjs');
+const pkg = require('../../../package.json');
 
 function isSameExecutable(a, b) {
   if (!a || !b) {
@@ -34,7 +38,7 @@ function run(command, args, options = {}) {
   return result.status ?? 1;
 }
 
-function bootstrapInstall() {
+function bootstrapInstall(options = {}) {
   if (process.platform === 'win32') {
     const powershellScript = getBundledInstallPowerShellScript();
     return run('powershell', [
@@ -42,12 +46,27 @@ function bootstrapInstall() {
       'Bypass',
       '-File',
       powershellScript,
-      ...getBootstrapInstallArgs(),
+      ...getBootstrapInstallArgs(process.env, options),
     ]);
   }
 
   const installScript = getBundledInstallScript();
-  return run('bash', [installScript, ...getBootstrapInstallArgs()]);
+  return run('bash', [installScript, ...getBootstrapInstallArgs(process.env, options)]);
+}
+
+function writeBootstrapState() {
+  const menteHome = getEffectiveMenteHome(process.env);
+  const statePath = getBootstrapStatePath(process.env);
+  if (!menteHome || !statePath) {
+    return;
+  }
+
+  fs.mkdirSync(menteHome, { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    `${JSON.stringify({ package_version: pkg.version }, null, 2)}\n`,
+    'utf8',
+  );
 }
 
 function main() {
@@ -57,7 +76,20 @@ function main() {
   });
 
   if (menteBinary && !isSameExecutable(menteBinary, selfPath)) {
-    const exitCode = run(menteBinary, process.argv.slice(2));
+    if (shouldRefreshInstalledRuntime({ packageVersion: pkg.version })) {
+      console.error(`Mente runtime is older than mente-agent@${pkg.version}. Updating installed runtime...`);
+      const updateExitCode = bootstrapInstall({ skipSetup: true });
+      if (updateExitCode !== 0) {
+        console.error('Mente runtime update failed; launching the existing runtime instead.');
+      } else {
+        writeBootstrapState();
+      }
+    }
+
+    const refreshedBinary = findInstalledMenteBinary({
+      skip: [selfPath],
+    }) || menteBinary;
+    const exitCode = run(refreshedBinary, process.argv.slice(2));
     process.exit(exitCode);
   }
 
@@ -66,6 +98,7 @@ function main() {
   if (installExitCode !== 0) {
     process.exit(installExitCode);
   }
+  writeBootstrapState();
 
   const installedBinary = findInstalledMenteBinary({
     skip: [selfPath],

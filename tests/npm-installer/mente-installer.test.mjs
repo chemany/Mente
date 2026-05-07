@@ -10,7 +10,9 @@ import publishCheck from '../../npm/installer/lib/publish-check.cjs';
 const {
   findInstalledMenteBinary,
   getBootstrapInstallArgs,
+  getBootstrapStatePath,
   getBundledInstallScript,
+  shouldRefreshInstalledRuntime,
   getPackageRoot,
 } = installerPaths;
 const {
@@ -50,6 +52,50 @@ test('installer helper defaults bootstrap install to main and allows release ove
   assert.deepEqual(
     getBootstrapInstallArgs({ MENTE_BOOTSTRAP_RELEASE: 'v0.11.0' }),
     ['--release', 'v0.11.0'],
+  );
+  assert.deepEqual(
+    getBootstrapInstallArgs({}, { skipSetup: true }),
+    ['--branch', 'main', '--skip-setup'],
+  );
+});
+
+test('runtime refresh is required when bootstrapper version changed', () => {
+  const env = {
+    HOME: '/tmp/example-home',
+    MENTE_HOME: '/tmp/example-home/.mente',
+  };
+
+  assert.equal(
+    shouldRefreshInstalledRuntime({
+      env,
+      packageVersion: '0.11.2',
+      existsSync: () => false,
+      readFileSync: () => {
+        throw new Error('should not read bootstrap state when it is missing');
+      },
+    }),
+    true,
+  );
+});
+
+test('runtime refresh is skipped when bootstrapper version already matches', () => {
+  const env = {
+    HOME: '/tmp/example-home',
+    MENTE_HOME: '/tmp/example-home/.mente',
+  };
+  const statePath = getBootstrapStatePath(env);
+
+  assert.equal(
+    shouldRefreshInstalledRuntime({
+      env,
+      packageVersion: '0.11.2',
+      existsSync: (candidate) => candidate === statePath,
+      readFileSync: (candidate) => {
+        assert.equal(candidate, statePath);
+        return JSON.stringify({ package_version: '0.11.2' });
+      },
+    }),
+    false,
   );
 });
 

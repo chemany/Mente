@@ -17,14 +17,21 @@ function getBundledInstallCmdScript() {
   return path.join(getPackageRoot(), 'scripts', 'install.cmd');
 }
 
-function getBootstrapInstallArgs(env = process.env) {
+function getBootstrapInstallArgs(env = process.env, options = {}) {
+  const args = [];
   const release = String(env.MENTE_BOOTSTRAP_RELEASE || '').trim();
   if (release) {
-    return ['--release', release];
+    args.push('--release', release);
+  } else {
+    const branch = String(env.MENTE_BOOTSTRAP_BRANCH || '').trim() || 'main';
+    args.push('--branch', branch);
   }
 
-  const branch = String(env.MENTE_BOOTSTRAP_BRANCH || '').trim() || 'main';
-  return ['--branch', branch];
+  if (options.skipSetup) {
+    args.push('--skip-setup');
+  }
+
+  return args;
 }
 
 function getEffectiveMenteHome(env = process.env) {
@@ -40,14 +47,24 @@ function getEffectiveMenteHome(env = process.env) {
   return home ? path.join(home, '.mente') : '';
 }
 
+function getInstalledProjectRoot(env = process.env) {
+  const menteHome = getEffectiveMenteHome(env);
+  return menteHome ? path.join(menteHome, 'mente-agent') : '';
+}
+
+function getBootstrapStatePath(env = process.env) {
+  const menteHome = getEffectiveMenteHome(env);
+  return menteHome ? path.join(menteHome, '.mente-npm-bootstrap.json') : '';
+}
+
 function getInstalledBinaryCandidates(env = process.env) {
   const candidates = [];
-  const menteHome = getEffectiveMenteHome(env);
-  if (menteHome) {
-    candidates.push(path.join(menteHome, 'mente-agent', 'venv', 'bin', 'mente'));
-    candidates.push(path.join(menteHome, 'mente-agent', '.venv', 'bin', 'mente'));
-    candidates.push(path.join(menteHome, 'mente-agent', 'venv', 'Scripts', 'mente.exe'));
-    candidates.push(path.join(menteHome, 'mente-agent', '.venv', 'Scripts', 'mente.exe'));
+  const projectRoot = getInstalledProjectRoot(env);
+  if (projectRoot) {
+    candidates.push(path.join(projectRoot, 'venv', 'bin', 'mente'));
+    candidates.push(path.join(projectRoot, '.venv', 'bin', 'mente'));
+    candidates.push(path.join(projectRoot, 'venv', 'Scripts', 'mente.exe'));
+    candidates.push(path.join(projectRoot, '.venv', 'Scripts', 'mente.exe'));
   }
 
   const pathEntries = String(env.PATH || '')
@@ -83,13 +100,35 @@ function findInstalledMenteBinary(options = {}) {
   return null;
 }
 
+function shouldRefreshInstalledRuntime(options = {}) {
+  const env = options.env || process.env;
+  const existsSync = options.existsSync || fs.existsSync;
+  const readFileSync = options.readFileSync || fs.readFileSync;
+  const packageVersion = String(options.packageVersion || '').trim();
+  const statePath = getBootstrapStatePath(env);
+
+  if (!packageVersion || !statePath || !existsSync(statePath)) {
+    return true;
+  }
+
+  try {
+    const payload = JSON.parse(readFileSync(statePath, 'utf8'));
+    return String(payload.package_version || '').trim() !== packageVersion;
+  } catch {
+    return true;
+  }
+}
+
 module.exports = {
   findInstalledMenteBinary,
+  getBootstrapStatePath,
   getBundledInstallCmdScript,
   getBundledInstallPowerShellScript,
   getBundledInstallScript,
   getBootstrapInstallArgs,
   getEffectiveMenteHome,
+  getInstalledProjectRoot,
   getInstalledBinaryCandidates,
   getPackageRoot,
+  shouldRefreshInstalledRuntime,
 };
