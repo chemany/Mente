@@ -234,6 +234,39 @@ def _record_gateway_runtime_continuity_result(
         )
 
 
+def _maybe_invalidate_gateway_runtime_continuity_when_disabled(
+    *,
+    session_store,
+    session_id: str | None,
+    continuity_payload: Dict[str, Any] | None,
+) -> Dict[str, Any] | None:
+    """Retire one active Codex binding before stateless gateway fallback when continuity is disabled."""
+    if is_gateway_runtime_continuity_enabled():
+        return dict(continuity_payload) if isinstance(continuity_payload, dict) else continuity_payload
+    if not isinstance(continuity_payload, dict):
+        return continuity_payload
+
+    runtime = str(continuity_payload.get("runtime") or "").strip().lower()
+    status = str(continuity_payload.get("status") or "").strip().lower()
+    continuity_id = str(continuity_payload.get("continuity_id") or "").strip()
+    if (
+        runtime != _GATEWAY_RUNTIME_CONTINUITY_RUNTIME
+        or status != "active"
+        or not continuity_id
+    ):
+        return dict(continuity_payload)
+
+    _invalidate_gateway_runtime_continuity(
+        session_store=session_store,
+        session_id=session_id,
+        reason="continuity_disabled",
+    )
+    payload = dict(continuity_payload)
+    payload["status"] = "invalidated"
+    payload["invalidation_reason"] = "continuity_disabled"
+    return payload
+
+
 def _invalidate_gateway_runtime_continuity(
     *,
     session_store,
@@ -10282,6 +10315,11 @@ class GatewayRunner:
             continuity_payload = None
             if self.session_store is not None and hasattr(self.session_store, "get_runtime_continuity"):
                 continuity_payload = self.session_store.get_runtime_continuity(session_id)
+                continuity_payload = _maybe_invalidate_gateway_runtime_continuity_when_disabled(
+                    session_store=self.session_store,
+                    session_id=session_id,
+                    continuity_payload=continuity_payload,
+                )
             continuity_plan = _resolve_gateway_runtime_continuity_plan(
                 session_entry=None,
                 history=history,

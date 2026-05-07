@@ -32,6 +32,29 @@ def test_resolve_gateway_runtime_continuity_plan_disabled_flag_stays_stateless(m
     assert plan["replay_history_in_memory_facts"] is True
 
 
+def test_disabled_gateway_continuity_invalidates_active_codex_binding(monkeypatch):
+    monkeypatch.delenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", raising=False)
+    monkeypatch.delenv("MENTE_GATEWAY_CONTINUITY_ENABLED", raising=False)
+    session_store = MagicMock()
+
+    payload = gateway_run._maybe_invalidate_gateway_runtime_continuity_when_disabled(
+        session_store=session_store,
+        session_id="sess-1",
+        continuity_payload={
+            "runtime": "codex",
+            "continuity_id": "thread-123",
+            "status": "active",
+        },
+    )
+
+    session_store.invalidate_runtime_continuity.assert_called_once_with(
+        "sess-1",
+        reason="continuity_disabled",
+    )
+    assert payload["status"] == "invalidated"
+    assert payload["invalidation_reason"] == "continuity_disabled"
+
+
 def test_resolve_gateway_runtime_continuity_plan_without_continuity_replays_history_once():
     plan = gateway_run._resolve_gateway_runtime_continuity_plan(
         session_entry=MagicMock(session_id="sess-1"),
