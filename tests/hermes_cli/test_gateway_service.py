@@ -138,6 +138,13 @@ class TestGeneratedSystemdUnits:
         assert 'Environment="HERMES_GATEWAY_EXECUTOR=mente"' in unit
         assert 'Environment="HERMES_API_SERVER_EXECUTOR=mente"' in unit
 
+    def test_user_unit_enables_runtime_continuity_by_default(self):
+        unit = gateway_cli.generate_systemd_unit(system=False)
+
+        assert 'Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"' in unit
+        assert 'Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"' in unit
+        assert 'Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway"' in unit
+
     def test_user_unit_avoids_recursive_execstop_and_uses_extended_stop_timeout(self):
         unit = gateway_cli.generate_systemd_unit(system=False)
 
@@ -174,6 +181,13 @@ class TestGeneratedSystemdUnits:
 
         assert 'Environment="HERMES_GATEWAY_EXECUTOR=mente"' in unit
         assert 'Environment="HERMES_API_SERVER_EXECUTOR=mente"' in unit
+
+    def test_system_unit_enables_runtime_continuity_by_default(self):
+        unit = gateway_cli.generate_systemd_unit(system=True)
+
+        assert 'Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"' in unit
+        assert 'Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"' in unit
+        assert 'Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway"' in unit
 
     def test_user_unit_exports_mente_home_alongside_hermes_home(self, monkeypatch, tmp_path):
         mente_home = tmp_path / ".mente"

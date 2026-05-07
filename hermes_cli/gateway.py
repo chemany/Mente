@@ -1602,6 +1602,9 @@ Environment="MENTE_HOME={hermes_home}"
 Environment="HERMES_HOME={hermes_home}"
 Environment="HERMES_GATEWAY_EXECUTOR=mente"
 Environment="HERMES_API_SERVER_EXECUTOR=mente"
+Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"
+Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"
+Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway"
 {runtime_override_env}Restart=on-failure
 RestartSec=30
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}
@@ -1642,6 +1645,9 @@ Environment="MENTE_HOME={hermes_home}"
 Environment="HERMES_HOME={hermes_home}"
 Environment="HERMES_GATEWAY_EXECUTOR=mente"
 Environment="HERMES_API_SERVER_EXECUTOR=mente"
+Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"
+Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"
+Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway"
 {runtime_override_env}Restart=on-failure
 RestartSec=30
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}
