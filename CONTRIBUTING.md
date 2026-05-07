@@ -96,17 +96,17 @@ echo "OPENROUTER_API_KEY=***" >> ~/.hermes/.env
 ```bash
 # Symlink for global access
 mkdir -p ~/.local/bin
-ln -sf "$(pwd)/venv/bin/hermes" ~/.local/bin/hermes
+ln -sf "$(pwd)/venv/bin/mente" ~/.local/bin/mente
 
 # Verify
-hermes doctor
-hermes chat -q "Hello"
+mente doctor
+mente chat -q "Hello"
 ```
 
 ### Run tests
 
 ```bash
-pytest tests/ -v
+scripts/run_tests.sh
 ```
 
 ---
@@ -595,8 +595,8 @@ refactor/description   # Code restructuring
 
 ### Before submitting
 
-1. **Run tests**: `pytest tests/ -v`
-2. **Test manually**: Run `hermes` and exercise the code path you changed
+1. **Run tests**: `scripts/run_tests.sh`
+2. **Test manually**: Run `mente` and exercise the code path you changed
 3. **Check cross-platform impact**: If you touch file I/O, process management, or terminal handling, consider macOS, Linux, and WSL2
 4. **Keep PRs focused**: One logical change per PR. Don't mix a bug fix with a refactor with a new feature.
 

@@ -1,4 +1,16 @@
+import pytest
 from unittest.mock import MagicMock, patch
+
+
+@pytest.fixture(autouse=True)
+def reset_skin_state():
+    from hermes_cli import skin_engine
+
+    skin_engine._active_skin = None
+    skin_engine._active_skin_name = "default"
+    yield
+    skin_engine._active_skin = None
+    skin_engine._active_skin_name = "default"
 
 
 def test_format_banner_version_label_without_git_state():
@@ -7,7 +19,7 @@ def test_format_banner_version_label_without_git_state():
     with patch.object(banner, "get_git_banner_state", return_value=None):
         value = banner.format_banner_version_label()
 
-    assert value == f"Hermes Agent v{banner.VERSION} ({banner.RELEASE_DATE})"
+    assert value == f"Mente Agent v{banner.VERSION} ({banner.RELEASE_DATE})"
 
 
 def test_format_banner_version_label_on_upstream_main():
@@ -20,6 +32,7 @@ def test_format_banner_version_label_on_upstream_main():
     ):
         value = banner.format_banner_version_label()
 
+    assert value.startswith(f"Mente Agent v{banner.VERSION} ({banner.RELEASE_DATE})")
     assert value.endswith("· upstream b2f477a3")
     assert "local" not in value
 

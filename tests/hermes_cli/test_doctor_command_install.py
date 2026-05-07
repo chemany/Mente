@@ -23,9 +23,9 @@ def _setup_doctor_env(monkeypatch, tmp_path, venv_name="venv"):
     # Create a fake venv entry point
     venv_bin_dir = project / venv_name / "bin"
     venv_bin_dir.mkdir(parents=True, exist_ok=True)
-    hermes_bin = venv_bin_dir / "hermes"
-    hermes_bin.write_text("#!/usr/bin/env python\n# entry point\n")
-    hermes_bin.chmod(0o755)
+    mente_bin = venv_bin_dir / "mente"
+    mente_bin.write_text("#!/usr/bin/env python\n# entry point\n")
+    mente_bin.chmod(0o755)
 
     monkeypatch.setattr(doctor_mod, "HERMES_HOME", home)
     monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", project)
@@ -53,7 +53,7 @@ def _setup_doctor_env(monkeypatch, tmp_path, venv_name="venv"):
     except Exception:
         pass
 
-    return home, project, hermes_bin
+    return home, project, mente_bin
 
 
 def _run_doctor(fix=False):
@@ -72,13 +72,13 @@ class TestDoctorCommandInstallation:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
     def test_correct_symlink_shows_ok(self, monkeypatch, tmp_path):
-        home, project, hermes_bin = _setup_doctor_env(monkeypatch, tmp_path)
+        home, project, mente_bin = _setup_doctor_env(monkeypatch, tmp_path)
 
         # Create the command link dir with correct symlink
         cmd_link_dir = tmp_path / ".local" / "bin"
         cmd_link_dir.mkdir(parents=True)
-        cmd_link = cmd_link_dir / "hermes"
-        cmd_link.symlink_to(hermes_bin)
+        cmd_link = cmd_link_dir / "mente"
+        cmd_link.symlink_to(mente_bin)
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -89,7 +89,7 @@ class TestDoctorCommandInstallation:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
     def test_missing_symlink_shows_fail(self, monkeypatch, tmp_path):
-        home, project, hermes_bin = _setup_doctor_env(monkeypatch, tmp_path)
+        home, project, mente_bin = _setup_doctor_env(monkeypatch, tmp_path)
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         # Don't create the symlink — it should be missing
@@ -98,11 +98,11 @@ class TestDoctorCommandInstallation:
         assert "Command Installation" in out
         assert "Venv entry point exists" in out
         assert "not found" in out
-        assert "hermes doctor --fix" in out
+        assert "mente doctor --fix" in out
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
     def test_fix_creates_missing_symlink(self, monkeypatch, tmp_path):
-        home, project, hermes_bin = _setup_doctor_env(monkeypatch, tmp_path)
+        home, project, mente_bin = _setup_doctor_env(monkeypatch, tmp_path)
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -111,19 +111,19 @@ class TestDoctorCommandInstallation:
         assert "Created symlink" in out
 
         # Verify the symlink was actually created
-        cmd_link = tmp_path / ".local" / "bin" / "hermes"
+        cmd_link = tmp_path / ".local" / "bin" / "mente"
         assert cmd_link.is_symlink()
-        assert cmd_link.resolve() == hermes_bin.resolve()
+        assert cmd_link.resolve() == mente_bin.resolve()
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
     def test_wrong_target_symlink_shows_warn(self, monkeypatch, tmp_path):
-        home, project, hermes_bin = _setup_doctor_env(monkeypatch, tmp_path)
+        home, project, mente_bin = _setup_doctor_env(monkeypatch, tmp_path)
 
         # Create a symlink pointing to the wrong target
         cmd_link_dir = tmp_path / ".local" / "bin"
         cmd_link_dir.mkdir(parents=True)
-        cmd_link = cmd_link_dir / "hermes"
-        wrong_target = tmp_path / "wrong_hermes"
+        cmd_link = cmd_link_dir / "mente"
+        wrong_target = tmp_path / "wrong_mente"
         wrong_target.write_text("#!/usr/bin/env python\n")
         cmd_link.symlink_to(wrong_target)
 
@@ -135,13 +135,13 @@ class TestDoctorCommandInstallation:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
     def test_fix_repairs_wrong_symlink(self, monkeypatch, tmp_path):
-        home, project, hermes_bin = _setup_doctor_env(monkeypatch, tmp_path)
+        home, project, mente_bin = _setup_doctor_env(monkeypatch, tmp_path)
 
         # Create a symlink pointing to wrong target
         cmd_link_dir = tmp_path / ".local" / "bin"
         cmd_link_dir.mkdir(parents=True)
-        cmd_link = cmd_link_dir / "hermes"
-        wrong_target = tmp_path / "wrong_hermes"
+        cmd_link = cmd_link_dir / "mente"
+        wrong_target = tmp_path / "wrong_mente"
         wrong_target.write_text("#!/usr/bin/env python\n")
         cmd_link.symlink_to(wrong_target)
 
@@ -152,7 +152,7 @@ class TestDoctorCommandInstallation:
 
         # Verify the symlink now points to the correct target
         assert cmd_link.is_symlink()
-        assert cmd_link.resolve() == hermes_bin.resolve()
+        assert cmd_link.resolve() == mente_bin.resolve()
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
     def test_missing_venv_entry_point_shows_warn(self, monkeypatch, tmp_path):
@@ -196,26 +196,26 @@ class TestDoctorCommandInstallation:
         home, project, _ = _setup_doctor_env(monkeypatch, tmp_path, venv_name=".venv")
 
         # Create the command link with correct symlink
-        hermes_bin = project / ".venv" / "bin" / "hermes"
+        mente_bin = project / ".venv" / "bin" / "mente"
         cmd_link_dir = tmp_path / ".local" / "bin"
         cmd_link_dir.mkdir(parents=True)
-        cmd_link = cmd_link_dir / "hermes"
-        cmd_link.symlink_to(hermes_bin)
+        cmd_link = cmd_link_dir / "mente"
+        cmd_link.symlink_to(mente_bin)
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         out = _run_doctor(fix=False)
         assert "Venv entry point exists" in out
-        assert ".venv/bin/hermes" in out
+        assert ".venv/bin/mente" in out
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
     def test_non_symlink_regular_file_shows_ok(self, monkeypatch, tmp_path):
-        """If ~/.local/bin/hermes is a regular file (not symlink), accept it."""
-        home, project, hermes_bin = _setup_doctor_env(monkeypatch, tmp_path)
+        """If ~/.local/bin/mente is a regular file (not symlink), accept it."""
+        home, project, mente_bin = _setup_doctor_env(monkeypatch, tmp_path)
 
         cmd_link_dir = tmp_path / ".local" / "bin"
         cmd_link_dir.mkdir(parents=True)
-        cmd_link = cmd_link_dir / "hermes"
+        cmd_link = cmd_link_dir / "mente"
         cmd_link.write_text("#!/bin/sh\nexec python -m hermes_cli.main \"$@\"\n")
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -253,6 +253,7 @@ class TestDoctorCommandInstallation:
         monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", project)
         monkeypatch.setattr(doctor_mod, "_DHH", str(home))
         monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(doctor_mod.shutil, "which", lambda *_args, **_kwargs: None)
 
         fake_model_tools = types.SimpleNamespace(
             check_tool_availability=lambda *a, **kw: ([], []),

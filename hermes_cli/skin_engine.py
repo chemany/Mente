@@ -101,6 +101,7 @@ BUILT-IN SKINS
 - ``ares``    — Crimson/bronze war-god theme with custom spinner wings
 - ``mono``    — Clean grayscale monochrome
 - ``slate``   — Cool blue developer-focused theme
+- ``contrast-light`` — Pure white/black high-contrast light theme
 - ``daylight`` — Light background theme with dark text and blue accents
 - ``warm-lightmode`` — Warm brown/gold text for light terminal backgrounds
 
@@ -112,6 +113,7 @@ Activate with ``/skin <name>`` in the CLI or ``display.skin: <name>`` in config.
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -163,24 +165,36 @@ class SkinConfig:
 _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
     "default": {
         "name": "default",
-        "description": "Classic Mente — gold and kawaii",
+        "description": "Mente core — high-contrast monochrome",
         "colors": {
-            "banner_border": "#CD7F32",
-            "banner_title": "#FFD700",
-            "banner_accent": "#FFBF00",
-            "banner_dim": "#B8860B",
-            "banner_text": "#FFF8DC",
-            "ui_accent": "#FFBF00",
-            "ui_label": "#DAA520",
-            "ui_ok": "#4caf50",
-            "ui_error": "#ef5350",
-            "ui_warn": "#ffa726",
-            "prompt": "#FFF8DC",
-            "input_rule": "#CD7F32",
-            "response_border": "#FFD700",
-            "status_bar_bg": "#1a1a2e",
-            "session_label": "#DAA520",
-            "session_border": "#8B8682",
+            "banner_border": "#8A8A8A",
+            "banner_title": "#FFFFFF",
+            "banner_accent": "#F0F0F0",
+            "banner_dim": "#B5B5B5",
+            "banner_text": "#FFFFFF",
+            "ui_accent": "#FFFFFF",
+            "ui_label": "#F0F0F0",
+            "ui_ok": "#58C7A2",
+            "ui_error": "#EF6B73",
+            "ui_warn": "#F2A65A",
+            "prompt": "#FFFFFF",
+            "input_rule": "#8A8A8A",
+            "response_border": "#FFFFFF",
+            "status_bar_bg": "#000000",
+            "status_bar_text": "#FFFFFF",
+            "status_bar_strong": "#FFFFFF",
+            "status_bar_dim": "#B5B5B5",
+            "status_bar_good": "#58C7A2",
+            "status_bar_warn": "#F2A65A",
+            "status_bar_bad": "#F28C5B",
+            "status_bar_critical": "#EF6B73",
+            "session_label": "#FFFFFF",
+            "session_border": "#B5B5B5",
+            "voice_status_bg": "#000000",
+            "completion_menu_bg": "#111111",
+            "completion_menu_current_bg": "#2B2B2B",
+            "completion_menu_meta_bg": "#111111",
+            "completion_menu_meta_current_bg": "#222222",
         },
         "spinner": {
             # Empty = use hardcoded defaults in display.py
@@ -194,6 +208,27 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
             "help_header": "(^_^)? Available Commands",
         },
         "tool_prefix": "┊",
+        "banner_logo": """[bold #FFFFFF]███╗   ███╗███████╗███╗   ██╗████████╗███████╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
+[bold #FFFFFF]████╗ ████║██╔════╝████╗  ██║╚══██╔══╝██╔════╝      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
+[#F0F0F0]██╔████╔██║█████╗  ██╔██╗ ██║   ██║   █████╗  █████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║[/]
+[#F0F0F0]██║╚██╔╝██║██╔══╝  ██║╚██╗██║   ██║   ██╔══╝  ╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║[/]
+[#8A8A8A]██║ ╚═╝ ██║███████╗██║ ╚████║   ██║   ███████╗      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║[/]
+[#8A8A8A]╚═╝     ╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝[/]""",
+        "banner_hero": """[#FFFFFF]           ╭───◉───╮[/]
+[#FFFFFF]        ╭──╯ ╭─┴─╮ ╰──╮[/]
+[#F0F0F0]      ◉─╯   ╱ ╳ ╲   ╰─◉[/]
+[#F0F0F0]      │    │ ╭╮ │    │[/]
+[#F0F0F0]      │    │ ╰╯ │    │[/]
+[#F0F0F0]      │   ╭┴────┴╮   │[/]
+[#8A8A8A]      ╰───┤ ╭──╮ ├───╯[/]
+[#8A8A8A]          │ │  │ │[/]
+[#8A8A8A]       ╭──┤ │  │ ├──╮[/]
+[#8A8A8A]       │  │ │  │ │  │[/]
+[#8A8A8A]       │  ╰─╯  ╰─╯  │[/]
+[#8A8A8A]       ╰────╮  ╭────╯[/]
+[#B5B5B5]            │  │[/]
+[#B5B5B5]            ╰──╯[/]
+[dim #B5B5B5]      mind meets motion[/]""",
     },
     "ares": {
         "name": "ares",
@@ -345,6 +380,71 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         "tool_prefix": "┊",
     },
+    "contrast-light": {
+        "name": "contrast-light",
+        "description": "Pure white/black high-contrast theme for light terminals",
+        "colors": {
+            "banner_border": "#6E6E6E",
+            "banner_title": "#000000",
+            "banner_accent": "#111111",
+            "banner_dim": "#555555",
+            "banner_text": "#000000",
+            "ui_accent": "#000000",
+            "ui_label": "#111111",
+            "ui_ok": "#2E8B6E",
+            "ui_error": "#C95A68",
+            "ui_warn": "#C47A3A",
+            "prompt": "#000000",
+            "input_rule": "#6E6E6E",
+            "response_border": "#000000",
+            "session_label": "#000000",
+            "session_border": "#555555",
+            "status_bar_bg": "#FFFFFF",
+            "status_bar_text": "#000000",
+            "status_bar_strong": "#000000",
+            "status_bar_dim": "#555555",
+            "status_bar_good": "#2E8B6E",
+            "status_bar_warn": "#C47A3A",
+            "status_bar_bad": "#D98955",
+            "status_bar_critical": "#B94B60",
+            "voice_status_bg": "#FFFFFF",
+            "completion_menu_bg": "#FFFFFF",
+            "completion_menu_current_bg": "#E9E9E9",
+            "completion_menu_meta_bg": "#FFFFFF",
+            "completion_menu_meta_current_bg": "#E0E0E0",
+        },
+        "spinner": {},
+        "branding": {
+            "agent_name": "Mente Agent",
+            "welcome": "Welcome to Mente Agent! Type your message or /help for commands.",
+            "goodbye": "Goodbye! ⚕",
+            "response_label": " ⚕ Mente ",
+            "prompt_symbol": "❯ ",
+            "help_header": "[?] Available Commands",
+        },
+        "tool_prefix": "│",
+        "banner_logo": """[bold #000000]███╗   ███╗███████╗███╗   ██╗████████╗███████╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
+[bold #000000]████╗ ████║██╔════╝████╗  ██║╚══██╔══╝██╔════╝      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
+[#111111]██╔████╔██║█████╗  ██╔██╗ ██║   ██║   █████╗  █████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║[/]
+[#111111]██║╚██╔╝██║██╔══╝  ██║╚██╗██║   ██║   ██╔══╝  ╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║[/]
+[#6E6E6E]██║ ╚═╝ ██║███████╗██║ ╚████║   ██║   ███████╗      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║[/]
+[#6E6E6E]╚═╝     ╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝[/]""",
+        "banner_hero": """[#000000]           ╭───◉───╮[/]
+[#000000]        ╭──╯ ╭─┴─╮ ╰──╮[/]
+[#111111]      ◉─╯   ╱ ╳ ╲   ╰─◉[/]
+[#111111]      │    │ ╭╮ │    │[/]
+[#111111]      │    │ ╰╯ │    │[/]
+[#111111]      │   ╭┴────┴╮   │[/]
+[#6E6E6E]      ╰───┤ ╭──╮ ├───╯[/]
+[#6E6E6E]          │ │  │ │[/]
+[#6E6E6E]       ╭──┤ │  │ ├──╮[/]
+[#6E6E6E]       │  │ │  │ │  │[/]
+[#6E6E6E]       │  ╰─╯  ╰─╯  │[/]
+[#6E6E6E]       ╰────╮  ╭────╯[/]
+[#555555]            │  │[/]
+[#555555]            ╰──╯[/]
+[dim #555555]      mind meets motion[/]""",
+    },
     "daylight": {
         "name": "daylight",
         "description": "Light theme for bright terminals with dark text and cool blue accents",
@@ -365,6 +465,7 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
             "session_label": "#1D4ED8",
             "session_border": "#64748B",
             "status_bar_bg": "#E5EDF8",
+            "status_bar_text": "#111827",
             "voice_status_bg": "#E5EDF8",
             "completion_menu_bg": "#F8FAFC",
             "completion_menu_current_bg": "#DBEAFE",
@@ -647,6 +748,23 @@ _active_skin: Optional[SkinConfig] = None
 _active_skin_name: str = "default"
 
 
+def _prefers_light_terminal(env: Optional[Dict[str, str]] = None) -> bool:
+    """Best-effort detection for light terminal backgrounds."""
+    env = env or os.environ
+    explicit = (env.get("HERMES_TUI_LIGHT") or "").strip().lower()
+
+    if explicit in {"1", "true", "yes", "on"}:
+        return True
+    if explicit in {"0", "false", "no", "off"}:
+        return False
+
+    bg = (env.get("COLORFGBG") or "").strip().split(";")[-1:] or [""]
+    try:
+        return int(bg[0]) in {7, 15}
+    except ValueError:
+        return False
+
+
 def _skins_dir() -> Path:
     """User skins directory."""
     return get_hermes_home() / "skins"
@@ -684,8 +802,8 @@ def _build_skin_config(data: Dict[str, Any]) -> SkinConfig:
         branding=branding,
         tool_prefix=data.get("tool_prefix", default.get("tool_prefix", "┊")),
         tool_emojis=data.get("tool_emojis", {}),
-        banner_logo=data.get("banner_logo", ""),
-        banner_hero=data.get("banner_hero", ""),
+        banner_logo=data.get("banner_logo", default.get("banner_logo", "")),
+        banner_hero=data.get("banner_hero", default.get("banner_hero", "")),
     )
 
 
@@ -768,11 +886,12 @@ def init_skin_from_config(config: dict) -> None:
     display = config.get("display") or {}
     if not isinstance(display, dict):
         display = {}
-    skin_name = display.get("skin", "default")
+    skin_name = display.get("skin")
     if isinstance(skin_name, str) and skin_name.strip():
         set_active_skin(skin_name.strip())
-    else:
-        set_active_skin("default")
+        return
+
+    set_active_skin("contrast-light" if _prefers_light_terminal() else "default")
 
 
 # =============================================================================
@@ -818,16 +937,16 @@ def get_prompt_toolkit_style_overrides() -> Dict[str, str]:
     except Exception:
         return {}
 
-    prompt = skin.get_color("prompt", "#FFF8DC")
-    input_rule = skin.get_color("input_rule", "#CD7F32")
-    title = skin.get_color("banner_title", "#FFD700")
+    prompt = skin.get_color("prompt", "#E8F4F4")
+    input_rule = skin.get_color("input_rule", "#315A61")
+    title = skin.get_color("banner_title", "#7CE8D8")
     text = skin.get_color("banner_text", prompt)
     dim = skin.get_color("banner_dim", "#555555")
     label = skin.get_color("ui_label", title)
     warn = skin.get_color("ui_warn", "#FF8C00")
     error = skin.get_color("ui_error", "#FF6B6B")
-    status_bg = skin.get_color("status_bar_bg", "#1a1a2e")
-    status_text = skin.get_color("status_bar_text", text)
+    status_bg = skin.get_color("status_bar_bg", "#10161C")
+    status_text = skin.get_color("status_bar_text", skin.get_color("banner_text", text))
     status_strong = skin.get_color("status_bar_strong", title)
     status_dim = skin.get_color("status_bar_dim", dim)
     status_good = skin.get_color("status_bar_good", skin.get_color("ui_ok", "#8FBC8F"))
@@ -835,8 +954,8 @@ def get_prompt_toolkit_style_overrides() -> Dict[str, str]:
     status_bad = skin.get_color("status_bar_bad", skin.get_color("banner_accent", warn))
     status_critical = skin.get_color("status_bar_critical", error)
     voice_bg = skin.get_color("voice_status_bg", status_bg)
-    menu_bg = skin.get_color("completion_menu_bg", "#1a1a2e")
-    menu_current_bg = skin.get_color("completion_menu_current_bg", "#333355")
+    menu_bg = skin.get_color("completion_menu_bg", "#131C22")
+    menu_current_bg = skin.get_color("completion_menu_current_bg", "#1F3239")
     menu_meta_bg = skin.get_color("completion_menu_meta_bg", menu_bg)
     menu_meta_current_bg = skin.get_color("completion_menu_meta_current_bg", menu_current_bg)
 

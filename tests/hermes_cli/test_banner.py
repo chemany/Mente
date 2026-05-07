@@ -1,12 +1,31 @@
 """Tests for banner toolset name normalization and skin color usage."""
 
+import re
 from unittest.mock import patch
 
+import pytest
 from rich.console import Console
 
 import hermes_cli.banner as banner
 import model_tools
 import tools.mcp_tool
+
+
+@pytest.fixture(autouse=True)
+def reset_skin_state():
+    from hermes_cli import skin_engine
+
+    skin_engine._active_skin = None
+    skin_engine._active_skin_name = "default"
+    yield
+    skin_engine._active_skin = None
+    skin_engine._active_skin_name = "default"
+
+
+def _visible_text(raw: str) -> str:
+    raw = re.sub(r"\x1b]8;[^\x1b]*\x1b\\", "", raw)
+    raw = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw)
+    return raw
 
 
 def test_display_toolset_name_strips_legacy_suffix():
@@ -98,8 +117,9 @@ def test_build_welcome_banner_title_is_hyperlinked_to_release():
         )
 
     raw = buf.getvalue()
+    visible = _visible_text(raw)
     # The existing version label must still be present in the title
-    assert "Hermes Agent v" in raw, "Version label missing from title"
+    assert "Mente Agent v" in visible, "Version label missing from title"
     # OSC-8 hyperlink escape sequence present with the release URL
     assert "\x1b]8;" in raw, "OSC-8 hyperlink not emitted"
     assert "releases/tag/v2026.4.23" in raw, "Release URL missing from banner output"
@@ -121,6 +141,7 @@ def test_build_welcome_banner_title_falls_back_when_no_tag():
         _patch.object(_banner, "get_update_result", return_value=None),
         _patch.object(_mcp, "get_mcp_status", return_value=[]),
         _patch.object(_banner, "get_latest_release_tag", return_value=None),
+        _patch.object(_banner.shutil, "get_terminal_size", return_value=__import__("os").terminal_size((160, 40))),
     ):
         console = Console(file=buf, force_terminal=True, color_system="truecolor", width=160)
         _banner.build_welcome_banner(
@@ -131,5 +152,71 @@ def test_build_welcome_banner_title_falls_back_when_no_tag():
         )
 
     raw = buf.getvalue()
-    assert "Hermes Agent v" in raw, "Version label missing from title"
+    visible = _visible_text(raw)
+    assert "Mente Agent v" in visible, "Version label missing from title"
     assert "\x1b]8;" not in raw, "OSC-8 hyperlink should not be emitted without a tag"
+
+
+def test_build_welcome_banner_uses_mente_logo_branding():
+    """Wide-banner logo output should use Mente branding, not legacy Hermes text."""
+    import io
+    from unittest.mock import patch as _patch
+    import hermes_cli.banner as _banner
+    import model_tools as _mt
+    import tools.mcp_tool as _mcp
+
+    _banner._latest_release_cache = None
+    buf = io.StringIO()
+    with (
+        _patch.object(_mt, "check_tool_availability", return_value=(["web"], [])),
+        _patch.object(_banner, "get_available_skills", return_value={}),
+        _patch.object(_banner, "get_update_result", return_value=None),
+        _patch.object(_mcp, "get_mcp_status", return_value=[]),
+        _patch.object(_banner, "get_latest_release_tag", return_value=None),
+        _patch.object(_banner.shutil, "get_terminal_size", return_value=__import__("os").terminal_size((160, 40))),
+    ):
+        console = Console(file=buf, force_terminal=True, color_system="truecolor", width=160)
+        _banner.build_welcome_banner(
+            console=console,
+            model="x",
+            cwd="/tmp",
+            session_id="abc123",
+            tools=[{"function": {"name": "read_file"}}],
+            get_toolset_for_tool=lambda n: "file",
+        )
+
+    raw = buf.getvalue()
+    assert "███╗   ███╗███████╗███╗   ██╗" in raw, "Wide banner logo should use the new Mente-first glyphs"
+    assert "██╗  ██╗███████╗██████╗ ███╗" not in raw, "Wide banner logo should not use the legacy Hermes glyphs"
+
+
+def test_build_welcome_banner_uses_default_mente_hero():
+    """Default wide banner should render the Mente emblem hero, not the old Hermes caduceus."""
+    import io
+    from unittest.mock import patch as _patch
+    import hermes_cli.banner as _banner
+    import model_tools as _mt
+    import tools.mcp_tool as _mcp
+
+    _banner._latest_release_cache = None
+    buf = io.StringIO()
+    with (
+        _patch.object(_mt, "check_tool_availability", return_value=(["web"], [])),
+        _patch.object(_banner, "get_available_skills", return_value={}),
+        _patch.object(_banner, "get_update_result", return_value=None),
+        _patch.object(_mcp, "get_mcp_status", return_value=[]),
+        _patch.object(_banner, "get_latest_release_tag", return_value=None),
+        _patch.object(_banner.shutil, "get_terminal_size", return_value=__import__("os").terminal_size((160, 40))),
+    ):
+        console = Console(file=buf, force_terminal=True, color_system="truecolor", width=160)
+        _banner.build_welcome_banner(
+            console=console,
+            model="x",
+            cwd="/tmp",
+            session_id="abc123",
+            tools=[{"function": {"name": "read_file"}}],
+            get_toolset_for_tool=lambda n: "file",
+        )
+
+    raw = buf.getvalue()
+    assert "mind meets motion" in raw

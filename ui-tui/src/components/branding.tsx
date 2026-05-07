@@ -27,11 +27,11 @@ export function Banner({ t }: { t: Theme }) {
         <ArtLines lines={logoLines} />
       ) : (
         <Text bold color={t.color.gold}>
-          {t.brand.icon} NOUS HERMES
+          {t.brand.icon} {t.brand.name.toUpperCase()}
         </Text>
       )}
 
-      <Text color={t.color.dim}>{t.brand.icon} Nous Research · Messenger of the Digital Gods</Text>
+      <Text color={t.color.dim}>{t.brand.icon} Nous Research · thought in hand</Text>
     </Box>
   )
 }

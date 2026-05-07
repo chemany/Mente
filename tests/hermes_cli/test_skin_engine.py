@@ -31,19 +31,36 @@ class TestSkinConfig:
     def test_get_color_with_fallback(self):
         from hermes_cli.skin_engine import load_skin
         skin = load_skin("default")
-        assert skin.get_color("banner_title") == "#FFD700"
+        assert skin.get_color("banner_title") == "#FFFFFF"
         assert skin.get_color("nonexistent", "#000") == "#000"
 
     def test_get_branding_with_fallback(self):
         from hermes_cli.skin_engine import load_skin
         skin = load_skin("default")
-        assert skin.get_branding("agent_name") == "Hermes Agent"
+        assert skin.get_branding("agent_name") == "Mente Agent"
         assert skin.get_branding("nonexistent", "fallback") == "fallback"
 
     def test_get_spinner_wings_empty_for_default(self):
         from hermes_cli.skin_engine import load_skin
         skin = load_skin("default")
         assert skin.get_spinner_wings() == []
+
+    def test_default_skin_uses_high_contrast_dark_palette(self):
+        from hermes_cli.skin_engine import load_skin
+
+        skin = load_skin("default")
+
+        assert skin.get_color("banner_text") == "#FFFFFF"
+        assert skin.get_color("status_bar_bg") == "#000000"
+        assert skin.get_color("status_bar_text") == "#FFFFFF"
+
+    def test_default_skin_includes_custom_mente_banner_art(self):
+        from hermes_cli.skin_engine import load_skin
+
+        skin = load_skin("default")
+
+        assert "mind meets motion" in skin.banner_hero
+        assert "███╗   ███╗" in skin.banner_logo
 
 
 class TestBuiltinSkins:
@@ -92,6 +109,17 @@ class TestBuiltinSkins:
         assert skin.get_color("completion_menu_meta_bg") == "#EEF2FF"
         assert skin.get_color("completion_menu_meta_current_bg") == "#BFDBFE"
 
+    def test_contrast_light_skin_loads(self):
+        from hermes_cli.skin_engine import load_skin
+
+        skin = load_skin("contrast-light")
+        assert skin.name == "contrast-light"
+        assert skin.tool_prefix == "│"
+        assert skin.get_color("banner_title") == "#000000"
+        assert skin.get_color("banner_text") == "#000000"
+        assert skin.get_color("status_bar_bg") == "#FFFFFF"
+        assert skin.get_color("status_bar_text") == "#000000"
+
     def test_warm_lightmode_skin_loads(self):
         from hermes_cli.skin_engine import load_skin
 
@@ -136,6 +164,7 @@ class TestSkinManagement:
         assert "ares" in names
         assert "mono" in names
         assert "slate" in names
+        assert "contrast-light" in names
         assert "daylight" in names
         assert "warm-lightmode" in names
         for s in skins:
@@ -151,6 +180,14 @@ class TestSkinManagement:
         from hermes_cli.skin_engine import init_skin_from_config, get_active_skin_name
         init_skin_from_config({})
         assert get_active_skin_name() == "default"
+
+    def test_init_skin_from_empty_config_uses_contrast_light_on_light_terminal(self):
+        from hermes_cli.skin_engine import init_skin_from_config, get_active_skin_name
+
+        with patch.dict(os.environ, {"COLORFGBG": "0;15"}, clear=False):
+            init_skin_from_config({})
+
+        assert get_active_skin_name() == "contrast-light"
 
     def test_init_skin_from_null_display(self):
         """display: null should fall back to default, not crash."""
@@ -197,7 +234,7 @@ class TestUserSkins:
         assert skin.get_branding("agent_name") == "Custom Agent"
         assert skin.tool_prefix == "▸"
         # Should inherit defaults for unspecified colors
-        assert skin.get_color("banner_border") == "#CD7F32"  # from default
+        assert skin.get_color("banner_border") == "#8A8A8A"  # from default
 
     def test_list_skins_includes_user_skins(self, tmp_path, monkeypatch):
         from hermes_cli.skin_engine import list_skins
@@ -344,7 +381,7 @@ class TestCliBrandingHelpers:
         assert overrides["sudo-prompt"] == f"{skin.get_color('ui_error')} bold"
         assert overrides["approval-title"] == f"{skin.get_color('ui_warn')} bold"
 
-        set_active_skin("daylight")
+        set_active_skin("contrast-light")
         skin = get_active_skin()
         overrides = get_prompt_toolkit_style_overrides()
         assert overrides["status-bar"] == f"bg:{skin.get_color('status_bar_bg')} {skin.get_color('banner_text')}"

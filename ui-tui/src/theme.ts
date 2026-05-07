@@ -90,44 +90,36 @@ const BRAND: ThemeBrand = {
 
 export const DARK_THEME: Theme = {
   color: {
-    gold: '#FFD700',
-    amber: '#FFBF00',
-    bronze: '#CD7F32',
-    cornsilk: '#FFF8DC',
-    // Bumped from the old `#B8860B` darkgoldenrod (~53% luminance) which
-    // read as barely-visible on dark terminals for long body text.  The
-    // new value sits ~60% luminance — readable without losing the "muted /
-    // secondary" semantic.  Field labels still use `label` (65%) which
-    // stays brighter so hierarchy holds.
-    dim: '#CC9B1F',
-    completionBg: '#FFFFFF',
-    completionCurrentBg: mix('#FFFFFF', '#FFBF00', 0.25),
+    gold: '#FFFFFF',
+    amber: '#F0F0F0',
+    bronze: '#8A8A8A',
+    cornsilk: '#FFFFFF',
+    dim: '#B5B5B5',
+    completionBg: '#111111',
+    completionCurrentBg: '#2B2B2B',
 
-    label: '#DAA520',
-    ok: '#4caf50',
-    error: '#ef5350',
-    warn: '#ffa726',
+    label: '#F0F0F0',
+    ok: '#58C7A2',
+    error: '#EF6B73',
+    warn: '#F2A65A',
 
-    prompt: '#FFF8DC',
-    // sessionLabel/sessionBorder intentionally track the `dim` value — they
-    // are "same role, same colour" by design.  fromSkin's banner_dim fallback
-    // relies on this pairing (#11300).
-    sessionLabel: '#CC9B1F',
-    sessionBorder: '#CC9B1F',
+    prompt: '#FFFFFF',
+    sessionLabel: '#FFFFFF',
+    sessionBorder: '#B5B5B5',
 
-    statusBg: '#1a1a2e',
-    statusFg: '#C0C0C0',
-    statusGood: '#8FBC8F',
-    statusWarn: '#FFD700',
-    statusBad: '#FF8C00',
-    statusCritical: '#FF6B6B',
-    selectionBg: '#3a3a55',
+    statusBg: '#000000',
+    statusFg: '#FFFFFF',
+    statusGood: '#58C7A2',
+    statusWarn: '#F2A65A',
+    statusBad: '#F28C5B',
+    statusCritical: '#EF6B73',
+    selectionBg: '#2B2B2B',
 
     diffAdded: 'rgb(220,255,220)',
     diffRemoved: 'rgb(255,220,220)',
     diffAddedWord: 'rgb(36,138,61)',
     diffRemovedWord: 'rgb(207,34,46)',
-    shellDollar: '#4dabf7'
+    shellDollar: '#55C6FF'
   },
 
   brand: BRAND,
@@ -141,36 +133,36 @@ export const DARK_THEME: Theme = {
 // cleanly (#11300).
 export const LIGHT_THEME: Theme = {
   color: {
-    gold: '#8B6914',
-    amber: '#A0651C',
-    bronze: '#7A4F1F',
-    cornsilk: '#3D2F13',
-    dim: '#7A5A0F',
-    completionBg: '#F5F5F5',
-    completionCurrentBg: mix('#F5F5F5', '#A0651C', 0.25),
+    gold: '#000000',
+    amber: '#111111',
+    bronze: '#6E6E6E',
+    cornsilk: '#000000',
+    dim: '#555555',
+    completionBg: '#FFFFFF',
+    completionCurrentBg: '#E9E9E9',
 
-    label: '#7A5A0F',
-    ok: '#2E7D32',
-    error: '#C62828',
-    warn: '#E65100',
+    label: '#111111',
+    ok: '#2E8B6E',
+    error: '#C95A68',
+    warn: '#C47A3A',
 
-    prompt: '#2B2014',
-    sessionLabel: '#7A5A0F',
-    sessionBorder: '#7A5A0F',
+    prompt: '#000000',
+    sessionLabel: '#000000',
+    sessionBorder: '#555555',
 
-    statusBg: '#F5F5F5',
-    statusFg: '#333333',
-    statusGood: '#2E7D32',
-    statusWarn: '#8B6914',
-    statusBad: '#D84315',
-    statusCritical: '#B71C1C',
-    selectionBg: '#D4E4F7',
+    statusBg: '#FFFFFF',
+    statusFg: '#000000',
+    statusGood: '#2E8B6E',
+    statusWarn: '#C47A3A',
+    statusBad: '#D98955',
+    statusCritical: '#B94B60',
+    selectionBg: '#E9E9E9',
 
     diffAdded: 'rgb(200,240,200)',
     diffRemoved: 'rgb(240,200,200)',
     diffAddedWord: 'rgb(27,94,32)',
     diffRemovedWord: 'rgb(183,28,28)',
-    shellDollar: '#1565C0'
+    shellDollar: '#1C7ED6'
   },
 
   brand: BRAND,
@@ -216,6 +208,12 @@ export function fromSkin(
   const amber = c('ui_accent') ?? c('banner_accent') ?? d.color.amber
   const accent = c('banner_accent') ?? c('banner_title') ?? d.color.amber
   const dim = c('banner_dim') ?? d.color.dim
+  const hasCompletionOverride =
+    c('completion_menu_bg') !== undefined ||
+    c('completion_menu_current_bg') !== undefined ||
+    c('banner_accent') !== undefined ||
+    c('banner_title') !== undefined ||
+    c('ui_accent') !== undefined
 
   return {
     color: {
@@ -224,8 +222,12 @@ export function fromSkin(
       bronze: c('banner_border') ?? d.color.bronze,
       cornsilk: c('banner_text') ?? d.color.cornsilk,
       dim,
-      completionBg: c('completion_menu_bg') ?? '#FFFFFF',
-      completionCurrentBg: c('completion_menu_current_bg') ?? mix('#FFFFFF', accent, 0.25),
+      completionBg: c('completion_menu_bg') ?? d.color.completionBg,
+      completionCurrentBg:
+        c('completion_menu_current_bg') ??
+        (hasCompletionOverride
+          ? mix(c('completion_menu_bg') ?? d.color.completionBg, accent, 0.25)
+          : d.color.completionCurrentBg),
 
       label: c('ui_label') ?? d.color.label,
       ok: c('ui_ok') ?? d.color.ok,
@@ -233,15 +235,15 @@ export function fromSkin(
       warn: c('ui_warn') ?? d.color.warn,
 
       prompt: c('prompt') ?? c('banner_text') ?? d.color.prompt,
-      sessionLabel: c('session_label') ?? dim,
-      sessionBorder: c('session_border') ?? dim,
+      sessionLabel: c('session_label') ?? c('banner_dim') ?? d.color.sessionLabel,
+      sessionBorder: c('session_border') ?? c('banner_dim') ?? d.color.sessionBorder,
 
-      statusBg: d.color.statusBg,
-      statusFg: d.color.statusFg,
-      statusGood: c('ui_ok') ?? d.color.statusGood,
-      statusWarn: c('ui_warn') ?? d.color.statusWarn,
-      statusBad: d.color.statusBad,
-      statusCritical: d.color.statusCritical,
+      statusBg: c('status_bar_bg') ?? d.color.statusBg,
+      statusFg: c('status_bar_text') ?? d.color.statusFg,
+      statusGood: c('status_bar_good') ?? c('ui_ok') ?? d.color.statusGood,
+      statusWarn: c('status_bar_warn') ?? c('ui_warn') ?? d.color.statusWarn,
+      statusBad: c('status_bar_bad') ?? d.color.statusBad,
+      statusCritical: c('status_bar_critical') ?? d.color.statusCritical,
       selectionBg: c('selection_bg') ?? d.color.selectionBg,
 
       diffAdded: d.color.diffAdded,

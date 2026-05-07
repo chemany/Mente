@@ -9,18 +9,21 @@ describe('DEFAULT_THEME', () => {
     expect(DEFAULT_THEME.brand.tool).toBe('┊')
   })
 
-  it('has color palette', () => {
-    expect(DEFAULT_THEME.color.gold).toBe('#FFD700')
-    expect(DEFAULT_THEME.color.error).toBe('#ef5350')
+  it('has high-contrast dark defaults', () => {
+    expect(DEFAULT_THEME.color.gold).toBe('#FFFFFF')
+    expect(DEFAULT_THEME.color.cornsilk).toBe('#FFFFFF')
+    expect(DEFAULT_THEME.color.statusBg).toBe('#000000')
+    expect(DEFAULT_THEME.color.statusFg).toBe('#FFFFFF')
+    expect(DEFAULT_THEME.color.error).toBe('#EF6B73')
   })
 })
 
 describe('LIGHT_THEME', () => {
-  it('avoids bright-yellow accents unreadable on white backgrounds (#11300)', () => {
-    expect(LIGHT_THEME.color.gold).not.toBe('#FFD700')
-    expect(LIGHT_THEME.color.amber).not.toBe('#FFBF00')
-    expect(LIGHT_THEME.color.dim).not.toBe('#B8860B')
-    expect(LIGHT_THEME.color.statusWarn).not.toBe('#FFD700')
+  it('uses high-contrast light defaults', () => {
+    expect(LIGHT_THEME.color.gold).toBe('#000000')
+    expect(LIGHT_THEME.color.cornsilk).toBe('#000000')
+    expect(LIGHT_THEME.color.statusBg).toBe('#FFFFFF')
+    expect(LIGHT_THEME.color.statusFg).toBe('#000000')
   })
 
   it('keeps the same shape as DARK_THEME', () => {
@@ -90,5 +93,22 @@ describe('fromSkin', () => {
     const { color } = fromSkin({ ui_ok: '#008000' }, {})
     expect(color.ok).toBe('#008000')
     expect(color.statusGood).toBe('#008000')
+  })
+
+  it('maps status and completion skin colors directly', () => {
+    const { color } = fromSkin(
+      {
+        status_bar_bg: '#10161C',
+        status_bar_text: '#C5D6D8',
+        completion_menu_bg: '#131C22',
+        completion_menu_current_bg: '#1F3239'
+      },
+      {}
+    )
+
+    expect(color.statusBg).toBe('#10161C')
+    expect(color.statusFg).toBe('#C5D6D8')
+    expect(color.completionBg).toBe('#131C22')
+    expect(color.completionCurrentBg).toBe('#1F3239')
   })
 })

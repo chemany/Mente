@@ -92,14 +92,15 @@ class TestCliSkinPromptIntegration:
 
 
 class TestCompactBannerSkinIntegration:
-    def test_default_compact_banner_keeps_legacy_nous_hermes_branding(self):
+    def test_default_compact_banner_uses_mente_branding(self):
         set_active_skin("default")
 
         with patch("cli.shutil.get_terminal_size", return_value=SimpleNamespace(columns=90)), \
-             patch("cli.format_banner_version_label", return_value="Hermes Agent v0.1.0 (test)"):
+             patch("cli.format_banner_version_label", return_value="Mente Agent v0.1.0 (test)"):
             banner = _build_compact_banner()
 
-        assert "NOUS HERMES" in banner
+        assert "Mente Agent - AI Agent Framework" in banner
+        assert "NOUS HERMES" not in banner
 
     def test_poseidon_compact_banner_uses_skin_branding_instead_of_nous_hermes(self):
         set_active_skin("poseidon")
