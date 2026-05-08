@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import threading
 import uuid
 from typing import Any
 
@@ -41,6 +42,7 @@ from mente.task_core.repository import SQLiteTaskRepository
 _WECHAT_PUBLISHER_SKILL_REF = "media/wechat-publisher"
 _IMAGEGEN_SKILL_REF = "imagegen"
 _CONTENT_PUBLISHING_TASK_PROFILE = "content_publishing"
+_CONTENT_PUBLISHING_HOST_TIMEOUT_SECONDS = 300.0
 _WECHAT_PUBLISH_HINTS: tuple[str, ...] = (
     "wechat",
     "微信",
@@ -57,6 +59,21 @@ _IMAGEGEN_HINTS: tuple[str, ...] = (
     "图片",
     "image",
 )
+
+
+def _build_content_publishing_workflow_brief() -> str:
+    """Return a compact workflow brief for gateway-authored publishing tasks."""
+
+    return "\n".join(
+        [
+            "Publishing workflow brief:",
+            "1. Use the provided publishing skill refs directly instead of rediscovering the workflow.",
+            "2. Draft the requested article and requested assets in the active workspace first.",
+            "3. Avoid repository-wide or home-directory scans; only inspect directly relevant files if a concrete blocker appears.",
+            "4. Once the article is ready, use mente_wechat_publish_draft to publish the WeChat draft.",
+            "5. If editorial details are missing, choose reasonable defaults and continue.",
+        ]
+    )
 
 
 def _resolve_workspace(workspace: str | None) -> str:
@@ -85,6 +102,20 @@ def _resolve_gateway_task_profile(skill_refs: list[str]) -> str | None:
 
     if _WECHAT_PUBLISHER_SKILL_REF in skill_refs:
         return _CONTENT_PUBLISHING_TASK_PROFILE
+    return None
+
+
+def resolve_gateway_task_host_timeout_seconds(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+) -> float | None:
+    """Return a host-side timeout for recognized gateway task profiles."""
+
+    skill_refs = _infer_gateway_skill_refs(message=message, channel_prompt=channel_prompt)
+    task_profile = _resolve_gateway_task_profile(skill_refs)
+    if task_profile == _CONTENT_PUBLISHING_TASK_PROFILE:
+        return _CONTENT_PUBLISHING_HOST_TIMEOUT_SECONDS
     return None
 
 
@@ -455,14 +486,21 @@ def build_gateway_task(
         "Respond directly to the latest user message.",
     ]
     if task_profile == _CONTENT_PUBLISHING_TASK_PROFILE:
+        memory_facts.append(_build_content_publishing_workflow_brief())
         constraints.append(
             "Prefer the active workspace and provided conversation context; avoid broad scans outside the workspace unless the user explicitly asks."
+        )
+        constraints.append(
+            "Do not scan the full repository or home directory just to rediscover the publishing process."
         )
         acceptance_criteria.append(
             "If the user asked for a WeChat draft workflow, create the requested article/assets in the workspace and use mente_wechat_publish_draft to publish the draft."
         )
         acceptance_criteria.append(
             "Use the provided skills directly instead of rediscovering the workflow."
+        )
+        acceptance_criteria.append(
+            "Prefer producing the requested article and assets immediately; inspect only a small number of directly relevant files when necessary."
         )
 
     return Task(
@@ -594,6 +632,7 @@ def run_gateway_task(
     fallback_history_fact: str | None = None,
     replay_history_in_memory_facts: bool = True,
     event_callback: ExecutionEventCallback | None = None,
+    cancel_event: Any | None = None,
 ) -> ExecutionResult:
     """Execute a gateway turn through Mente."""
     task = build_gateway_task(
@@ -612,12 +651,14 @@ def run_gateway_task(
     )
     repository = _build_task_repository()
     memory_repository = _build_memory_repository()
+    effective_cancel_event = cancel_event or threading.Event()
     try:
         result = _build_orchestrator(
             task.workspace or ".",
             repository,
             memory_repository,
             event_callback=event_callback,
+            cancel_event=effective_cancel_event,
         ).run(task)
         _persist_remember_intent_direct_write(
             task=task,

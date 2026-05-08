@@ -1,4 +1,5 @@
 from pathlib import Path
+import threading
 
 from gateway.config import Platform
 from gateway.session import SessionSource
@@ -12,6 +13,7 @@ from mente.integrations.bridge import (
     build_gateway_task,
     extract_execution_session_handoff,
     normalize_api_execution_continuity,
+    resolve_gateway_task_host_timeout_seconds,
     run_post_turn_memory_review,
     run_post_turn_skill_review,
     run_api_server_task,
@@ -144,9 +146,31 @@ def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_worksp
     assert task.skill_refs == ["media/wechat-publisher", "imagegen"]
     assert task.metadata["task_profile"] == "content_publishing"
     assert any(
+        fact.startswith("Publishing workflow brief:")
+        for fact in task.memory_facts
+    )
+    assert any(
+        "do not scan the full repository" in constraint.lower()
+        for constraint in task.constraints
+    )
+    assert any(
         "use mente_wechat_publish_draft" in criterion.lower()
         for criterion in task.acceptance_criteria
     )
+    assert any(
+        "prefer producing the requested article and assets immediately" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+
+
+def test_resolve_gateway_task_host_timeout_seconds_detects_content_publishing():
+    assert (
+        resolve_gateway_task_host_timeout_seconds(
+            message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        )
+        == 300.0
+    )
+    assert resolve_gateway_task_host_timeout_seconds(message="你好") is None
 
 
 def test_build_api_server_task_sets_api_server_source(tmp_path):
@@ -914,6 +938,48 @@ def test_run_gateway_task_persists_task_record(tmp_path, monkeypatch):
     assert stored is not None
     assert stored.metadata["source"] == "gateway"
     assert stored.status.value == "succeeded"
+
+
+def test_run_gateway_task_threads_cancel_event_into_orchestrator(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(tmp_path / "tasks.db"))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+
+    captured = {}
+
+    class _FakeOrchestrator:
+        def run(self, task):
+            captured["task"] = task
+            return ExecutionResult(status="success", summary="done")
+
+    def _fake_build_orchestrator(*args, **kwargs):
+        captured["cancel_event"] = kwargs.get("cancel_event")
+        return _FakeOrchestrator()
+
+    monkeypatch.setattr(mente_bridge, "_build_orchestrator", _fake_build_orchestrator)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    cancel_event = threading.Event()
+
+    result = run_gateway_task(
+        message="latest question",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+        cancel_event=cancel_event,
+    )
+
+    assert result.status == "success"
+    assert captured["task"].metadata["source"] == "gateway"
+    assert captured["cancel_event"] is cancel_event
 
 
 def test_run_gateway_task_direct_writes_explicit_chinese_remember_intent_when_flag_enabled(

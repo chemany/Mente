@@ -232,6 +232,77 @@ def test_run_mente_gateway_turn_with_active_continuity_uses_resume_without_histo
     assert captured["replay_history_in_memory_facts"] is False
 
 
+def test_run_mente_gateway_turn_threads_cancel_event(monkeypatch):
+    captured = {}
+
+    def _fake_run_gateway_task(**kwargs):
+        captured.update(kwargs)
+        return ExecutionResult(status="success", summary="done")
+
+    monkeypatch.setattr("mente.integrations.bridge.run_gateway_task", _fake_run_gateway_task)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    cancel_event = threading.Event()
+
+    result = gateway_run._run_mente_gateway_turn(
+        message="latest question",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        cancel_event=cancel_event,
+    )
+
+    assert result["final_response"] == "done"
+    assert captured["cancel_event"] is cancel_event
+
+
+def test_run_mente_gateway_turn_collapses_long_failed_summary(monkeypatch):
+    machine_dump = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-123"}',
+            '{"type":"turn.started"}',
+            '{"type":"turn.failed","error":{"message":"cancelled"}}',
+        ]
+    )
+
+    def _fake_run_gateway_task(**kwargs):
+        return ExecutionResult(
+            status="failed",
+            summary=machine_dump,
+            failure_reason="interrupted_by_user",
+        )
+
+    monkeypatch.setattr("mente.integrations.bridge.run_gateway_task", _fake_run_gateway_task)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = gateway_run._run_mente_gateway_turn(
+        message="为什么没发布成功",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+    )
+
+    assert result["failed"] is True
+    assert result["final_response"] == "⚠️ 任务已取消。"
+
+
 def test_format_mente_memory_review_outcome_persisted():
     assert gateway_run._format_mente_memory_review_outcome(
         {
@@ -569,6 +640,148 @@ async def test_run_agent_mente_logs_prompt_and_cache_diagnostics_even_when_progr
         and "session_id=session-1" in record.message
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_promotes_interruptable_handle_and_shares_cancel_event(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    captured = {}
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        captured["cancel_event"] = kwargs["cancel_event"]
+        captured["running_agent"] = runner._running_agents.get(session_key)
+        started.set()
+        await release.wait()
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+        }
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _fake_to_thread)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    session_key = "agent:main:feishu:dm:oc_test"
+    runner._running_agents[session_key] = gateway_run._AGENT_PENDING_SENTINEL
+
+    task = asyncio.create_task(
+        runner._run_agent(
+            message="缓存命中测试",
+            context_prompt="session context",
+            history=[],
+            source=source,
+            session_id="session-1",
+            session_key=session_key,
+            run_generation=12,
+        )
+    )
+
+    await started.wait()
+
+    handle = runner._running_agents[session_key]
+    assert handle is not gateway_run._AGENT_PENDING_SENTINEL
+    assert handle is captured["running_agent"]
+    assert captured["cancel_event"].is_set() is False
+
+    handle.interrupt("stop")
+    assert captured["cancel_event"].is_set() is True
+
+    release.set()
+    result = await task
+
+    assert result["final_response"] == "done"
+    assert session_key not in runner._running_agents
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_host_timeout_cancels_stalled_turn(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+    monkeypatch.setattr(
+        gateway_run,
+        "_resolve_mente_gateway_host_timeout_seconds",
+        lambda **_kwargs: 0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        gateway_run,
+        "_MENTE_GATEWAY_CANCEL_GRACE_SECONDS",
+        0.01,
+        raising=False,
+    )
+
+    captured = {}
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        captured["cancel_event"] = kwargs["cancel_event"]
+        await asyncio.sleep(0.05)
+        return {
+            "final_response": "late",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+        }
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _fake_to_thread)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="发布一篇公众号草稿并配图",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=13,
+    )
+
+    assert "已取消" in result["final_response"]
+    assert result["failed"] is True
+    assert captured["cancel_event"].is_set() is True
 
 
 @pytest.mark.asyncio

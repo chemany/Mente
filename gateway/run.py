@@ -109,6 +109,7 @@ from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
 
 
 _GATEWAY_RUNTIME_CONTINUITY_RUNTIME = "codex"
+_MENTE_GATEWAY_CANCEL_GRACE_SECONDS = 5.0
 
 
 def _build_gateway_fallback_history_fact(history: List[Dict[str, Any]]) -> str | None:
@@ -308,6 +309,7 @@ def _run_mente_gateway_turn(
     fallback_history_fact: str | None = None,
     replay_history_in_memory_facts: bool = True,
     event_callback=None,
+    cancel_event=None,
 ) -> Dict[str, Any]:
     """Run a gateway turn through the Mente task bridge."""
     from mente.integrations.bridge import run_gateway_task
@@ -321,6 +323,7 @@ def _run_mente_gateway_turn(
         "session_key": session_key,
         "channel_prompt": channel_prompt,
         "event_callback": event_callback,
+        "cancel_event": cancel_event,
     }
     optional_kwargs = {
         "execution_mode": execution_mode,
@@ -345,7 +348,10 @@ def _run_mente_gateway_turn(
         final_response = result.summary or ""
         failed = False
     else:
-        final_response = f"⚠️ {result.summary or result.failure_reason or 'Task failed'}"
+        final_response = _format_mente_gateway_failed_response(
+            summary=result.summary,
+            failure_reason=result.failure_reason,
+        )
         failed = True
 
     return {
@@ -366,6 +372,94 @@ def _run_mente_gateway_turn(
         "mente_task_id": result.metadata.get("task_id"),
         "execution_session": result.metadata.get("execution_session"),
     }
+
+
+class _MenteGatewayRunHandle:
+    """Lightweight interrupt handle for Mente-backed gateway turns."""
+
+    def __init__(self, cancel_event: threading.Event, *, session_id: str) -> None:
+        self.cancel_event = cancel_event
+        self.session_id = session_id
+        self.model = "mente"
+        self.provider = "mente"
+        self.base_url = None
+        self.api_key = None
+
+    @property
+    def is_interrupted(self) -> bool:
+        return self.cancel_event.is_set()
+
+    def interrupt(self, _reason: str | None = None) -> None:
+        self.cancel_event.set()
+
+    def get_activity_summary(self) -> dict[str, Any]:
+        return {
+            "seconds_since_activity": 0.0,
+            "last_activity_desc": "mente gateway task running",
+            "api_call_count": 0,
+            "max_iterations": 0,
+        }
+
+
+def _resolve_mente_gateway_host_timeout_seconds(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+) -> float | None:
+    """Resolve the host-side timeout for Mente-backed gateway turns."""
+    from mente.integrations.bridge import resolve_gateway_task_host_timeout_seconds
+
+    return resolve_gateway_task_host_timeout_seconds(
+        message=message,
+        channel_prompt=channel_prompt,
+    )
+
+
+def _build_mente_gateway_timeout_result(
+    *,
+    session_id: str,
+    history_length: int,
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    """Render a bounded timeout reply for a stalled Mente gateway turn."""
+    timeout_display = int(timeout_seconds) if float(timeout_seconds).is_integer() else timeout_seconds
+    return {
+        "final_response": f"⚠️ 任务执行超过 {timeout_display} 秒，已取消。请缩小范围后重试。",
+        "last_reasoning": None,
+        "messages": [],
+        "api_calls": 0,
+        "failed": True,
+        "compression_exhausted": False,
+        "tools": [],
+        "history_offset": history_length,
+        "last_prompt_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "model": None,
+        "session_id": session_id,
+        "response_previewed": False,
+        "mente_task_id": None,
+        "execution_session": None,
+    }
+
+
+def _format_mente_gateway_failed_response(
+    *,
+    summary: str | None,
+    failure_reason: str | None,
+) -> str:
+    """Return a compact gateway-safe failure string."""
+    from mente.executors.prompting import normalize_user_facing_failure_summary
+
+    text = normalize_user_facing_failure_summary(
+        summary or "",
+        failure_reason=failure_reason,
+    ).strip()
+    if not text:
+        text = "任务执行失败。"
+    if text.startswith(("⚠️", "⚠")):
+        return text
+    return f"⚠️ {text}"
 
 
 def _run_mente_post_turn_memory_review(task_id: str) -> Dict[str, Any]:
@@ -10389,6 +10483,13 @@ class GatewayRunner:
             progress_queue = queue.Queue() if tool_progress_enabled else None
             progress_task = None
             mente_progress_last = [None]
+            mente_progress_active = [True]
+            cancel_event = threading.Event()
+            mente_run_handle = _MenteGatewayRunHandle(cancel_event, session_id=session_id)
+            gateway_timeout_seconds = _resolve_mente_gateway_host_timeout_seconds(
+                message=message,
+                channel_prompt=channel_prompt,
+            )
 
             if source.platform == Platform.SLACK:
                 _progress_thread_id = source.thread_id or event_message_id
@@ -10402,7 +10503,7 @@ class GatewayRunner:
                     event_type=event_type,
                     payload=payload,
                 )
-                if not progress_queue or not _run_still_current():
+                if not mente_progress_active[0] or not progress_queue or not _run_still_current():
                     return
                 step = _resolve_mente_gateway_progress_step(event_type, payload)
                 if step is not None and step != mente_progress_last[0]:
@@ -10423,8 +10524,14 @@ class GatewayRunner:
                     )
                 )
 
-            try:
-                result = await asyncio.to_thread(
+            if session_key:
+                if run_generation is None or self._is_session_run_current(session_key, run_generation):
+                    self._running_agents[session_key] = mente_run_handle
+                    if self._draining:
+                        self._update_runtime_status("draining")
+
+            mente_thread_task = asyncio.create_task(
+                asyncio.to_thread(
                     _run_mente_gateway_turn,
                     message=message,
                     context_prompt=context_prompt,
@@ -10438,7 +10545,37 @@ class GatewayRunner:
                     fallback_history_fact=continuity_plan["fallback_history_fact"],
                     replay_history_in_memory_facts=continuity_plan["replay_history_in_memory_facts"],
                     event_callback=_mente_event_callback,
+                    cancel_event=cancel_event,
                 )
+            )
+
+            try:
+                if gateway_timeout_seconds and gateway_timeout_seconds > 0:
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.shield(mente_thread_task),
+                            timeout=gateway_timeout_seconds,
+                        )
+                    except asyncio.TimeoutError:
+                        cancel_event.set()
+                        logger.warning(
+                            "Mente gateway turn timed out after %.1fs; cancelling session %s",
+                            gateway_timeout_seconds,
+                            session_id,
+                        )
+                        try:
+                            result = await asyncio.wait_for(
+                                asyncio.shield(mente_thread_task),
+                                timeout=_MENTE_GATEWAY_CANCEL_GRACE_SECONDS,
+                            )
+                        except asyncio.TimeoutError:
+                            result = _build_mente_gateway_timeout_result(
+                                session_id=session_id,
+                                history_length=len(history),
+                                timeout_seconds=gateway_timeout_seconds,
+                            )
+                else:
+                    result = await mente_thread_task
                 if self.session_store is not None and hasattr(self.session_store, "bind_runtime_continuity"):
                     _record_gateway_runtime_continuity_result(
                         session_store=self.session_store,
@@ -10447,9 +10584,10 @@ class GatewayRunner:
                         previous_continuity_payload=continuity_payload,
                         execution_session_payload=result.get("execution_session"),
                     )
-                if progress_queue is not None:
+                if progress_queue is not None and not result.get("failed", False):
                     progress_queue.put(("step", _MENTE_GATEWAY_PROGRESS_PROTOCOL["__gateway.completed__"]))
             finally:
+                mente_progress_active[0] = False
                 if progress_queue is not None:
                     progress_queue.put(_MENTE_PROGRESS_DONE_SENTINEL)
                 if progress_task is not None:
@@ -10461,6 +10599,13 @@ class GatewayRunner:
                             await progress_task
                         except asyncio.CancelledError:
                             pass
+                if session_key:
+                    self._release_running_agent_state(
+                        session_key,
+                        run_generation=run_generation,
+                    )
+                    if self._draining:
+                        self._update_runtime_status("draining")
 
             _register_mente_post_delivery_reviews(
                 adapter=self.adapters.get(source.platform),

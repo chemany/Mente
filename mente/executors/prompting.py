@@ -96,6 +96,16 @@ _PROJECT_DEVELOPMENT_KEYWORDS: tuple[str, ...] = (
     "测试",
 )
 
+_MACHINE_FAILURE_DUMP_MARKERS: tuple[str, ...] = (
+    '"type":"thread.started"',
+    '"type":"turn.started"',
+    '"type":"turn.completed"',
+    '"type":"turn.failed"',
+    '"type":"error"',
+    '"assistant_summary"',
+    '"memory_candidates"',
+)
+
 
 def render_execution_prompt(request: ExecutionRequest) -> str:
     """Build a stable textual prompt from an execution request."""
@@ -124,6 +134,18 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
         )
         lines.append(
             "- Do not scan the full skills tree unless the user explicitly asks for skill discovery."
+        )
+    if _is_content_publishing_request(request):
+        lines.append("Workflow Policy:")
+        lines.append("- Use the provided publishing skill and bridge tool path directly.")
+        lines.append(
+            "- Do not read large numbers of repository files, skill files, examples, or scripts unless a concrete blocker requires one targeted read."
+        )
+        lines.append(
+            "- Draft the requested article and assets in the workspace, then call mente_wechat_publish_draft to publish."
+        )
+        lines.append(
+            "- If key editorial details are unspecified, make reasonable defaults and continue instead of exploring broadly."
         )
     recommended_superpowers = _recommended_mente_superpowers(request, explicit_skill_refs)
     if recommended_superpowers:
@@ -161,6 +183,8 @@ def _normalized_skill_refs(skill_refs: object) -> list[str]:
 
 
 def _recommended_mente_superpowers(request: ExecutionRequest, explicit_skill_refs: list[str]) -> list[str]:
+    if _is_content_publishing_request(request):
+        return []
     if not _looks_like_project_development_request(request):
         return []
     explicit = set(explicit_skill_refs)
@@ -189,6 +213,21 @@ def _tool_policy_has_bridge_tool(request: ExecutionRequest, tool_name: str) -> b
         for item in bridge_tools
         if str(item).strip()
     }
+
+
+def _task_profile(request: ExecutionRequest) -> str:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    profile = metadata.get("task_profile")
+    if not isinstance(profile, str):
+        return ""
+    return profile.strip().lower()
+
+
+def _is_content_publishing_request(request: ExecutionRequest) -> bool:
+    if _task_profile(request) == "content_publishing":
+        return True
+    skill_refs = set(_normalized_skill_refs(request.skill_refs))
+    return "media/wechat-publisher" in skill_refs
 
 
 def _looks_like_chinese_identity_or_greeting_request(user_request: str | None) -> bool:
@@ -220,6 +259,53 @@ def normalize_user_facing_summary(summary: str, *, user_request: str | None = No
         ):
             return _CANONICAL_MENTE_IDENTITY_SUMMARY
     return normalized
+
+
+def normalize_user_facing_failure_summary(
+    summary: str,
+    *,
+    failure_reason: str | None = None,
+    user_request: str | None = None,
+) -> str:
+    """Collapse backend-heavy failures into short user-facing summaries."""
+
+    normalized = normalize_user_facing_summary(summary, user_request=user_request).strip()
+    concise_reason = _concise_failure_reason(failure_reason)
+
+    if _looks_like_machine_failure_dump(normalized):
+        return concise_reason or "任务执行失败。"
+    if not normalized:
+        return concise_reason or "任务执行失败。"
+    if len(normalized) > 1200 and concise_reason:
+        return concise_reason
+    if len(normalized) > 1200:
+        return normalized[:1197].rstrip() + "..."
+    return normalized
+
+
+def _looks_like_machine_failure_dump(summary: str) -> bool:
+    if not summary:
+        return False
+    lowered = summary.lower()
+    if len(summary) > 4000:
+        return True
+    return any(marker in lowered for marker in _MACHINE_FAILURE_DUMP_MARKERS)
+
+
+def _concise_failure_reason(failure_reason: str | None) -> str | None:
+    value = str(failure_reason or "").strip()
+    if not value:
+        return None
+    lowered = value.lower()
+    if lowered == "interrupted_by_user":
+        return "任务已取消。"
+    if lowered.startswith("exit_code:"):
+        return f"任务执行失败（{value}）。"
+    if lowered.startswith("spawn_error:"):
+        return f"任务执行失败（{value}）。"
+    if lowered.startswith("runtime_not_bootstrapped:"):
+        return value
+    return value if len(value) <= 160 else value[:157].rstrip() + "..."
 
 
 def build_prompt_fingerprint(prompt: str) -> str:

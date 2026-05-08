@@ -737,6 +737,28 @@ def test_render_execution_prompt_prioritizes_explicit_skill_refs():
     assert "do not do broad workspace exploration before checking them" in prompt.lower()
 
 
+def test_render_execution_prompt_adds_direct_workflow_policy_for_content_publishing():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Draft and publish a WeChat article",
+        user_request="帮我写一篇公众号文案并发布草稿",
+        workspace=".",
+        skill_refs=["media/wechat-publisher", "imagegen"],
+        tool_policy={"bridge_tools": ["mente_wechat_publish_draft"]},
+        metadata={"source": "gateway", "task_profile": "content_publishing"},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Workflow Policy:" in prompt
+    assert "Use the provided publishing skill and bridge tool path directly." in prompt
+    assert "Do not read large numbers of repository files" in prompt
+    assert "call mente_wechat_publish_draft to publish" in prompt
+    assert "make reasonable defaults and continue" in prompt
+
+
 def test_render_execution_prompt_uses_lightweight_skill_fallback_when_no_explicit_refs():
     request = ExecutionRequest(
         task_id="task_1",
@@ -1443,6 +1465,42 @@ def test_codex_executor_execute_translates_kernel_failures(monkeypatch, tmp_path
     assert result.summary.startswith("Kernel session mode")
     assert result.failure_reason == "unsupported_session_mode"
     assert result.metadata["session_mode"] == "session"
+
+
+def test_codex_executor_collapses_machine_failure_dump_to_concise_summary(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+
+    machine_dump = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-123"}',
+            '{"type":"turn.started"}',
+            '{"type":"turn.failed","error":{"message":"cancelled"}}',
+        ]
+    )
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            return KernelExecutionResult(
+                status="failed",
+                assistant_summary=machine_dump,
+                backend_failure="interrupted_by_user",
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="为什么没有发布成功？",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "failed"
+    assert result.summary == "任务已取消。"
+    assert result.failure_reason == "interrupted_by_user"
 
 
 def test_codex_executor_build_command_delegates_to_vendored_launcher(monkeypatch):

@@ -21,6 +21,7 @@ from mente.executors.bridge_mcp import augment_runtime_config_for_bridge_tools
 from mente.executors.kernel_adapter import CodexKernelAdapter
 from mente.executors.prompting import (
     build_prompt_metrics,
+    normalize_user_facing_failure_summary,
     normalize_user_facing_summary,
     render_execution_prompt,
 )
@@ -450,9 +451,17 @@ class CodexExecutor(CodexKernelAdapter):
         """Translate the vendored kernel result back into the Mente executor contract."""
         translated = ExecutionResult(
             status=result.status,
-            summary=normalize_user_facing_summary(
-                result.assistant_summary,
-                user_request=request.user_request,
+            summary=(
+                normalize_user_facing_summary(
+                    result.assistant_summary,
+                    user_request=request.user_request,
+                )
+                if result.status == "success"
+                else normalize_user_facing_failure_summary(
+                    result.assistant_summary,
+                    failure_reason=result.backend_failure,
+                    user_request=request.user_request,
+                )
             ),
             commands_run=list(result.commands_run),
             memory_candidates=list(result.memory_candidates),
