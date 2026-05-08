@@ -76,6 +76,21 @@ def _build_content_publishing_workflow_brief() -> str:
     )
 
 
+def _build_content_publishing_output_plan(*, workspace: str, session_id: str) -> str:
+    """Return a deterministic draft output path for publishing workflows."""
+
+    draft_dir = Path(workspace).expanduser() / ".mente" / "publishing" / session_id
+    article_path = draft_dir / "article.md"
+    return "\n".join(
+        [
+            "Publishing output plan:",
+            f"- Draft directory: {draft_dir}",
+            f"- Draft article path: {article_path}",
+            "- Use the planned draft article path when calling mente_wechat_publish_draft.",
+        ]
+    )
+
+
 def _resolve_workspace(workspace: str | None) -> str:
     """Resolve the workspace used for a bridged task."""
     return workspace or os.getenv("TERMINAL_CWD") or os.getcwd()
@@ -149,9 +164,18 @@ def _resolve_gateway_workspace(
     return resolved_workspace
 
 
-def _resolve_tool_policy(*, source: str, task_type: str) -> dict[str, object]:
+def _resolve_tool_policy(
+    *,
+    source: str,
+    task_type: str,
+    task_profile: str | None = None,
+) -> dict[str, object]:
     """Resolve a deterministic Mente-owned tool exposure policy."""
-    return resolve_tool_exposure_policy(source=source, task_type=task_type).as_metadata()
+    return resolve_tool_exposure_policy(
+        source=source,
+        task_type=task_type,
+        task_profile=task_profile,
+    ).as_metadata()
 
 
 def _build_task_repository() -> SQLiteTaskRepository:
@@ -463,9 +487,14 @@ def build_gateway_task(
         memory_facts.append(history_fact)
 
     platform = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
+    task_profile = _resolve_gateway_task_profile(inferred_skill_refs)
     metadata = {
         "source": "gateway",
-        "tool_policy": _resolve_tool_policy(source="gateway", task_type="conversation"),
+        "tool_policy": _resolve_tool_policy(
+            source="gateway",
+            task_type="conversation",
+            task_profile=task_profile,
+        ),
         "platform": platform,
         "session_key": session_key,
         "user_id": getattr(source, "user_id", None),
@@ -475,7 +504,6 @@ def build_gateway_task(
         "chat_type": getattr(source, "chat_type", None),
         "thread_id": getattr(source, "thread_id", None),
     }
-    task_profile = _resolve_gateway_task_profile(inferred_skill_refs)
     if task_profile is not None:
         metadata["task_profile"] = task_profile
     if fallback_history_fact:
@@ -487,6 +515,12 @@ def build_gateway_task(
     ]
     if task_profile == _CONTENT_PUBLISHING_TASK_PROFILE:
         memory_facts.append(_build_content_publishing_workflow_brief())
+        memory_facts.append(
+            _build_content_publishing_output_plan(
+                workspace=resolved_workspace,
+                session_id=session_id,
+            )
+        )
         constraints.append(
             "Prefer the active workspace and provided conversation context; avoid broad scans outside the workspace unless the user explicitly asks."
         )

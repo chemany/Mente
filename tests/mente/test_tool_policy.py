@@ -66,6 +66,17 @@ def test_resolve_tool_exposure_policy_fails_closed_for_memory_bridge_tools_by_de
     assert "mente_memory_save" not in policy.bridge_tools
 
 
+def test_resolve_tool_exposure_policy_narrows_content_publishing_bridge_tools():
+    policy = resolve_tool_exposure_policy(
+        source="gateway",
+        task_type="conversation",
+        task_profile="content_publishing",
+    )
+
+    assert policy.session_capable is True
+    assert policy.bridge_tools == ["mente_wechat_publish_draft"]
+
+
 def test_resolve_tool_exposure_policy_exposes_all_vendored_native_tools_for_api_server(
     monkeypatch,
 ):

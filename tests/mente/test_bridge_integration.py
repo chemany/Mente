@@ -145,8 +145,13 @@ def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_worksp
     assert task.workspace == str(project_root)
     assert task.skill_refs == ["media/wechat-publisher", "imagegen"]
     assert task.metadata["task_profile"] == "content_publishing"
+    assert task.metadata["tool_policy"]["bridge_tools"] == ["mente_wechat_publish_draft"]
     assert any(
         fact.startswith("Publishing workflow brief:")
+        for fact in task.memory_facts
+    )
+    assert any(
+        fact.startswith("Publishing output plan:")
         for fact in task.memory_facts
     )
     assert any(
@@ -2035,9 +2040,15 @@ def test_cutover_manifest_records_bridge_owned_boundary():
 def test_gateway_task_resolves_policy_in_mente_ingress(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_resolve(*, source: str, task_type: str) -> ToolExposurePolicy:
+    def _fake_resolve(
+        *,
+        source: str,
+        task_type: str,
+        task_profile: str | None = None,
+    ) -> ToolExposurePolicy:
         captured["source"] = source
         captured["task_type"] = task_type
+        captured["task_profile"] = task_profile
         return ToolExposurePolicy(
             policy_id=f"{source}:{task_type}",
             source=source,
@@ -2065,7 +2076,7 @@ def test_gateway_task_resolves_policy_in_mente_ingress(monkeypatch, tmp_path):
         workspace=str(tmp_path),
     )
 
-    assert captured == {"source": "gateway", "task_type": "conversation"}
+    assert captured == {"source": "gateway", "task_type": "conversation", "task_profile": None}
     assert task.metadata["tool_policy"] == _fake_resolve(
-        source="gateway", task_type="conversation"
+        source="gateway", task_type="conversation", task_profile=None
     ).as_metadata()

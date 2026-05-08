@@ -60,6 +60,11 @@ _POLICY_PROFILES: dict[tuple[str, str], _PolicyProfile] = {
 }
 
 _DEFAULT_POLICY_PROFILE = _PolicyProfile(native_tools=(), bridge_tools=())
+_CONTENT_PUBLISHING_PROFILE = _PolicyProfile(
+    expose_all_native_tools=True,
+    bridge_tools=("mente_wechat_publish_draft",),
+    session_capable=True,
+)
 
 
 class ToolExposurePolicy(BaseModel):
@@ -95,10 +100,22 @@ def _resolve_native_tools(profile: _PolicyProfile) -> list[str]:
 
 
 
-def resolve_tool_exposure_policy(*, source: str, task_type: str) -> ToolExposurePolicy:
+def resolve_tool_exposure_policy(
+    *,
+    source: str,
+    task_type: str,
+    task_profile: str | None = None,
+) -> ToolExposurePolicy:
     """Resolve a Mente outer policy over the vendored Codex native capability surface."""
 
     profile = _POLICY_PROFILES.get((source, task_type), _DEFAULT_POLICY_PROFILE)
+    normalized_task_profile = str(task_profile or "").strip().lower()
+    if (
+        source == "gateway"
+        and task_type == "conversation"
+        and normalized_task_profile == "content_publishing"
+    ):
+        profile = _CONTENT_PUBLISHING_PROFILE
     vendored_surface = get_vendored_capability_surface()
     return ToolExposurePolicy(
         policy_id=f"{source}:{task_type}",
