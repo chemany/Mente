@@ -32,6 +32,12 @@ class TestTipsCorpus:
         for i, tip in enumerate(TIPS):
             assert tip == tip.strip(), f"Tip {i} has leading/trailing whitespace"
 
+    def test_no_old_workspace_plan_path_branding(self):
+        for i, tip in enumerate(TIPS):
+            assert ".hermes/plans/" not in tip, (
+                f"Tip {i} still references old workspace plan path: {tip}"
+            )
+
 
 class TestGetRandomTip:
     """Validate the get_random_tip() function."""

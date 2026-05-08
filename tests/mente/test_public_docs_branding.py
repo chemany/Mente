@@ -145,6 +145,35 @@ CURATED_BRANDING_SWEEPS = {
         "Skills are on-demand knowledge documents that teach Hermes how to handle specific tasks",
         "Every Hermes installation ships with bundled skills.",
     ),
+    REPO_ROOT / "website" / "docs" / "reference" / "slash-commands.md": (
+        ".hermes/plans/",
+    ),
+    REPO_ROOT / "website" / "docs" / "reference" / "skills-catalog.md": (
+        ".hermes/plans/",
+    ),
+    REPO_ROOT / "website" / "docs" / "user-guide" / "features" / "skills.md": (
+        ".hermes/plans/",
+    ),
+    REPO_ROOT
+    / "website"
+    / "docs"
+    / "user-guide"
+    / "skills"
+    / "bundled"
+    / "software-development"
+    / "software-development-plan.md": (
+        ".hermes/plans/",
+    ),
+    REPO_ROOT
+    / "website"
+    / "docs"
+    / "user-guide"
+    / "skills"
+    / "bundled"
+    / "research"
+    / "research-research-paper-writing.md": (
+        ".hermes/plans/",
+    ),
 }
 
 

@@ -8,6 +8,7 @@ TARGET_SKILLS = (
     REPO_ROOT / "skills" / "software-development" / "using-git-worktrees" / "SKILL.md",
     REPO_ROOT / "skills" / "software-development" / "writing-plans" / "SKILL.md",
     REPO_ROOT / "skills" / "software-development" / "executing-plans" / "SKILL.md",
+    REPO_ROOT / "skills" / "software-development" / "plan" / "SKILL.md",
     REPO_ROOT / "skills" / "software-development" / "test-driven-development" / "SKILL.md",
     REPO_ROOT / "skills" / "software-development" / "systematic-debugging" / "SKILL.md",
     REPO_ROOT / "skills" / "software-development" / "requesting-code-review" / "SKILL.md",
@@ -29,6 +30,7 @@ def test_mente_superpower_skill_sources_are_dehermesized():
         text = path.read_text(encoding="utf-8")
         for forbidden in FORBIDDEN_SKILL_STRINGS:
             assert forbidden not in text, f"{path} still contains {forbidden!r}"
+        assert ".hermes/plans/" not in text, f"{path} still contains '.hermes/plans/'"
 
 
 def test_skill_doc_generator_uses_mente_branding():
