@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from hermes_constants import get_hermes_home
+from hermes_constants import bootstrap_mente_home, get_hermes_home
 from hermes_cli.env_loader import load_hermes_dotenv
 from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
 from tui_gateway.transport import (
@@ -28,6 +28,7 @@ from tui_gateway.transport import (
 
 logger = logging.getLogger(__name__)
 
+bootstrap_mente_home()
 _hermes_home = get_hermes_home()
 load_hermes_dotenv(
     hermes_home=_hermes_home, project_env=Path(__file__).parent.parent / ".env"

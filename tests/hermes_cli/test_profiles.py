@@ -742,6 +742,22 @@ class TestCompletion:
 class TestInternalHelpers:
     """Tests for _get_profiles_root() and _get_default_hermes_home()."""
 
+    def test_profiles_root_defaults_to_mente_home(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
+
+        root = _get_profiles_root()
+        assert root == tmp_path / ".mente" / "profiles"
+
+    def test_default_home_without_env_defaults_to_mente_root(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
+
+        home = _get_default_hermes_home()
+        assert home == tmp_path / ".mente"
+
     def test_profiles_root_under_home(self, profile_env):
         tmp_path = profile_env
         root = _get_profiles_root()

@@ -5,18 +5,18 @@ without risk of circular imports.
 """
 
 import os
+import shutil
 from pathlib import Path
 
 
 def get_hermes_home() -> Path:
-    """Return the primary home directory (default: ~/.mente).
+    """Return the legacy Hermes-compatible home directory.
 
-    Reads HERMES_HOME first for the runtime/config root, then falls back to
-    MENTE_HOME when no explicit HERMES_HOME is set. This preserves the split
-    between the legacy/runtime config home (gateway state, auth, config.yaml,
-    logs) and the newer Mente-owned home used for private runtime assets.
-
-    When neither env var is set, falls back to ~/.hermes.
+    Internal Hermes-era modules still call this helper. Product-facing
+    Mente entrypoints bootstrap both ``MENTE_HOME`` and ``HERMES_HOME`` to
+    the same canonical root first, so this function then resolves to that
+    unified path. Outside that bootstrap path, the legacy fallback remains
+    ``~/.hermes`` for compatibility.
     """
     val = os.environ.get("HERMES_HOME", "").strip()
     if val:
@@ -32,13 +32,116 @@ def get_hermes_home() -> Path:
 def get_mente_home() -> Path:
     """Return the Mente home directory (default: ~/.mente).
 
-    Mente now owns its own independent root.
+    Mente now owns its own independent root. For rollout compatibility,
+    an explicitly configured ``HERMES_HOME`` is treated as the Mente home
+    when ``MENTE_HOME`` is unset.
     """
     configured = os.environ.get("MENTE_HOME", "").strip()
     if configured:
         return Path(configured).expanduser()
 
+    legacy_home = os.environ.get("HERMES_HOME", "").strip()
+    if legacy_home:
+        return Path(legacy_home).expanduser()
+
     return Path.home() / ".mente"
+
+
+_MENTE_HOME_MIGRATION_FILES = (
+    "config.yaml",
+    ".env",
+    "SOUL.md",
+    "state.db",
+    "state.db-shm",
+    "state.db-wal",
+    "auth.json",
+    "channel_directory.json",
+)
+
+_MENTE_HOME_MIGRATION_DIRS = (
+    "sessions",
+    "memories",
+    "skills",
+    "skins",
+    "plugins",
+    "plans",
+    "cron",
+    "workspace",
+    "home",
+)
+
+
+def _copy_path_if_missing(src: Path, dst: Path) -> None:
+    """Copy one file or directory iff the destination does not already exist."""
+    if not src.exists() or dst.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_dir():
+        shutil.copytree(src, dst, symlinks=True)
+        return
+    shutil.copy2(src, dst)
+
+
+def migrate_legacy_hermes_home_to_mente_home(
+    legacy_home: Path,
+    mente_home: Path,
+) -> bool:
+    """Best-effort one-time migration from legacy ``~/.hermes`` to ``~/.mente``.
+
+    The migration is intentionally conservative:
+    - only runs when the legacy source exists and the new target is still absent
+    - copies user data/config/state, but not transient PID/log/runtime files
+    - never overwrites existing target content
+    """
+    legacy_home = legacy_home.expanduser()
+    mente_home = mente_home.expanduser()
+    if legacy_home == mente_home or not legacy_home.exists() or mente_home.exists():
+        return False
+
+    migrated = False
+    mente_home.mkdir(parents=True, exist_ok=True)
+
+    for name in _MENTE_HOME_MIGRATION_FILES:
+        src = legacy_home / name
+        dst = mente_home / name
+        if src.exists() and not dst.exists():
+            _copy_path_if_missing(src, dst)
+            migrated = True
+
+    for name in _MENTE_HOME_MIGRATION_DIRS:
+        src = legacy_home / name
+        dst = mente_home / name
+        if src.exists() and not dst.exists():
+            _copy_path_if_missing(src, dst)
+            migrated = True
+
+    if migrated:
+        marker = mente_home / ".migrated-from-hermes"
+        marker.write_text(str(legacy_home), encoding="utf-8")
+    return migrated
+
+
+def bootstrap_mente_home() -> Path:
+    """Resolve the canonical Mente home and bridge legacy env vars to it.
+
+    This is the startup shim that lets product-facing Mente entrypoints use
+    ``MENTE_HOME`` as the single root while legacy internals continue to read
+    ``HERMES_HOME``.
+    """
+    mente_env = os.environ.get("MENTE_HOME", "").strip()
+    hermes_env = os.environ.get("HERMES_HOME", "").strip()
+
+    if mente_env:
+        mente_home = Path(mente_env).expanduser()
+    elif hermes_env:
+        mente_home = Path(hermes_env).expanduser()
+    else:
+        mente_home = Path.home() / ".mente"
+        migrate_legacy_hermes_home_to_mente_home(Path.home() / ".hermes", mente_home)
+
+    os.environ["MENTE_HOME"] = str(mente_home)
+    os.environ["HERMES_HOME"] = str(mente_home)
+    return mente_home
 
 
 def display_mente_home() -> str:
@@ -53,28 +156,36 @@ def display_mente_home() -> str:
 def get_default_hermes_root() -> Path:
     """Return the root directory for profile-level operations.
 
-    In standard deployments this is ``~/.hermes``.
+    In standard Mente deployments this is ``~/.mente``.
 
     In Docker or custom deployments where ``HERMES_HOME`` points outside
-    ``~/.hermes`` (e.g. ``/opt/data``), returns ``HERMES_HOME`` directly
+    ``~/.mente`` (e.g. ``/opt/data``), returns the configured runtime home directly
     — that IS the root.
 
     In profile mode where ``HERMES_HOME`` is ``<root>/profiles/<name>``,
     returns ``<root>`` so that ``profile list`` can see all profiles.
-    Works both for standard (``~/.hermes/profiles/coder``) and Docker
+    Works both for standard (``~/.mente/profiles/coder``) and Docker
     (``/opt/data/profiles/coder``) layouts.
 
     Import-safe — no dependencies beyond stdlib.
     """
-    native_home = Path.home() / ".hermes"
-    env_home = os.environ.get("HERMES_HOME", "")
+    native_home = get_mente_home()
+    legacy_native_home = Path.home() / ".hermes"
+    env_home = os.environ.get("HERMES_HOME", "").strip() or os.environ.get("MENTE_HOME", "").strip()
     if not env_home:
         return native_home
     env_path = Path(env_home)
     try:
         env_path.resolve().relative_to(native_home.resolve())
-        # HERMES_HOME is under ~/.hermes (normal or profile mode)
+        # Runtime home is under ~/.mente (normal or profile mode)
         return native_home
+    except ValueError:
+        pass
+
+    try:
+        env_path.resolve().relative_to(legacy_native_home.resolve())
+        # Legacy ~/.hermes install/profile still active
+        return legacy_native_home
     except ValueError:
         pass
 

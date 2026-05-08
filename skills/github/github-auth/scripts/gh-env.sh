@@ -17,14 +17,15 @@
 GH_AUTH_METHOD="none"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 GH_USER=""
+GH_HOME_ROOT="${HERMES_HOME:-${MENTE_HOME:-$HOME/.mente}}"
 
 if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
     GH_AUTH_METHOD="gh"
     GH_USER=$(gh api user --jq '.login' 2>/dev/null)
 elif [ -n "$GITHUB_TOKEN" ]; then
     GH_AUTH_METHOD="curl"
-elif [ -f "$HOME/.hermes/.env" ] && grep -q "^GITHUB_TOKEN=" "$HOME/.hermes/.env" 2>/dev/null; then
-    GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$HOME/.hermes/.env" | head -1 | cut -d= -f2 | tr -d '\n\r')
+elif [ -f "$GH_HOME_ROOT/.env" ] && grep -q "^GITHUB_TOKEN=" "$GH_HOME_ROOT/.env" 2>/dev/null; then
+    GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$GH_HOME_ROOT/.env" | head -1 | cut -d= -f2 | tr -d '\n\r')
     if [ -n "$GITHUB_TOKEN" ]; then
         GH_AUTH_METHOD="curl"
     fi
@@ -63,4 +64,4 @@ echo "GitHub Auth: $GH_AUTH_METHOD"
 [ -n "$GH_OWNER_REPO" ] && echo "Repo: $GH_OWNER_REPO"
 [ "$GH_AUTH_METHOD" = "none" ] && echo "⚠ Not authenticated — see github-auth skill"
 
-export GH_AUTH_METHOD GITHUB_TOKEN GH_USER GH_OWNER GH_REPO GH_OWNER_REPO
+export GH_AUTH_METHOD GITHUB_TOKEN GH_USER GH_OWNER GH_REPO GH_OWNER_REPO GH_HOME_ROOT

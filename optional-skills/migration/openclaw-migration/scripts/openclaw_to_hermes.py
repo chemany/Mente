@@ -73,11 +73,11 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "skills": {
         "label": "User skills",
-        "description": "Copy OpenClaw skills into ~/.hermes/skills/openclaw-imports/.",
+        "description": "Copy OpenClaw skills into the target agent home's skills/openclaw-imports/ directory.",
     },
     "tts-assets": {
         "label": "TTS assets",
-        "description": "Copy compatible workspace TTS assets into ~/.hermes/tts/.",
+        "description": "Copy compatible workspace TTS assets into the target agent home's tts/ directory.",
     },
     "discord-settings": {
         "label": "Discord settings",
@@ -242,6 +242,13 @@ def parse_selection_values(values: Optional[Sequence[str]]) -> List[str]:
             if part:
                 parsed.append(part)
     return parsed
+
+
+def resolve_target_home_from_env() -> Path:
+    configured = os.getenv("HERMES_HOME", "").strip() or os.getenv("MENTE_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".mente"
 
 
 def resolve_selected_options(
@@ -2643,7 +2650,7 @@ class Migrator:
 
         notes.extend([
             "- Run `hermes gateway install` if you need the gateway service",
-            "- Review `~/.hermes/config.yaml` for any adjustments",
+            "- Review your target config.yaml for any adjustments",
             "",
         ])
 
@@ -2657,7 +2664,7 @@ class Migrator:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Migrate OpenClaw user state into Hermes Agent.")
     parser.add_argument("--source", default=str(Path.home() / ".openclaw"), help="OpenClaw home directory")
-    parser.add_argument("--target", default=str(Path.home() / ".hermes"), help="Hermes home directory")
+    parser.add_argument("--target", default=str(resolve_target_home_from_env()), help="Target agent home directory")
     parser.add_argument(
         "--workspace-target",
         help="Optional workspace root where the workspace instructions file should be copied",
@@ -2750,7 +2757,7 @@ def main() -> int:
             seen_kinds.add(label)
             dest = item.get("destination") or ""
             if dest.startswith(str(report["target_root"])):
-                dest = "~/.hermes/" + dest[len(str(report["target_root"])) + 1:]
+                dest = "~/.mente/" + dest[len(str(report["target_root"])) + 1:]
             meta = MIGRATION_OPTION_METADATA.get(label, {})
             display = meta.get("label", label)
             print(f"    ✔ {display:<35s} -> {dest}")
@@ -2796,7 +2803,7 @@ def main() -> int:
     if args.execute:
         print()
         print("  Next steps:")
-        print("    1. Review ~/.hermes/config.yaml")
+        print("    1. Review the target config.yaml")
         print("    2. Run: hermes mcp list")
         if any(i["kind"] == "cron-jobs" and i["status"] == "archived" for i in items):
             print("    3. Recreate cron jobs: hermes cron")

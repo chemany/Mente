@@ -123,7 +123,11 @@ class InMemoryTaskRepository:
 
 
 def get_default_task_db_path() -> Path:
-    """Resolve the persistent task DB path."""
+    """Resolve the persistent task DB path.
+
+    Mente task records must live in the Mente-owned primary state DB so
+    TUI, gateway, and oneshot all share one session/task timeline.
+    """
     override = os.getenv("MENTE_TASK_DB_PATH", "").strip()
     if override:
         return Path(override).expanduser()

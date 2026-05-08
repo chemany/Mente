@@ -13,6 +13,30 @@ import pytest
 _original_stdout = sys.stdout
 
 
+def test_tui_gateway_import_bootstraps_mente_home(monkeypatch):
+    import importlib
+
+    bootstrap = MagicMock()
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_constants",
+        MagicMock(
+            bootstrap_mente_home=bootstrap,
+            get_hermes_home=MagicMock(return_value="/tmp/mente_test"),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "hermes_cli.env_loader", MagicMock())
+    monkeypatch.setitem(sys.modules, "hermes_cli.banner", MagicMock())
+    monkeypatch.setitem(sys.modules, "hermes_state", MagicMock())
+    sys.modules.pop("tui_gateway.server", None)
+
+    mod = importlib.import_module("tui_gateway.server")
+
+    bootstrap.assert_called_once_with()
+    sys.modules.pop("tui_gateway.server", None)
+    importlib.invalidate_caches()
+
+
 @pytest.fixture(autouse=True)
 def _restore_stdout():
     yield
@@ -170,7 +194,7 @@ def test_session_resume_returns_hydrated_messages(server, monkeypatch):
         def reopen_session(self, _sid):
             return None
 
-        def get_messages_as_conversation(self, _sid):
+        def get_messages_as_conversation(self, _sid, include_ancestors=False):
             return [
                 {"role": "user", "content": "hello"},
                 {"role": "assistant", "content": "yo"},

@@ -36,7 +36,8 @@ Hub health check: `GET http://localhost:40404/mcp` returns JSON with instance PI
 Run the setup script to handle everything:
 
 ```bash
-bash "${HERMES_HOME:-$HOME/.hermes}/skills/creative/touchdesigner-mcp/scripts/setup.sh"
+AGENT_HOME="${HERMES_HOME:-${MENTE_HOME:-$HOME/.mente}}"
+bash "${AGENT_HOME}/skills/creative/touchdesigner-mcp/scripts/setup.sh"
 ```
 
 The script will:

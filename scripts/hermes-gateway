@@ -41,6 +41,13 @@ if env_path.exists():
     load_dotenv(dotenv_path=env_path)
 
 
+def get_agent_home() -> Path:
+    configured = os.getenv("HERMES_HOME", "").strip() or os.getenv("MENTE_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".mente"
+
+
 # =============================================================================
 # Service Configuration
 # =============================================================================
@@ -173,7 +180,7 @@ def generate_launchd_plist() -> str:
     python_path = get_python_path()
     script_path = get_gateway_script_path()
     working_dir = str(PROJECT_DIR)
-    log_dir = Path.home() / ".hermes" / "logs"
+    log_dir = get_agent_home() / "logs"
     
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -222,7 +229,7 @@ def install_launchd():
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Ensure log directory exists
-    log_dir = Path.home() / ".hermes" / "logs"
+    log_dir = get_agent_home() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Installing launchd service to: {plist_path}")
@@ -234,7 +241,7 @@ def install_launchd():
     print(f"✓ Service installed and loaded")
     print(f"")
     print(f"To view logs:")
-    print(f"  tail -f ~/.hermes/logs/gateway.log")
+    print(f"  tail -f {log_dir}/gateway.log")
     print(f"")
     print(f"To manage the service:")
     print(f"  launchctl start ai.hermes.gateway")
@@ -332,7 +339,7 @@ Configuration:
     - DISCORD_BOT_TOKEN
     - WHATSAPP_ENABLED
     
-    Or create ~/.hermes/gateway.json for advanced configuration.
+    Or create ${HERMES_HOME:-${MENTE_HOME:-~/.mente}}/gateway.json for advanced configuration.
 """
     )
     

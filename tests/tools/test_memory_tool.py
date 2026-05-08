@@ -10,6 +10,7 @@ from tools.memory_tool import (
     _scan_memory_content,
     ENTRY_DELIMITER,
     MEMORY_SCHEMA,
+    get_memory_dir,
 )
 
 
@@ -184,6 +185,14 @@ class TestMemoryStoreRemove:
 
 
 class TestMemoryStorePersistence:
+    def test_get_memory_dir_defaults_to_mente_home(self, tmp_path, monkeypatch):
+        mente_home = tmp_path / ".mente"
+        hermes_home = tmp_path / ".hermes"
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        assert get_memory_dir() == mente_home / "memories"
+
     def test_save_and_load_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: tmp_path)
 

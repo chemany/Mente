@@ -87,6 +87,10 @@ def _require_tty(command_name: str) -> None:
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from hermes_constants import bootstrap_mente_home
+
+bootstrap_mente_home()
+
 
 # ---------------------------------------------------------------------------
 # Profile override — MUST happen before any hermes module import.
@@ -145,6 +149,7 @@ def _apply_profile_override() -> None:
             )
             return
         os.environ["HERMES_HOME"] = hermes_home
+        os.environ["MENTE_HOME"] = hermes_home
         # Strip the flag from argv so argparse doesn't choke
         if consume > 0:
             for i, arg in enumerate(argv):

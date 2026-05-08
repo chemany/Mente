@@ -18,6 +18,16 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import memento_cards
 
 
+def test_default_data_dir_prefers_mente_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    import importlib
+
+    reloaded = importlib.reload(memento_cards)
+    assert reloaded.DATA_DIR == tmp_path / ".mente" / "skills" / "productivity" / "memento-flashcards" / "data"
+
+
 @pytest.fixture(autouse=True)
 def isolated_data(tmp_path, monkeypatch):
     """Redirect card storage to a temp directory for every test."""

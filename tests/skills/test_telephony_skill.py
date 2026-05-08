@@ -49,6 +49,15 @@ def test_save_twilio_writes_env_and_state(tmp_path: Path, monkeypatch):
     assert state["twilio"]["default_phone_sid"] == "PN123"
 
 
+def test_home_helper_prefers_mente_home(tmp_path: Path, monkeypatch):
+    mod = load_module()
+    mente_home = tmp_path / ".mente"
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    assert mod._hermes_home() == mente_home
+
+
 def test_upsert_env_updates_existing_values(tmp_path: Path):
     mod = load_module()
     env_path = tmp_path / ".env"

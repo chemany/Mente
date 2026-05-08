@@ -10,6 +10,7 @@ import type {
   SessionTitleResponse,
   SessionUndoResponse
 } from '../../../gatewayTypes.js'
+import { buildHistorySpeakerLabel } from '../../../lib/brandingText.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
 import type { Msg, PanelSection } from '../../../types.js'
@@ -391,7 +392,7 @@ export const coreCommands: SlashCommand[] = [
       const preview = Math.max(80, parseInt(arg, 10) || 400)
 
       const lines = items.map((m, i) => {
-        const tag = m.role === 'user' ? `You #${i + 1}` : `Hermes #${i + 1}`
+        const tag = buildHistorySpeakerLabel(m.role === 'user' ? 'user' : 'assistant', i)
         const body = m.text.trim() || (m.tools?.length ? `(${m.tools.length} tool calls)` : '(empty)')
         const clipped = body.length > preview ? `${body.slice(0, preview).trimEnd()}…` : body
 

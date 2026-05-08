@@ -1,6 +1,7 @@
 import { Box, Text, useStdout } from '@hermes/ink'
 
 import { artWidth, caduceus, CADUCEUS_WIDTH, logo, LOGO_WIDTH } from '../banner.js'
+import { buildBannerSubtitle, buildSessionModelLabel } from '../lib/brandingText.js'
 import { flat } from '../lib/text.js'
 import type { Theme } from '../theme.js'
 import type { PanelSection, SessionInfo } from '../types.js'
@@ -31,7 +32,7 @@ export function Banner({ t }: { t: Theme }) {
         </Text>
       )}
 
-      <Text color={t.color.dim}>{t.brand.icon} Nous Research · thought in hand</Text>
+      <Text color={t.color.dim}>{buildBannerSubtitle(t.brand.icon, t.brand.name)}</Text>
     </Box>
   )
 }
@@ -98,8 +99,7 @@ export function SessionPanel({ info, sid, t }: SessionPanelProps) {
           <Text />
 
           <Text color={t.color.amber}>
-            {info.model.split('/').pop()}
-            <Text color={t.color.dim}> · Nous Research</Text>
+            {buildSessionModelLabel(info.model.split('/').pop() || info.model)}
           </Text>
 
           <Text color={t.color.dim} wrap="truncate-end">

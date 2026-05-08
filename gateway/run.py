@@ -88,12 +88,14 @@ _ensure_ssl_certs()
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Resolve Hermes home directory (respects HERMES_HOME override)
-from hermes_constants import get_hermes_home
+# Resolve the canonical Mente home first, then expose it to legacy Hermes code.
+from hermes_constants import bootstrap_mente_home, get_hermes_home
 from utils import atomic_yaml_write, base_url_host_matches, is_truthy_value
 from mente.feature_flags import is_gateway_runtime_continuity_enabled
 from mente.task_core.task_query import execute_task_query, parse_gateway_task_query
 from mente.task_core.repository import SQLiteTaskRepository
+
+bootstrap_mente_home()
 _hermes_home = get_hermes_home()
 
 # Load environment variables from ~/.hermes/.env first.

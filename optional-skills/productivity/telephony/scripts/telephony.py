@@ -69,7 +69,8 @@ class OwnedTwilioNumber:
 
 
 def _hermes_home() -> Path:
-    return Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+    configured = os.environ.get("HERMES_HOME", "").strip() or os.environ.get("MENTE_HOME", "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".mente"
 
 
 def _env_path() -> Path:

@@ -282,22 +282,31 @@ class TestHermesConstantsFallback:
         assert module.get_hermes_home() == tmp_path / "custom-hermes"
 
     def test_fallback_defaults_to_dot_hermes(self, monkeypatch):
-        """When hermes_constants is missing and HERMES_HOME unset, default to ~/.hermes."""
+        """When no env var is set, fallback defaults to ~/.mente."""
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         module = self._load_helper(monkeypatch)
-        assert module.get_hermes_home() == Path.home() / ".hermes"
+        assert module.get_hermes_home() == Path.home() / ".mente"
 
     def test_fallback_ignores_empty_hermes_home(self, monkeypatch):
         """Empty/whitespace HERMES_HOME is treated as unset."""
         monkeypatch.setenv("HERMES_HOME", "  ")
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         module = self._load_helper(monkeypatch)
-        assert module.get_hermes_home() == Path.home() / ".hermes"
+        assert module.get_hermes_home() == Path.home() / ".mente"
+
+    def test_fallback_uses_mente_home_when_hermes_home_unset(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+        module = self._load_helper(monkeypatch)
+        assert module.get_hermes_home() == tmp_path / ".mente"
 
     def test_fallback_display_hermes_home_shortens_path(self, monkeypatch):
         """Fallback display_hermes_home() uses ~/ shorthand like the real one."""
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         module = self._load_helper(monkeypatch)
-        assert module.display_hermes_home() == "~/.hermes"
+        assert module.display_hermes_home() == "~/.mente"
 
     def test_fallback_display_hermes_home_profile_path(self, monkeypatch):
         """Fallback display_hermes_home() handles profile paths under ~/."""

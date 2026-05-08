@@ -13,7 +13,10 @@ def _hermes_home_path() -> Path:
         from hermes_constants import get_hermes_home  # local import to avoid cycles
         return get_hermes_home()
     except Exception:
-        return Path(os.path.expanduser("~/.hermes"))
+        configured = os.environ.get("HERMES_HOME", "").strip() or os.environ.get("MENTE_HOME", "").strip()
+        if configured:
+            return Path(configured).expanduser()
+        return Path(os.path.expanduser("~/.mente"))
 
 
 def build_write_denied_paths(home: str) -> set[str]:

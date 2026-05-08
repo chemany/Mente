@@ -14,10 +14,11 @@ class TestGetDefaultHermesRoot:
     """Tests for get_default_hermes_root() — Docker/custom deployment awareness."""
 
     def test_no_hermes_home_returns_native(self, tmp_path, monkeypatch):
-        """When HERMES_HOME is not set, returns ~/.hermes."""
+        """When no runtime home is set, Mente defaults to ~/.mente."""
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("MENTE_HOME", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        assert get_default_hermes_root() == tmp_path / ".hermes"
+        assert get_default_hermes_root() == tmp_path / ".mente"
 
     def test_hermes_home_is_native(self, tmp_path, monkeypatch):
         """When HERMES_HOME = ~/.hermes, returns ~/.hermes."""

@@ -16,6 +16,7 @@ import type {
 } from '../gatewayTypes.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
+import { buildTerminalTitle } from '../lib/brandingText.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { terminalParityHints } from '../lib/terminalParity.js'
@@ -356,7 +357,13 @@ export function useMainApp(gw: GatewayClient) {
 
   const tabCwd = ui.info?.cwd
 
-  useTerminalTitle(model ? `${marker} ${model}${tabCwd ? ` · ${shortCwd(tabCwd, 24)}` : ''}` : 'Hermes')
+  useTerminalTitle(
+    buildTerminalTitle({
+      cwd: tabCwd ? shortCwd(tabCwd, 24) : '',
+      marker,
+      model
+    })
+  )
 
   useEffect(() => {
     if (!ui.sid || !stdout) {

@@ -15,7 +15,7 @@
  *   GET  /health         - Health check
  *
  * Usage:
- *   node bridge.js --port 3000 --session ~/.hermes/whatsapp/session
+ *   node bridge.js --port 3000 --session ~/.mente/whatsapp/session
  */
 
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } from '@whiskeysockets/baileys';
@@ -41,11 +41,16 @@ const WHATSAPP_DEBUG =
   typeof process.env.WHATSAPP_DEBUG === 'string' &&
   ['1', 'true', 'yes', 'on'].includes(process.env.WHATSAPP_DEBUG.toLowerCase());
 
+const AGENT_HOME =
+  (process.env.HERMES_HOME && process.env.HERMES_HOME.trim()) ||
+  (process.env.MENTE_HOME && process.env.MENTE_HOME.trim()) ||
+  path.join(process.env.HOME || '~', '.mente');
+
 const PORT = parseInt(getArg('port', '3000'), 10);
-const SESSION_DIR = getArg('session', path.join(process.env.HOME || '~', '.hermes', 'whatsapp', 'session'));
-const IMAGE_CACHE_DIR = path.join(process.env.HOME || '~', '.hermes', 'image_cache');
-const DOCUMENT_CACHE_DIR = path.join(process.env.HOME || '~', '.hermes', 'document_cache');
-const AUDIO_CACHE_DIR = path.join(process.env.HOME || '~', '.hermes', 'audio_cache');
+const SESSION_DIR = getArg('session', path.join(AGENT_HOME, 'whatsapp', 'session'));
+const IMAGE_CACHE_DIR = path.join(AGENT_HOME, 'image_cache');
+const DOCUMENT_CACHE_DIR = path.join(AGENT_HOME, 'document_cache');
+const AUDIO_CACHE_DIR = path.join(AGENT_HOME, 'audio_cache');
 const PAIR_ONLY = args.includes('--pair-only');
 const WHATSAPP_MODE = getArg('mode', process.env.WHATSAPP_MODE || 'self-chat'); // "bot" or "self-chat"
 const ALLOWED_USERS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_USERS || '');

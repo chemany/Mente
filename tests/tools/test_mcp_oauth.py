@@ -1,5 +1,6 @@
 """Tests for tools/mcp_oauth.py — OAuth 2.1 PKCE support for MCP servers."""
 
+import builtins
 import json
 import os
 from io import BytesIO
@@ -15,6 +16,7 @@ from tools.mcp_oauth import (
     remove_oauth_tokens,
     _find_free_port,
     _can_open_browser,
+    _get_token_dir,
     _is_interactive,
     _wait_for_callback,
     _make_callback_handler,
@@ -175,6 +177,22 @@ class TestBuildOAuthAuth:
 # ---------------------------------------------------------------------------
 
 class TestUtilities:
+    def test_get_token_dir_import_fallback_prefers_mente_home(self, tmp_path, monkeypatch):
+        mente_home = tmp_path / ".mente"
+        monkeypatch.setenv("MENTE_HOME", str(mente_home))
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+
+        real_import = builtins.__import__
+
+        def broken_import(name, *args, **kwargs):
+            if name == "hermes_constants":
+                raise ImportError("simulated missing hermes_constants")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", broken_import)
+
+        assert _get_token_dir() == mente_home / "mcp-tokens"
+
     def test_find_free_port_returns_int(self):
         port = _find_free_port()
         assert isinstance(port, int)
@@ -522,5 +540,4 @@ def test_build_oauth_auth_preserves_server_url_path():
         )
 
     assert captured["server_url"] == "https://mcp.notion.com/mcp"
-
 

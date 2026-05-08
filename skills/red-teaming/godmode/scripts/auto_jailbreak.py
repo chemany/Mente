@@ -7,7 +7,10 @@ finds what works, and locks it in by writing config.yaml + prefill.json.
 
 Usage in execute_code:
     exec(open(os.path.expanduser(
-        os.path.join(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")), "skills/red-teaming/godmode/scripts/auto_jailbreak.py")
+        os.path.join(
+            os.environ.get("HERMES_HOME") or os.environ.get("MENTE_HOME") or os.path.expanduser("~/.mente"),
+            "skills/red-teaming/godmode/scripts/auto_jailbreak.py",
+        )
     )).read())
     
     result = auto_jailbreak()  # Uses current model from config
@@ -26,6 +29,13 @@ try:
 except ImportError:
     OpenAI = None
 
+
+def _resolve_agent_home() -> Path:
+    configured = os.getenv("HERMES_HOME", "").strip() or os.getenv("MENTE_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".mente"
+
 # ═══════════════════════════════════════════════════════════════════
 # Load sibling modules
 # ═══════════════════════════════════════════════════════════════════
@@ -35,7 +45,7 @@ try:
     _SKILL_DIR = Path(__file__).resolve().parent.parent
 except NameError:
     # __file__ not defined when loaded via exec() — search standard paths
-    _SKILL_DIR = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes")) / "skills" / "red-teaming" / "godmode"
+    _SKILL_DIR = _resolve_agent_home() / "skills" / "red-teaming" / "godmode"
 
 _SCRIPTS_DIR = _SKILL_DIR / "scripts"
 _TEMPLATES_DIR = _SKILL_DIR / "templates"
@@ -57,7 +67,7 @@ if _race_path.exists():
 # Hermes config paths
 # ═══════════════════════════════════════════════════════════════════
 
-HERMES_HOME = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes"))
+HERMES_HOME = _resolve_agent_home()
 CONFIG_PATH = HERMES_HOME / "config.yaml"
 PREFILL_PATH = HERMES_HOME / "prefill.json"
 

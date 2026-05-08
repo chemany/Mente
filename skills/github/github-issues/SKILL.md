@@ -22,13 +22,14 @@ Create, search, triage, and manage GitHub issues. Each section shows `gh` first,
 ### Setup
 
 ```bash
+AGENT_HOME="${HERMES_HOME:-${MENTE_HOME:-$HOME/.mente}}"
 if command -v gh &>/dev/null && gh auth status &>/dev/null; then
   AUTH="gh"
 else
   AUTH="git"
   if [ -z "$GITHUB_TOKEN" ]; then
-    if [ -f ~/.hermes/.env ] && grep -q "^GITHUB_TOKEN=" ~/.hermes/.env; then
-      GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" ~/.hermes/.env | head -1 | cut -d= -f2 | tr -d '\n\r')
+    if [ -f "$AGENT_HOME/.env" ] && grep -q "^GITHUB_TOKEN=" "$AGENT_HOME/.env"; then
+      GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$AGENT_HOME/.env" | head -1 | cut -d= -f2 | tr -d '\n\r')
     elif grep -q "github.com" ~/.git-credentials 2>/dev/null; then
       GITHUB_TOKEN=$(grep "github.com" ~/.git-credentials 2>/dev/null | head -1 | sed 's|https://[^:]*:\([^@]*\)@.*|\1|')
     fi

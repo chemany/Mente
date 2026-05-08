@@ -132,7 +132,11 @@ class MemoryRepository(Protocol):
 
 
 def get_default_memory_db_path() -> Path:
-    """Resolve the persistent memory DB path."""
+    """Resolve the persistent memory DB path.
+
+    Mente memories must land in the Mente-owned primary state DB so every
+    outward entrypoint shares the same memory store.
+    """
     override = os.getenv("MENTE_MEMORY_DB_PATH", "").strip()
     if override:
         return Path(override).expanduser()

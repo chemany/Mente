@@ -28,6 +28,8 @@ import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Optional
 
+from hermes_constants import bootstrap_mente_home
+
 
 def run_oneshot(
     prompt: str,
@@ -46,6 +48,8 @@ def run_oneshot(
 
     Returns the exit code.  Caller should sys.exit() with the return.
     """
+    bootstrap_mente_home()
+
     # Silence every stdlib logger for the duration.  AIAgent, tools, and
     # provider adapters all log to stderr through the root logger; file
     # handlers added by setup_logging() keep working (they're attached to
