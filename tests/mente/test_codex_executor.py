@@ -719,6 +719,42 @@ def test_render_execution_prompt_recommends_mente_superpowers_for_project_develo
     assert "verification-before-completion" in prompt
 
 
+def test_render_execution_prompt_prioritizes_explicit_skill_refs():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Draft and publish a WeChat article",
+        user_request="帮我写一篇公众号文案并发布草稿",
+        workspace=".",
+        skill_refs=["media/wechat-publisher", "imagegen"],
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Skill Policy:" in prompt
+    assert "Use the provided skill refs first" in prompt
+    assert "do not do broad workspace exploration before checking them" in prompt.lower()
+
+
+def test_render_execution_prompt_uses_lightweight_skill_fallback_when_no_explicit_refs():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="帮我处理一个任务",
+        workspace=".",
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Skill Policy:" in prompt
+    assert "If no skill refs are provided" in prompt
+    assert "at most one narrow skill check" in prompt
+    assert "Do not scan the full skills tree" in prompt
+
+
 def test_render_execution_prompt_does_not_recommend_mente_superpowers_for_plain_chat():
     request = ExecutionRequest(
         task_id="task_1",

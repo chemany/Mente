@@ -110,6 +110,21 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
     explicit_skill_refs = _normalized_skill_refs(request.skill_refs)
     if explicit_skill_refs:
         lines.append(f"Skills: {', '.join(explicit_skill_refs)}")
+    lines.append("Skill Policy:")
+    if explicit_skill_refs:
+        lines.append(
+            "- Use the provided skill refs first and follow their workflow; do not do broad workspace exploration before checking them."
+        )
+        lines.append(
+            "- Do not rediscover a workflow that is already covered by the provided skill refs."
+        )
+    else:
+        lines.append(
+            "- If no skill refs are provided and a clearly relevant bundled skill likely exists, do at most one narrow skill check before falling back to general exploration."
+        )
+        lines.append(
+            "- Do not scan the full skills tree unless the user explicitly asks for skill discovery."
+        )
     recommended_superpowers = _recommended_mente_superpowers(request, explicit_skill_refs)
     if recommended_superpowers:
         lines.append(f"Mente Superpowers: {', '.join(recommended_superpowers)}")
