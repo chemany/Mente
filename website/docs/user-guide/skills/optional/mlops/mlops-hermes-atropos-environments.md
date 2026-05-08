@@ -1,14 +1,14 @@
 ---
-title: "Hermes Atropos Environments — Build, test, and debug Hermes Agent RL environments for Atropos training"
-sidebar_label: "Hermes Atropos Environments"
-description: "Build, test, and debug Hermes Agent RL environments for Atropos training"
+title: "Mente Atropos Environments — Build, test, and debug Mente RL environments for Atropos training"
+sidebar_label: "Mente Atropos Environments"
+description: "Build, test, and debug Mente RL environments for Atropos training"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
-# Hermes Atropos Environments
+# Mente Atropos Environments
 
-Build, test, and debug Hermes Agent RL environments for Atropos training. Covers the HermesAgentBaseEnv interface, reward functions, agent loop integration, evaluation with tools, wandb logging, and the three CLI modes (serve/process/evaluate). Use when creating, reviewing, or fixing RL environments in the hermes-agent repo.
+Build, test, and debug Mente RL environments for Atropos training. Covers the HermesAgentBaseEnv interface, reward functions, agent loop integration, evaluation with tools, wandb logging, and the three CLI modes (serve/process/evaluate). Use when creating, reviewing, or fixing RL environments in the hermes-agent repo.
 
 ## Skill metadata
 
@@ -17,7 +17,7 @@ Build, test, and debug Hermes Agent RL environments for Atropos training. Covers
 | Source | Optional — install with `hermes skills install official/mlops/hermes-atropos-environments` |
 | Path | `optional-skills/mlops/hermes-atropos-environments` |
 | Version | `1.1.0` |
-| Author | Hermes Agent |
+| Author | Mente |
 | License | MIT |
 | Tags | `atropos`, `rl`, `environments`, `training`, `reinforcement-learning`, `reward-functions` |
 | Related skills | [`axolotl`](/user-guide/skills/bundled/mlops/mlops-training-axolotl), [`fine-tuning-with-trl`](/user-guide/skills/bundled/mlops/mlops-training-trl-fine-tuning), `lm-evaluation-harness` |
@@ -25,10 +25,10 @@ Build, test, and debug Hermes Agent RL environments for Atropos training. Covers
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
-# Hermes Agent Atropos Environments
+# Mente Atropos Environments
 
 Guide for building RL environments in the hermes-agent repo that integrate with the Atropos training framework.
 
@@ -47,7 +47,7 @@ Atropos BaseEnv (atroposlib/envs/base.py)
 ```
 <!-- ascii-guard-ignore-end -->
 
-Hermes environments are special because they run a **multi-turn agent loop with tool calling** — not just single-turn completions. The base env handles the loop; you implement the task and scoring.
+These Mente RL environments are special because they run a **multi-turn agent loop with tool calling** — not just single-turn completions. The base env handles the loop; you implement the task and scoring.
 
 ## File Locations
 

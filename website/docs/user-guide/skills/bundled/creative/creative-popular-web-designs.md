@@ -17,13 +17,13 @@ description: "54 real design systems (Stripe, Linear, Vercel) as HTML/CSS"
 | Source | Bundled (installed by default) |
 | Path | `skills/creative/popular-web-designs` |
 | Version | `1.0.0` |
-| Author | Hermes Agent + Teknium (design systems sourced from VoltAgent/awesome-design-md) |
+| Author | Mente + Teknium (design systems sourced from VoltAgent/awesome-design-md) |
 | License | MIT |
 
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Popular Web Designs

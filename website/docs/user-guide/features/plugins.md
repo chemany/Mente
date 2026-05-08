@@ -2,14 +2,14 @@
 sidebar_position: 11
 sidebar_label: "Plugins"
 title: "Plugins"
-description: "Extend Hermes with custom tools, hooks, and integrations via the plugin system"
+description: "Extend Mente with custom tools, hooks, and integrations via the plugin system"
 ---
 
 # Plugins
 
-Hermes has a plugin system for adding custom tools, hooks, and integrations without modifying core code.
+Mente has a plugin system for adding custom tools, hooks, and integrations without modifying core code.
 
-**→ [Build a Hermes Plugin](/guides/build-a-hermes-plugin)** — step-by-step guide with a complete working example.
+**→ [Build a Mente Plugin](/guides/build-a-hermes-plugin)** — step-by-step guide with a complete working example.
 
 ## Quick overview
 
@@ -23,7 +23,7 @@ Drop a directory into `~/.hermes/plugins/` with a `plugin.yaml` and Python code:
 └── tools.py         # tool handlers (what runs when called)
 ```
 
-Start Hermes — your tools appear alongside built-in tools. The model can call them immediately.
+Start Mente — your tools appear alongside built-in tools. The model can call them immediately.
 
 ### Minimal working example
 

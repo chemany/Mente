@@ -9,6 +9,14 @@ from pathlib import Path
 from kernel.codex.config import load_private_codex_config, load_private_model_settings
 from mente.executors.runtime_home import resolve_runtime_home
 
+MENTE_DEFAULT_BASE_INSTRUCTIONS = (
+    "You are Mente's coding agent. "
+    "Inspect the workspace before changing code, then use the available tools and shell to complete the task end to end. "
+    "Keep edits minimal, correct, and consistent with the existing codebase. "
+    "Do not overwrite user changes you did not make or use destructive git/file operations unless explicitly requested. "
+    "Keep responses concise, action-oriented, and focused on the task result."
+)
+
 
 @dataclass(frozen=True)
 class RuntimeConfig:
@@ -64,7 +72,7 @@ def _apply_explicit_codex_runtime_settings(
     merged: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, str]]:
     if not merged:
-        return merged, {}
+        return {"base_instructions": MENTE_DEFAULT_BASE_INSTRUCTIONS}, {}
 
     resolved = dict(merged)
     subprocess_env: dict[str, str] = {}
@@ -92,10 +100,10 @@ def _apply_explicit_codex_runtime_settings(
         api_key = api_key.strip()
 
     if _has_explicit_codex_provider_config(resolved):
-        return resolved, subprocess_env
+        return _ensure_default_base_instructions(resolved), subprocess_env
 
     if not any((base_url, api_key)):
-        return resolved, subprocess_env
+        return _ensure_default_base_instructions(resolved), subprocess_env
 
     model_providers = resolved.get("model_providers")
     if not isinstance(model_providers, dict):
@@ -121,7 +129,7 @@ def _apply_explicit_codex_runtime_settings(
     if base_url:
         subprocess_env["OPENAI_BASE_URL"] = base_url
 
-    return resolved, subprocess_env
+    return _ensure_default_base_instructions(resolved), subprocess_env
 
 
 def _apply_mente_model_runtime_fallback(
@@ -139,12 +147,12 @@ def _apply_mente_model_runtime_fallback(
         resolved["model"] = model_name
 
     if _has_explicit_codex_provider_config(resolved):
-        return resolved, subprocess_env
+        return _ensure_default_base_instructions(resolved), subprocess_env
 
     base_url = mente_model_settings.get("base_url", "")
     api_key = mente_model_settings.get("api_key", "")
     if not base_url and not api_key:
-        return resolved, subprocess_env
+        return _ensure_default_base_instructions(resolved), subprocess_env
 
     model_providers = resolved.get("model_providers")
     if not isinstance(model_providers, dict):
@@ -170,11 +178,20 @@ def _apply_mente_model_runtime_fallback(
     if base_url:
         subprocess_env["OPENAI_BASE_URL"] = base_url
 
-    return resolved, subprocess_env
+    return _ensure_default_base_instructions(resolved), subprocess_env
 
 
 def _has_explicit_codex_provider_config(config: dict[str, object]) -> bool:
     return any(key in config for key in ("model_provider", "openai_base_url", "model_providers"))
+
+
+def _ensure_default_base_instructions(config: dict[str, object]) -> dict[str, object]:
+    resolved = dict(config)
+    existing = resolved.get("base_instructions")
+    if isinstance(existing, str) and existing.strip():
+        return resolved
+    resolved["base_instructions"] = MENTE_DEFAULT_BASE_INSTRUCTIONS
+    return resolved
 
 
 def _flatten_config_overrides(config: dict[str, object]) -> list[str]:

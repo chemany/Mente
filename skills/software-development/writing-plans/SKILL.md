@@ -2,7 +2,7 @@
 name: writing-plans
 description: "Write implementation plans: bite-sized tasks, paths, code."
 version: 1.1.0
-author: Hermes Agent (adapted from obra/superpowers)
+author: Mente Agent
 license: MIT
 metadata:
   hermes:
@@ -70,7 +70,7 @@ Every plan MUST start with:
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.
+> **For Mente:** Use subagent-driven-development skill to implement this plan task-by-task.
 
 **Goal:** [One sentence describing what this builds]
 

@@ -342,6 +342,12 @@ def render_skill_page(
     title = f"{name}"
     # Heuristic nicer title from name
     display_name = name.replace("-", " ").replace("_", " ").title()
+    display_name_overrides = {
+        "hermes-agent": "Mente",
+        "hermes-agent-skill-authoring": "Mente Skill Authoring",
+        "hermes-atropos-environments": "Mente Atropos Environments",
+    }
+    display_name = display_name_overrides.get(name, display_name)
 
     hermes_meta = (fm.get("metadata") or {}).get("hermes") or {}
     tags = hermes_meta.get("tags") or []
@@ -444,7 +450,7 @@ def render_skill_page(
         "## Reference: full SKILL.md\n"
         "\n"
         ":::info\n"
-        "The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.\n"
+        "The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.\n"
         ":::\n"
         "\n"
         f"{body_clean}\n"

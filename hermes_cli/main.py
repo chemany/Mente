@@ -91,6 +91,8 @@ from hermes_constants import bootstrap_mente_home
 
 bootstrap_mente_home()
 
+from hermes_cli.runtime_override import apply_source_checkout_runtime_override
+
 
 # ---------------------------------------------------------------------------
 # Profile override — MUST happen before any hermes module import.
@@ -1122,6 +1124,11 @@ def _launch_tui(
     env.setdefault("HERMES_PYTHON", sys.executable)
     env.setdefault("HERMES_CWD", os.getcwd())
     env.setdefault("NODE_ENV", "development" if tui_dev else "production")
+    env.setdefault("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    env.setdefault(
+        "MENTE_SESSIONFUL_EXECUTION_SOURCES",
+        "api_server,gateway,tui,oneshot",
+    )
     if model:
         env["HERMES_MODEL"] = model
         env["HERMES_INFERENCE_MODEL"] = model
@@ -1161,9 +1168,28 @@ def _launch_tui(
     sys.exit(code)
 
 
+def _should_use_tui(args) -> bool:
+    """Decide whether `mente` interactive chat should launch the TUI.
+
+    Policy:
+    - Explicit `--tui` or `HERMES_TUI=1` always enables TUI.
+    - One-shot/non-interactive `-q/--query` keeps the classic path unless
+      TUI was explicitly requested.
+    - Bare interactive terminal sessions default to TUI so the standard
+      `mente` entrypoint stays on the Mente/CodexExecutor chain.
+    """
+    if getattr(args, "tui", False) or os.environ.get("HERMES_TUI") == "1":
+        return True
+
+    if getattr(args, "query", None):
+        return False
+
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def cmd_chat(args):
     """Run interactive chat CLI."""
-    use_tui = getattr(args, "tui", False) or os.environ.get("HERMES_TUI") == "1"
+    use_tui = _should_use_tui(args)
 
     # Resolve --continue into --resume with the latest session or by name
     continue_val = getattr(args, "continue_last", None)
@@ -10247,6 +10273,8 @@ Examples:
     else:
         subparsers.required = False
         args = parser.parse_args(_processed_argv)
+
+    apply_source_checkout_runtime_override(PROJECT_ROOT)
 
     # Handle --version flag
     if args.version:

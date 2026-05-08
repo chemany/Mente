@@ -1,6 +1,6 @@
 # NPM China Bootstrap Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Add a `--china` install mode and reduce GitHub dependency by letting the npm bootstrapper install from a bundled local runtime source when available.
 

@@ -1,4 +1,5 @@
-from hermes_cli.oneshot import run_oneshot
+from hermes_cli.oneshot import _run_mente, run_oneshot
+from mente.task_core.models import ExecutionMode, SessionMode
 
 
 def test_run_oneshot_routes_through_mente(monkeypatch, capsys):
@@ -16,3 +17,27 @@ def test_run_oneshot_routes_through_mente(monkeypatch, capsys):
     assert rc == 0
     assert bootstrap_calls == [True]
     assert captured.out == "via mente\n"
+
+
+def test_run_mente_requests_sessionful_start(monkeypatch):
+    captured = {}
+
+    class _FakeOrchestrator:
+        def __init__(self, **kwargs):
+            captured["orchestrator_kwargs"] = kwargs
+
+        def run(self, task):
+            captured["task"] = task
+            return type("Result", (), {"summary": "via mente"})()
+
+    monkeypatch.setattr("hermes_cli.oneshot.Orchestrator", _FakeOrchestrator, raising=False)
+    monkeypatch.setattr("mente.orchestrator.service.Orchestrator", _FakeOrchestrator)
+
+    result = _run_mente("inspect repo", model="gpt-5.4", provider="openai")
+
+    assert result == "via mente"
+    task = captured["task"]
+    assert task.metadata["source"] == "oneshot"
+    assert task.execution_mode is ExecutionMode.SESSIONFUL
+    assert task.execution_session is not None
+    assert task.execution_session.mode is SessionMode.START

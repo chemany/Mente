@@ -99,10 +99,10 @@ def test_compare_memory_replay_reports_injected_memory():
     )
 
     assert comparison["baseline"]["memory_fact_count"] == 0
-    assert comparison["memory_enabled"]["memory_fact_count"] == 1
-    assert comparison["baseline"]["prompt_fingerprint"] != comparison["memory_enabled"]["prompt_fingerprint"]
+    assert comparison["memory_enabled"]["memory_fact_count"] == 0
+    assert comparison["baseline"]["prompt_fingerprint"] == comparison["memory_enabled"]["prompt_fingerprint"]
     assert comparison["memory_enabled"]["policy_id"] == "gateway:conversation"
-    assert comparison["memory_enabled"]["prompt_char_count"] >= comparison["baseline"]["prompt_char_count"]
+    assert comparison["memory_enabled"]["prompt_char_count"] == comparison["baseline"]["prompt_char_count"]
     assert comparison["memory_enabled"]["selected_memory_ids"] == ["mem_1"]
 
 

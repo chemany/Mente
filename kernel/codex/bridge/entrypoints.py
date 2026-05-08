@@ -184,6 +184,7 @@ def invoke_vendored_front_door(
                 cwd=cwd,
                 check=False,
                 env=env,
+                stdin=subprocess.DEVNULL,
             )
             cancelled = False
         else:
@@ -233,6 +234,7 @@ def _run_streaming_subprocess(
         cwd=cwd,
         env=env,
         bufsize=1,
+        stdin=subprocess.DEVNULL,
     )
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []

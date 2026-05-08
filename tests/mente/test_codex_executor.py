@@ -15,6 +15,7 @@ from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
 from mente.executors.runtime_config import RuntimeConfig
 from mente.executors.codex import CodexExecutor
+from mente.feature_flags import sessionful_execution_sources
 from mente.memory.models import MemoryRecord
 from mente.memory.repository import InMemoryMemoryRepository
 from mente.task_core.models import (
@@ -102,7 +103,10 @@ def test_codex_executor_sessionful_opt_in_is_disabled_by_default(monkeypatch, tm
         workspace=str(tmp_path),
         execution_mode=ExecutionMode.SESSIONFUL,
         execution_session=ExecutionSession(mode=SessionMode.START),
-        tool_policy={"session_capable": True},
+        tool_policy={
+            "session_capable": True,
+            "bridge_tools": ["mente_memory_query"],
+        },
         metadata={"source": "api_server"},
     )
 
@@ -209,6 +213,17 @@ def test_codex_executor_allows_gateway_sessionful_resume_when_source_is_allowlis
     assert captured["session"].session_id == "thread-456"
     assert result.metadata["execution_session"]["continuity_status"] == "resumed"
     assert result.metadata["execution_session"]["continuity_id"] == "thread-456"
+
+
+def test_sessionful_execution_sources_default_to_all_sessionful_entrypoints(monkeypatch):
+    monkeypatch.delenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", raising=False)
+
+    assert sessionful_execution_sources() == {
+        "api_server",
+        "gateway",
+        "tui",
+        "oneshot",
+    }
 
 
 def test_codex_executor_falls_back_to_stateless_when_resume_fails(monkeypatch, tmp_path):
@@ -455,7 +470,10 @@ def test_codex_executor_marks_missing_thread_id_when_session_start_returns_none(
         workspace=str(tmp_path),
         execution_mode=ExecutionMode.SESSIONFUL,
         execution_session=ExecutionSession(mode=SessionMode.START),
-        tool_policy={"session_capable": True},
+        tool_policy={
+            "session_capable": True,
+            "bridge_tools": ["mente_memory_query"],
+        },
         metadata={"source": "api_server"},
     )
 
@@ -599,15 +617,18 @@ def test_render_execution_prompt_and_fingerprint_are_stable():
     second_request = request.model_copy()
     second_prompt = render_execution_prompt(second_request)
 
-    assert "Memory Facts:" in prompt
-    assert "assistant_summary" in prompt
-    assert "memory_candidates" in prompt
+    assert "Task:" in prompt
+    assert "Context:" in prompt
+    assert "Return JSON matching the required schema." in prompt
+    assert "Do not invent prior preferences" in prompt
     assert fingerprint == build_prompt_fingerprint(prompt)
     assert prompt == second_prompt
     assert fingerprint == build_prompt_fingerprint(second_prompt)
     assert len(fingerprint) == 64
-    assert prompt.index("Memory Facts:") < prompt.index("Response Contract:")
-    assert prompt.index("Response Contract:") < prompt.index("User Request:")
+    assert "Task Type:" not in prompt
+    assert "Memory Facts:" not in prompt
+    assert "Response Contract:" not in prompt
+    assert prompt.index("Context:") < prompt.index("User Request:")
 
 
 def test_render_execution_prompt_forbids_fabricated_preferences_without_memory():
@@ -622,9 +643,60 @@ def test_render_execution_prompt_forbids_fabricated_preferences_without_memory()
 
     prompt = render_execution_prompt(request)
 
-    assert "Memory Facts:" not in prompt
-    assert "If no memory facts are provided" in prompt
-    assert "do not fabricate prior user preferences" in prompt
+    assert "Context:" not in prompt
+    assert "If no memory facts are provided" not in prompt
+    assert "Do not invent prior preferences" in prompt
+
+
+def test_render_execution_prompt_advertises_on_demand_memory_query_when_available():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply",
+        workspace=".",
+        tool_policy={"bridge_tools": ["mente_memory_query", "mente_memory_save"]},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "mente_memory_query" in prompt
+    assert "Use mente_memory_query only when prior user or project context is needed." in prompt
+
+
+def test_render_execution_prompt_recommends_mente_superpowers_for_project_development():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Implement project feature",
+        user_request="请帮我在这个项目里新增登录功能并完成测试",
+        workspace=".",
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Mente Superpowers:" in prompt
+    assert "brainstorming" in prompt
+    assert "writing-plans" in prompt
+    assert "test-driven-development" in prompt
+    assert "verification-before-completion" in prompt
+
+
+def test_render_execution_prompt_does_not_recommend_mente_superpowers_for_plain_chat():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="你好",
+        workspace=".",
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Mente Superpowers:" not in prompt
 
 
 def test_codex_executor_uses_dangerous_bypass_for_full_access():
@@ -773,14 +845,18 @@ def test_codex_executor_keeps_memory_injection_mente_owned_in_sessionful_mode(
         workspace=str(tmp_path),
         execution_mode=ExecutionMode.SESSIONFUL,
         execution_session=ExecutionSession(mode=SessionMode.START),
-        tool_policy={"session_capable": True},
+        tool_policy={
+            "session_capable": True,
+            "bridge_tools": ["mente_memory_query"],
+        },
         metadata={"source": "api_server"},
     )
 
     result = executor.execute(request)
 
     assert result.status == "success"
-    assert "Memory: User prefers concise replies." in captured["payload"].prompt
+    assert "Memory: User prefers concise replies." not in captured["payload"].prompt
+    assert "mente_memory_query" in captured["payload"].prompt
     assert captured["session"].mode is KernelSessionMode.SESSION
 
 
@@ -824,6 +900,43 @@ def test_codex_executor_exposes_mente_user_skills_inside_private_runtime(monkeyp
     assert result.status == "success"
     assert captured["linked_skill_exists"] is True
     assert "wechat-publisher" in captured["linked_skill_contents"]
+
+
+def test_codex_executor_exposes_bundled_mente_superpowers_inside_private_runtime(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            bundled_skill = (
+                runtime_config.runtime_home
+                / ".agents"
+                / "skills"
+                / "software-development"
+                / "brainstorming"
+                / "SKILL.md"
+            )
+            captured["bundled_skill_exists"] = bundled_skill.exists()
+            captured["bundled_skill_contents"] = bundled_skill.read_text(encoding="utf-8")
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Build feature",
+        user_request="Implement a feature in this project",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert captured["bundled_skill_exists"] is True
+    assert "brainstorming" in captured["bundled_skill_contents"]
 
 
 def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypatch, tmp_path):
@@ -1084,12 +1197,15 @@ def test_codex_executor_emits_runtime_preparation_events(monkeypatch, tmp_path):
     assert result.status == "success"
     assert [event_type for event_type, _payload in events] == [
         "executor.memory_context_resolved",
+        "executor.prompt_prepared",
         "executor.runtime_config_resolved",
         "executor.auth_prepared",
     ]
     assert events[0][1]["injected_count"] == 0
-    assert events[1][1]["runtime_home"] == str(runtime_config.runtime_home)
-    assert events[2][1]["auth_source"] == "hermes-auth-store"
+    assert events[1][1]["memory_fact_count"] == 0
+    assert isinstance(events[1][1]["prompt_fingerprint"], str)
+    assert events[2][1]["runtime_home"] == str(runtime_config.runtime_home)
+    assert events[3][1]["auth_source"] == "hermes-auth-store"
     assert (runtime_config.runtime_home / "auth.json").exists()
 
 

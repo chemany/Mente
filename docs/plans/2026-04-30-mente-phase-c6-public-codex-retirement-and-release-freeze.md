@@ -1,6 +1,6 @@
 # Phase C6: Public Codex Retirement And Release Freeze Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Retire the ambient public `codex` binary from Mente’s release/main path and make every Mente release carry an explicit, frozen vendored Codex runtime + upgrade/install contract.
 

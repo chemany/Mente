@@ -262,7 +262,7 @@ def test_build_orchestrator_uses_kernel_adapter_factory(monkeypatch):
     monkeypatch.setattr(
         mente_bridge,
         "_build_kernel_adapter",
-        lambda workspace, runtime_config=None, memory_repository=None, event_callback=None: fake_adapter,
+        lambda workspace, runtime_config=None, memory_repository=None, event_callback=None, cancel_event=None: fake_adapter,
     )
 
     mente_bridge._build_orchestrator(".", repository=object())
@@ -735,7 +735,8 @@ def test_second_run_receives_first_run_memory(monkeypatch, tmp_path):
     )
 
     assert len(seen_requests) == 2
-    assert "Memory: User prefers concise replies." in seen_requests[1].memory_facts
+    assert "Memory: User prefers concise replies." not in seen_requests[1].memory_facts
+    assert "mente_memory_query" in seen_requests[1].tool_policy["bridge_tools"]
 
 
 def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_path):
@@ -798,7 +799,7 @@ def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_pat
         "mente_gateway_gatewayfirst:memory:0"
     ]
     assert second_result.metadata["memory_policy"]["policy_id"] == "gateway:conversation"
-    assert second_result.metadata["memory_context"]["injected_count"] == 1
+    assert second_result.metadata["memory_context"]["injected_count"] == 0
     assert second_result.metadata["memory_audit"]["policy_id"] == "gateway:conversation"
     assert second_result.metadata["memory_audit"]["selected"][0]["memory_id"] == (
         "mente_gateway_gatewayfirst:memory:0"

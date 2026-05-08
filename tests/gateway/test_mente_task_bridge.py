@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 from unittest.mock import AsyncMock, MagicMock
 
@@ -474,6 +475,100 @@ async def test_run_agent_mente_suppresses_static_progress_protocol_messages_by_d
     assert result["final_response"] == "done"
     assert adapter.sent == []
     assert adapter.edits == []
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_logs_prompt_and_cache_diagnostics_even_when_progress_disabled(
+    monkeypatch, caplog
+):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setenv("HERMES_TOOL_PROGRESS_MODE", "off")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _direct_to_thread)
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        event_callback(
+            "executor.prompt_prepared",
+            {
+                "task_id": "task-1",
+                "session_id": "session-1",
+                "prompt_char_count": 812,
+                "memory_fact_count": 2,
+                "memory_char_count": 120,
+                "prompt_fingerprint": "abc123",
+            },
+        )
+        event_callback(
+            "kernel.codex.turn.completed",
+            {
+                "usage": {
+                    "input_tokens": 1800,
+                    "output_tokens": 30,
+                    "cached_input_tokens": 1536,
+                    "cache_write_tokens": 0,
+                }
+            },
+        )
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    with caplog.at_level(logging.INFO, logger="gateway.run"):
+        result = await runner._run_agent(
+            message="测试缓存命中情况",
+            context_prompt="session context",
+            history=[],
+            source=source,
+            session_id="session-1",
+            session_key="agent:main:feishu:dm:oc_test",
+            run_generation=10,
+        )
+
+    assert result["final_response"] == "done"
+    assert adapter.sent == []
+    assert adapter.edits == []
+    assert any(
+        "prompt_fingerprint=abc123" in record.message
+        and "memory_fact_count=2" in record.message
+        for record in caplog.records
+    )
+    assert any(
+        "cached_input_tokens=1536" in record.message
+        and "session_id=session-1" in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

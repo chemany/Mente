@@ -1,12 +1,12 @@
 ---
-title: "Hermes Agent Skill Authoring — Author in-repo SKILL"
-sidebar_label: "Hermes Agent Skill Authoring"
+title: "Mente Skill Authoring — Author in-repo SKILL"
+sidebar_label: "Mente Skill Authoring"
 description: "Author in-repo SKILL"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
-# Hermes Agent Skill Authoring
+# Mente Skill Authoring
 
 Author in-repo SKILL.md: frontmatter, validator, structure.
 
@@ -17,7 +17,7 @@ Author in-repo SKILL.md: frontmatter, validator, structure.
 | Source | Bundled (installed by default) |
 | Path | `skills/software-development/hermes-agent-skill-authoring` |
 | Version | `1.0.0` |
-| Author | Hermes Agent |
+| Author | Mente |
 | License | MIT |
 | Tags | `skills`, `authoring`, `hermes-agent`, `conventions`, `skill-md` |
 | Related skills | [`writing-plans`](/user-guide/skills/bundled/software-development/software-development-writing-plans), [`requesting-code-review`](/user-guide/skills/bundled/software-development/software-development-requesting-code-review) |
@@ -25,10 +25,10 @@ Author in-repo SKILL.md: frontmatter, validator, structure.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
-# Authoring Hermes-Agent Skills (in-repo)
+# Authoring Mente Skills (in-repo)
 
 ## Overview
 
@@ -61,7 +61,7 @@ Peer-matched shape used by every skill under `skills/software-development/`:
 name: my-skill-name               # lowercase, hyphens, ≤64 chars (MAX_NAME_LENGTH)
 description: Use when <trigger>. <one-line behavior>.
 version: 1.0.0
-author: Hermes Agent
+author: Mente
 license: MIT
 metadata:
   hermes:
@@ -95,7 +95,7 @@ One or two paragraphs: what and why.
 ## <Topic sections specific to the skill>
 - Quick-reference tables are common
 - Code blocks with exact commands
-- Hermes-specific recipes (tests via scripts/run_tests.sh, ui-tui paths, etc.)
+- Mente-specific recipes (tests via scripts/run_tests.sh, ui-tui paths, etc.)
 
 ## Common Pitfalls
 Numbered list of mistakes and their fixes.

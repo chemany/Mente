@@ -25,7 +25,7 @@ If a skill is missing from this list but present in the repo, the catalog is reg
 |-------|-------------|------|
 | [`claude-code`](/user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-claude-code) | Delegate coding to Claude Code CLI (features, PRs). | `autonomous-ai-agents/claude-code` |
 | [`codex`](/user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-codex) | Delegate coding to OpenAI Codex CLI (features, PRs). | `autonomous-ai-agents/codex` |
-| [`hermes-agent`](/user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-hermes-agent) | Configure, extend, or contribute to Hermes Agent. | `autonomous-ai-agents/hermes-agent` |
+| [`hermes-agent`](/user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-hermes-agent) | Configure, extend, or contribute to Mente. | `autonomous-ai-agents/hermes-agent` |
 | [`opencode`](/user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-opencode) | Delegate coding to OpenCode CLI (features, PR review). | `autonomous-ai-agents/opencode` |
 
 ## creative
@@ -174,7 +174,10 @@ If a skill is missing from this list but present in the repo, the catalog is reg
 
 | Skill | Description | Path |
 |-------|-------------|------|
+| [`brainstorming`](/user-guide/skills/bundled/software-development/software-development-brainstorming) | Mente Superpower: clarify project intent and design before implementation. | `software-development/brainstorming` |
 | [`debugging-hermes-tui-commands`](/user-guide/skills/bundled/software-development/software-development-debugging-hermes-tui-commands) | Debug Hermes TUI slash commands: Python, gateway, Ink UI. | `software-development/debugging-hermes-tui-commands` |
+| [`executing-plans`](/user-guide/skills/bundled/software-development/software-development-executing-plans) | Mente Superpower: execute an approved implementation plan in verified batches. | `software-development/executing-plans` |
+| [`finishing-a-development-branch`](/user-guide/skills/bundled/software-development/software-development-finishing-a-development-branch) | Mente Superpower: close out a development branch after tests pass. | `software-development/finishing-a-development-branch` |
 | [`hermes-agent-skill-authoring`](/user-guide/skills/bundled/software-development/software-development-hermes-agent-skill-authoring) | Author in-repo SKILL.md: frontmatter, validator, structure. | `software-development/hermes-agent-skill-authoring` |
 | [`mente-config-admin`](/user-guide/skills/bundled/software-development/software-development-mente-config-admin) | Use when the user asks Mente to change API keys, OAuth/provider auth, config.yaml or .env settings, gateway/platform credentials, or restart/reload services after configuration changes. | `software-development/mente-config-admin` |
 | [`node-inspect-debugger`](/user-guide/skills/bundled/software-development/software-development-node-inspect-debugger) | Debug Node.js via --inspect + Chrome DevTools Protocol CLI. | `software-development/node-inspect-debugger` |
@@ -184,6 +187,8 @@ If a skill is missing from this list but present in the repo, the catalog is reg
 | [`subagent-driven-development`](/user-guide/skills/bundled/software-development/software-development-subagent-driven-development) | Execute plans via delegate_task subagents (2-stage review). | `software-development/subagent-driven-development` |
 | [`systematic-debugging`](/user-guide/skills/bundled/software-development/software-development-systematic-debugging) | 4-phase root cause debugging: understand bugs before fixing. | `software-development/systematic-debugging` |
 | [`test-driven-development`](/user-guide/skills/bundled/software-development/software-development-test-driven-development) | TDD: enforce RED-GREEN-REFACTOR, tests before code. | `software-development/test-driven-development` |
+| [`using-git-worktrees`](/user-guide/skills/bundled/software-development/software-development-using-git-worktrees) | Mente Superpower: create an isolated git worktree before substantial project work. | `software-development/using-git-worktrees` |
+| [`verification-before-completion`](/user-guide/skills/bundled/software-development/software-development-verification-before-completion) | Mente Superpower: verify before claiming a task is done. | `software-development/verification-before-completion` |
 | [`writing-plans`](/user-guide/skills/bundled/software-development/software-development-writing-plans) | Write implementation plans: bite-sized tasks, paths, code. | `software-development/writing-plans` |
 
 ## yuanbao

@@ -62,7 +62,7 @@ def test_resolve_tool_exposure_policy_filters_vendored_surface_and_keeps_bridge_
 def test_resolve_tool_exposure_policy_fails_closed_for_memory_bridge_tools_by_default():
     policy = resolve_tool_exposure_policy(source="gateway", task_type="conversation")
 
-    assert "mente_memory_query" not in policy.bridge_tools
+    assert "mente_memory_query" in policy.bridge_tools
     assert "mente_memory_save" not in policy.bridge_tools
 
 

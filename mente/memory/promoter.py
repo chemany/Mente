@@ -32,7 +32,7 @@ class MemoryPromoter:
         """Extract deterministic memory records and audit decisions."""
         source = str(task.metadata.get("source") or "")
         is_conversation_session_source = (
-            task.task_type == "conversation" and source in {"gateway", "api_server"}
+            task.task_type == "conversation" and source in {"gateway", "api_server", "tui"}
         )
         scope = "session" if is_conversation_session_source else "task_type"
         policy = self.memory_policy_resolver.resolve(task)

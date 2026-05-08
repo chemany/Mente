@@ -1,6 +1,6 @@
 # Gateway Runtime Continuity Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Bind each gateway `session_id` to a reusable Codex runtime `continuity_id` (`thread_id`), use runtime resume as the primary path for follow-up user turns, and preserve transcript replay as a deterministic fallback when continuity is missing or invalid.
 
@@ -616,4 +616,3 @@ git commit -m "feat: add gateway runtime continuity with transcript fallback"
 - Do not delete transcript replay support; narrow it to seeded-start and stateless-fallback paths.
 - Keep continuity binding keyed by `session_id`; this is what makes `switch_session()` naturally restore prior runtime continuity.
 - Treat `continuity_status == "fallback_stateless"` as a first-class operational signal, not just a debug field.
-

@@ -2,7 +2,7 @@
 name: gif-search
 description: "Search/download GIFs from Tenor via curl + jq."
 version: 1.1.0
-author: Hermes Agent
+author: Mente
 license: MIT
 prerequisites:
   env_vars: [TENOR_API_KEY]

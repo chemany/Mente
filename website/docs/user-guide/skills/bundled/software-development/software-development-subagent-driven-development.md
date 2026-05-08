@@ -17,7 +17,7 @@ Execute plans via delegate_task subagents (2-stage review).
 | Source | Bundled (installed by default) |
 | Path | `skills/software-development/subagent-driven-development` |
 | Version | `1.1.0` |
-| Author | Hermes Agent (adapted from obra/superpowers) |
+| Author | Mente Agent |
 | License | MIT |
 | Tags | `delegation`, `subagent`, `implementation`, `workflow`, `parallel` |
 | Related skills | [`writing-plans`](/user-guide/skills/bundled/software-development/software-development-writing-plans), [`requesting-code-review`](/user-guide/skills/bundled/software-development/software-development-requesting-code-review), [`test-driven-development`](/user-guide/skills/bundled/software-development/software-development-test-driven-development) |
@@ -25,7 +25,7 @@ Execute plans via delegate_task subagents (2-stage review).
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Subagent-Driven Development

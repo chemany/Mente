@@ -6,7 +6,7 @@ description: "Building RL training environments, running evaluation benchmarks, 
 
 # Environments, Benchmarks & Data Generation
 
-Hermes Agent includes a full environment framework that connects its tool-calling capabilities to the [Atropos](https://github.com/NousResearch/atropos) RL training framework. This enables three workflows:
+Mente includes a full environment framework that connects its tool-calling capabilities to the [Atropos](https://github.com/NousResearch/atropos) RL training framework. This enables three workflows:
 
 1. **RL Training** — Train language models on multi-turn agentic tasks with GRPO
 2. **Benchmarks** — Evaluate models on standardised agentic benchmarks

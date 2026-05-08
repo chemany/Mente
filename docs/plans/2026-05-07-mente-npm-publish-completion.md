@@ -1,6 +1,6 @@
 # Mente NPM Publish Completion Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Finish the npm publish chain so `mente-agent` can be safely released from GitHub with version/tag validation and a minimal release runbook.
 

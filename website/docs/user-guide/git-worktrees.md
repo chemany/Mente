@@ -7,7 +7,7 @@ description: "Run multiple Hermes agents safely on the same repository using git
 
 # Git Worktrees
 
-Hermes Agent is often used on large, long‑lived repositories. When you want to:
+Mente is often used on large, long‑lived repositories. When you want to:
 
 - Run **multiple agents in parallel** on the same project, or
 - Keep experimental refactors isolated from your main branch,
@@ -171,4 +171,3 @@ This combination gives you:
 - Strong guarantees that different agents and experiments do not step on each other.
 - Fast iteration cycles with easy recovery from bad edits.
 - Clean, reviewable pull requests.
-

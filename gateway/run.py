@@ -195,6 +195,12 @@ def _record_gateway_runtime_continuity_result(
     if not isinstance(execution_session_payload, dict):
         return
 
+    _log_gateway_runtime_continuity_diagnostics(
+        session_id=session_id,
+        task_id=task_id,
+        execution_session_payload=execution_session_payload,
+    )
+
     continuity_status = str(execution_session_payload.get("continuity_status") or "").strip().lower()
     continuity_id = str(execution_session_payload.get("continuity_id") or "").strip()
     mode = str(execution_session_payload.get("mode") or "").strip().lower() or None
@@ -841,6 +847,63 @@ _MENTE_GATEWAY_PROGRESS_PROTOCOL: dict[str, tuple[int, str]] = {
     "kernel.bridge_completed": (7, "📨 Mente runtime 已返回"),
     "__gateway.completed__": (8, "✅ 执行完成，正在整理结果"),
 }
+
+
+def _log_mente_gateway_execution_diagnostic(
+    *,
+    session_id: str,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Write stable per-turn Mente diagnostics into gateway logs."""
+    payload = payload or {}
+    normalized_type = str(event_type or "")
+    if normalized_type == "executor.prompt_prepared":
+        logger.info(
+            "Mente prompt diagnostics: session_id=%s task_id=%s prompt_fingerprint=%s "
+            "memory_fact_count=%s prompt_char_count=%s memory_char_count=%s",
+            session_id,
+            payload.get("task_id"),
+            payload.get("prompt_fingerprint"),
+            payload.get("memory_fact_count"),
+            payload.get("prompt_char_count"),
+            payload.get("memory_char_count"),
+        )
+        return
+    if normalized_type != "kernel.codex.turn.completed":
+        return
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return
+    logger.info(
+        "Mente usage diagnostics: session_id=%s cached_input_tokens=%s input_tokens=%s "
+        "output_tokens=%s cache_write_tokens=%s",
+        session_id,
+        usage.get("cached_input_tokens"),
+        usage.get("input_tokens"),
+        usage.get("output_tokens"),
+        usage.get("cache_write_tokens"),
+    )
+
+
+def _log_gateway_runtime_continuity_diagnostics(
+    *,
+    session_id: str,
+    task_id: str | None,
+    execution_session_payload: dict[str, Any],
+) -> None:
+    """Write one continuity outcome line per gateway turn."""
+    logger.info(
+        "Mente continuity diagnostics: session_id=%s task_id=%s continuity_status=%s "
+        "continuity_id=%s requested_mode=%s mode=%s fallback_reason=%s",
+        session_id,
+        task_id,
+        execution_session_payload.get("continuity_status"),
+        execution_session_payload.get("continuity_id"),
+        execution_session_payload.get("requested_mode"),
+        execution_session_payload.get("mode"),
+        execution_session_payload.get("fallback_reason"),
+    )
 
 
 def _resolve_mente_gateway_progress_step(
@@ -10334,6 +10397,11 @@ class GatewayRunner:
             _progress_metadata = {"thread_id": _progress_thread_id} if _progress_thread_id else None
 
             def _mente_event_callback(event_type: str, payload: dict[str, Any]) -> None:
+                _log_mente_gateway_execution_diagnostic(
+                    session_id=session_id,
+                    event_type=event_type,
+                    payload=payload,
+                )
                 if not progress_queue or not _run_still_current():
                     return
                 step = _resolve_mente_gateway_progress_step(event_type, payload)
@@ -10369,7 +10437,7 @@ class GatewayRunner:
                     execution_session=continuity_plan["execution_session"],
                     fallback_history_fact=continuity_plan["fallback_history_fact"],
                     replay_history_in_memory_facts=continuity_plan["replay_history_in_memory_facts"],
-                    event_callback=_mente_event_callback if progress_queue is not None else None,
+                    event_callback=_mente_event_callback,
                 )
                 if self.session_store is not None and hasattr(self.session_store, "bind_runtime_continuity"):
                     _record_gateway_runtime_continuity_result(

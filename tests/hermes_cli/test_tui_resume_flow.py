@@ -9,11 +9,25 @@ import pytest
 def _args(**overrides):
     base = {
         "continue_last": None,
+        "image": None,
+        "ignore_rules": False,
+        "ignore_user_config": False,
         "model": None,
+        "max_turns": None,
+        "pass_session_id": False,
         "provider": None,
+        "query": None,
         "resume": None,
+        "quiet": False,
+        "skills": None,
+        "source": None,
+        "toolsets": None,
         "tui": True,
         "tui_dev": False,
+        "verbose": False,
+        "worktree": False,
+        "yolo": False,
+        "checkpoints": False,
     }
     base.update(overrides)
     return Namespace(**base)
@@ -124,6 +138,39 @@ def test_cmd_chat_tui_passes_model_and_provider(monkeypatch, main_mod):
     }
 
 
+def test_cmd_chat_defaults_to_tui_for_interactive_terminal(monkeypatch, main_mod):
+    captured = {}
+
+    def fake_launch(resume_session_id=None, tui_dev=False, model=None, provider=None):
+        captured["launched"] = True
+        raise SystemExit(0)
+
+    monkeypatch.setattr(main_mod, "_launch_tui", fake_launch)
+    monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(main_mod.sys.stdout, "isatty", lambda: True)
+
+    with pytest.raises(SystemExit):
+        main_mod.cmd_chat(_args(tui=False))
+
+    assert captured == {"launched": True}
+
+
+def test_cmd_chat_query_keeps_classic_path_without_explicit_tui(monkeypatch, main_mod):
+    captured = {}
+
+    def fake_cli_main(**kwargs):
+        captured["kwargs"] = kwargs
+
+    fake_cli_module = types.SimpleNamespace(main=fake_cli_main)
+    monkeypatch.setitem(sys.modules, "cli", fake_cli_module)
+    monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(main_mod.sys.stdout, "isatty", lambda: True)
+
+    main_mod.cmd_chat(_args(tui=False, query="hello"))
+
+    assert captured["kwargs"]["query"] == "hello"
+
+
 def test_launch_tui_exports_model_and_provider(monkeypatch, main_mod):
     captured = {}
     active_path_during_call = None
@@ -157,6 +204,33 @@ def test_launch_tui_exports_model_and_provider(monkeypatch, main_mod):
     assert active_path_during_call == active_path
     assert not active_path.exists()
     assert env["NODE_ENV"] == "production"
+    assert env["MENTE_SESSIONFUL_EXECUTION_ENABLED"] == "1"
+    assert env["MENTE_SESSIONFUL_EXECUTION_SOURCES"] == "api_server,gateway,tui,oneshot"
+
+
+def test_launch_tui_preserves_explicit_sessionful_env_overrides(monkeypatch, main_mod):
+    captured = {}
+
+    monkeypatch.setattr(
+        main_mod,
+        "_make_tui_argv",
+        lambda tui_dir, tui_dev: (["node", "dist/entry.js"], Path(".")),
+    )
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "0")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "gateway")
+
+    def fake_call(argv, cwd=None, env=None):
+        captured["env"] = env
+        return 0
+
+    monkeypatch.setattr(main_mod.subprocess, "call", fake_call)
+
+    with pytest.raises(SystemExit):
+        main_mod._launch_tui()
+
+    env = captured["env"]
+    assert env["MENTE_SESSIONFUL_EXECUTION_ENABLED"] == "0"
+    assert env["MENTE_SESSIONFUL_EXECUTION_SOURCES"] == "gateway"
 
 
 def test_print_tui_exit_summary_includes_resume_and_token_totals(monkeypatch, capsys):

@@ -1,12 +1,12 @@
 ---
 sidebar_position: 12
 title: "Working with Skills"
-description: "Find, install, use, and create skills — on-demand knowledge that teaches Hermes new workflows"
+description: "Find, install, use, and create skills — on-demand knowledge that teaches Mente new workflows"
 ---
 
 # Working with Skills
 
-Skills are on-demand knowledge documents that teach Hermes how to handle specific tasks — from generating ASCII art to managing GitHub PRs. This guide walks you through using them day to day.
+Skills are on-demand knowledge documents that teach Mente how to handle specific tasks — from generating ASCII art to managing GitHub PRs. This guide walks you through using them day to day.
 
 For the full technical reference, see [Skills System](/user-guide/features/skills).
 
@@ -14,7 +14,7 @@ For the full technical reference, see [Skills System](/user-guide/features/skill
 
 ## Finding Skills
 
-Every Hermes installation ships with bundled skills. See what's available:
+Every Mente installation ships with bundled skills. See what's available:
 
 ```bash
 # In any chat session:

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from mente.context_builder.builder import ContextBuilder
+from mente.executors import resolve_tool_exposure_policy
 from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_metrics
 from mente.memory.policy import MemoryPolicy, MemoryPolicyResolver
@@ -94,6 +95,13 @@ def _run_replay_mode(
     task = build_task_from_fixture(fixture).model_copy(deep=True)
     if task.workspace is None:
         task.workspace = workspace
+    if "tool_policy" not in task.metadata:
+        source = str(task.metadata.get("source") or "").strip()
+        if source:
+            task.metadata["tool_policy"] = resolve_tool_exposure_policy(
+                source=source,
+                task_type=task.task_type,
+            ).as_metadata()
 
     memory_repository = _build_seeded_memory_repository(fixture, enabled=memory_enabled)
     executor = _CaptureExecutor(executor_factory())

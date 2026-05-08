@@ -17,7 +17,7 @@ Pre-commit review: security scan, quality gates, auto-fix.
 | Source | Bundled (installed by default) |
 | Path | `skills/software-development/requesting-code-review` |
 | Version | `2.0.0` |
-| Author | Hermes Agent (adapted from obra/superpowers + MorAlekss) |
+| Author | Mente Agent |
 | License | MIT |
 | Tags | `code-review`, `security`, `verification`, `quality`, `pre-commit`, `auto-fix` |
 | Related skills | [`subagent-driven-development`](/user-guide/skills/bundled/software-development/software-development-subagent-driven-development), [`writing-plans`](/user-guide/skills/bundled/software-development/software-development-writing-plans), [`test-driven-development`](/user-guide/skills/bundled/software-development/software-development-test-driven-development), [`github-code-review`](/user-guide/skills/bundled/github/github-github-code-review) |
@@ -25,7 +25,7 @@ Pre-commit review: security scan, quality gates, auto-fix.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Pre-Commit Code Verification

@@ -20,12 +20,12 @@ Use when the user asks Mente to change API keys, OAuth/provider auth, config.yam
 | Author | Mente |
 | License | MIT |
 | Tags | `mente`, `config`, `api-key`, `oauth`, `auth`, `gateway`, `env`, `config-yaml`, `operations` |
-| Related skills | [`hermes-agent`](/user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-hermes-agent), [`systematic-debugging`](/user-guide/skills/bundled/software-development/software-development-systematic-debugging), `verification-before-completion` |
+| Related skills | [`hermes-agent`](/user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-hermes-agent), [`systematic-debugging`](/user-guide/skills/bundled/software-development/software-development-systematic-debugging), [`verification-before-completion`](/user-guide/skills/bundled/software-development/software-development-verification-before-completion) |
 
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Mente Config Admin

@@ -1,6 +1,6 @@
 # Mente NPM Installer And README Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Publishable `mente-agent` NPM installer package plus updated README with one-command install and packaging safety guarantees.
 

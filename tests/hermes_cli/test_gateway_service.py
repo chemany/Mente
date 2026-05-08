@@ -101,13 +101,18 @@ class TestGeneratedSystemdUnits:
     def test_user_unit_sets_explicit_runtime_override_for_source_checkout_when_artifact_missing(
         self, monkeypatch
     ):
-        monkeypatch.setattr(gateway_cli, "load_release_install_manifest", lambda project_root=None: None)
         monkeypatch.setattr(
-            gateway_cli,
-            "expected_vendored_runtime_binary_path",
+            "hermes_cli.runtime_override.load_release_install_manifest",
+            lambda project_root=None: None,
+        )
+        monkeypatch.setattr(
+            "hermes_cli.runtime_override.expected_vendored_runtime_binary_path",
             lambda repo_root=None: Path("/tmp/missing-vendored-runtime"),
         )
-        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: "/opt/codex/bin/codex" if cmd == "codex" else None)
+        monkeypatch.setattr(
+            "hermes_cli.runtime_override.shutil.which",
+            lambda cmd: "/opt/codex/bin/codex" if cmd == "codex" else None,
+        )
 
         unit = gateway_cli.generate_systemd_unit(system=False)
 
@@ -117,16 +122,17 @@ class TestGeneratedSystemdUnits:
         self, monkeypatch
     ):
         monkeypatch.setattr(
-            gateway_cli,
-            "load_release_install_manifest",
+            "hermes_cli.runtime_override.load_release_install_manifest",
             lambda project_root=None: {"install_mode": "release"},
         )
         monkeypatch.setattr(
-            gateway_cli,
-            "expected_vendored_runtime_binary_path",
+            "hermes_cli.runtime_override.expected_vendored_runtime_binary_path",
             lambda repo_root=None: Path("/tmp/missing-vendored-runtime"),
         )
-        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: "/opt/codex/bin/codex" if cmd == "codex" else None)
+        monkeypatch.setattr(
+            "hermes_cli.runtime_override.shutil.which",
+            lambda cmd: "/opt/codex/bin/codex" if cmd == "codex" else None,
+        )
 
         unit = gateway_cli.generate_systemd_unit(system=False)
 
@@ -143,7 +149,7 @@ class TestGeneratedSystemdUnits:
 
         assert 'Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"' in unit
         assert 'Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"' in unit
-        assert 'Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway"' in unit
+        assert 'Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway,tui,oneshot"' in unit
 
     def test_user_unit_avoids_recursive_execstop_and_uses_extended_stop_timeout(self):
         unit = gateway_cli.generate_systemd_unit(system=False)
@@ -187,7 +193,7 @@ class TestGeneratedSystemdUnits:
 
         assert 'Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"' in unit
         assert 'Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"' in unit
-        assert 'Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway"' in unit
+        assert 'Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway,tui,oneshot"' in unit
 
     def test_user_unit_exports_mente_home_alongside_hermes_home(self, monkeypatch, tmp_path):
         mente_home = tmp_path / ".mente"

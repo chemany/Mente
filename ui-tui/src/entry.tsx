@@ -5,6 +5,7 @@ import { GatewayClient } from './gatewayClient.js'
 import { setupGracefulExit } from './lib/gracefulExit.js'
 import { formatBytes, type HeapDumpResult, performHeapDump } from './lib/memory.js'
 import { type MemorySnapshot, startMemoryMonitor } from './lib/memoryMonitor.js'
+import { formatSignalNotice } from './lib/signalNotices.js'
 
 if (!process.stdin.isTTY) {
   console.log('hermes-tui: no TTY')
@@ -25,7 +26,12 @@ setupGracefulExit({
 
     process.stderr.write(`hermes-tui ${scope}: ${message.slice(0, 2000)}\n`)
   },
-  onSignal: signal => process.stderr.write(`hermes-tui: received ${signal}\n`)
+  onSignal: signal => {
+    const notice = formatSignalNotice(signal)
+    if (notice) {
+      process.stderr.write(notice)
+    }
+  }
 })
 
 const stopMemoryMonitor = startMemoryMonitor({

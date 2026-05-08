@@ -249,6 +249,73 @@ def test_context_builder_source_bounds_api_server_shared_preload():
     ]
 
 
+def test_context_builder_uses_session_scoped_tui_memory_policy():
+    repo = InMemoryMemoryRepository()
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_tui_session",
+            session_id="tui-session-1",
+            task_id="task_old_tui_session",
+            task_type="conversation",
+            source="tui",
+            scope="session",
+            fact="TUI session fact should be selected.",
+            score=5.0,
+        )
+    )
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_tui_global",
+            session_id=None,
+            task_id="task_old_tui_global",
+            task_type="conversation",
+            source="tui",
+            scope="global",
+            fact="TUI global fact should remain eligible.",
+            score=4.0,
+        )
+    )
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_tui_task_type",
+            session_id=None,
+            task_id="task_old_tui_task_type",
+            task_type="conversation",
+            source="tui",
+            scope="task_type",
+            fact="TUI task_type fact should be filtered.",
+            score=6.0,
+        )
+    )
+
+    task = Task(
+        task_id="task_tui_1",
+        session_id="tui-session-1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply",
+        metadata={"source": "tui"},
+    )
+
+    request, trace = ContextBuilder(
+        memory_repository=repo,
+        memory_limit=5,
+    ).build_with_trace(task)
+
+    assert request.memory_facts == [
+        "Memory: TUI session fact should be selected.",
+        "Memory: TUI global fact should remain eligible.",
+    ]
+    assert [item.memory_id for item in trace.selected] == [
+        "mem_tui_session",
+        "mem_tui_global",
+    ]
+    assert ("mem_tui_task_type", "scope_filtered") in [
+        (item.memory_id, item.reason) for item in trace.skipped
+    ]
+    assert trace.policy_id == "tui:conversation"
+
+
 def test_context_builder_prioritizes_session_summary_before_generic_memories():
     repo = InMemoryMemoryRepository()
     summary_fact = "Session summary: user prefers concise JSON replies."
@@ -317,7 +384,7 @@ def test_context_builder_prioritizes_session_summary_before_generic_memories():
             "workflow_contract": {
                 "workflow_id": API_SERVER_CONVERSATION_WORKFLOW_ID,
                 "memory_read": {
-                    "mode": "shared_repository_preload",
+                    "mode": "runtime_on_demand_query",
                     "enabled": True,
                     "session_summary": {
                         "enabled": True,
@@ -418,7 +485,7 @@ def test_context_builder_disabling_session_summary_policy_reverts_to_generic_pre
             "workflow_contract": {
                 "workflow_id": API_SERVER_CONVERSATION_WORKFLOW_ID,
                 "memory_read": {
-                    "mode": "shared_repository_preload",
+                    "mode": "runtime_on_demand_query",
                     "enabled": True,
                     "session_summary": {
                         "enabled": False,

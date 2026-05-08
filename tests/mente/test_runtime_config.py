@@ -1,4 +1,8 @@
-from mente.executors.runtime_config import resolve_runtime_config
+import json
+
+from mente.executors.runtime_config import MENTE_DEFAULT_BASE_INSTRUCTIONS, resolve_runtime_config
+
+DEFAULT_BASE_OVERRIDE = f"base_instructions={json.dumps(MENTE_DEFAULT_BASE_INSTRUCTIONS, ensure_ascii=True)}"
 
 
 def test_runtime_config_merges_profile_and_workspace_yaml_layers(monkeypatch, tmp_path):
@@ -47,6 +51,7 @@ def test_runtime_config_merges_profile_and_workspace_yaml_layers(monkeypatch, tm
     assert runtime_config.ignore_user_config is True
     assert runtime_config.ignore_rules is True
     assert runtime_config.to_codex_overrides() == [
+        DEFAULT_BASE_OVERRIDE,
         'model="gpt-5.5"',
         'model_provider="profile"',
         'model_providers.profile.base_url="https://profile.invalid/v1"',
@@ -77,7 +82,7 @@ def test_runtime_config_ignores_public_codex_user_config_by_default(monkeypatch,
     runtime_config = resolve_runtime_config(tmp_path)
 
     assert runtime_config.runtime_home == mente_home / "codex"
-    assert runtime_config.to_codex_overrides() == []
+    assert runtime_config.to_codex_overrides() == [DEFAULT_BASE_OVERRIDE]
 
 
 def test_runtime_config_prefers_yaml_over_legacy_toml_when_both_exist(monkeypatch, tmp_path):
@@ -131,6 +136,7 @@ def test_runtime_config_prefers_yaml_over_legacy_toml_when_both_exist(monkeypatc
     runtime_config = resolve_runtime_config(workspace)
 
     assert runtime_config.to_codex_overrides() == [
+        DEFAULT_BASE_OVERRIDE,
         'model="yaml-workspace"',
         'model_provider="yaml"',
     ]
@@ -173,6 +179,7 @@ def test_runtime_config_uses_legacy_toml_fallback_when_yaml_absent(monkeypatch, 
     runtime_config = resolve_runtime_config(workspace)
 
     assert runtime_config.to_codex_overrides() == [
+        DEFAULT_BASE_OVERRIDE,
         'model="gpt-5.5"',
         'model_provider="profile"',
         'model_providers.profile.base_url="https://profile.invalid/v1"',
@@ -195,7 +202,7 @@ def test_runtime_config_ignores_legacy_hermes_mente_config(monkeypatch, tmp_path
     runtime_config = resolve_runtime_config(tmp_path)
 
     assert runtime_config.runtime_home == mente_home / "codex"
-    assert runtime_config.to_codex_overrides() == []
+    assert runtime_config.to_codex_overrides() == [DEFAULT_BASE_OVERRIDE]
 
 
 def test_runtime_config_keeps_isolation_flags_stable_with_profile_override(monkeypatch, tmp_path):
@@ -242,6 +249,7 @@ def test_runtime_config_falls_back_to_mente_model_settings_for_private_provider(
 
     assert runtime_config.runtime_home == mente_home / "codex"
     assert runtime_config.to_codex_overrides() == [
+        DEFAULT_BASE_OVERRIDE,
         'model="gpt-5.4"',
         'model_provider="mente"',
         'model_providers.mente.base_url="https://api.10fu.com/v1"',
@@ -279,6 +287,7 @@ def test_runtime_config_dedicated_codex_settings_override_global_model_defaults(
     runtime_config = resolve_runtime_config(tmp_path)
 
     assert runtime_config.to_codex_overrides() == [
+        DEFAULT_BASE_OVERRIDE,
         'model="codex-model"',
         'model_provider="mente"',
         'model_providers.mente.base_url="https://codex.invalid/v1"',
@@ -314,6 +323,7 @@ def test_runtime_config_codex_model_only_inherits_global_provider_settings(monke
     runtime_config = resolve_runtime_config(tmp_path)
 
     assert runtime_config.to_codex_overrides() == [
+        DEFAULT_BASE_OVERRIDE,
         'model="codex-model"',
         'model_provider="mente"',
         'model_providers.mente.base_url="https://global.invalid/v1"',
@@ -326,3 +336,42 @@ def test_runtime_config_codex_model_only_inherits_global_provider_settings(monke
         "MENTE_CODEX_API_KEY": "sk-global",
         "OPENAI_BASE_URL": "https://global.invalid/v1",
     }
+
+
+def test_runtime_config_injects_default_slim_base_instructions_when_unset(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    runtime_config = resolve_runtime_config(tmp_path)
+
+    assert runtime_config.to_codex_overrides() == [DEFAULT_BASE_OVERRIDE]
+
+
+def test_runtime_config_prefers_explicit_base_instructions_over_mente_default(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir(parents=True, exist_ok=True)
+    (mente_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "codex:",
+                '  base_instructions: "project-specific-runtime-guardrails"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    runtime_config = resolve_runtime_config(tmp_path)
+
+    assert runtime_config.to_codex_overrides() == [
+        'base_instructions="project-specific-runtime-guardrails"'
+    ]
+
+
+def test_default_runtime_base_instructions_stay_small_but_keep_engineering_guards():
+    assert len(MENTE_DEFAULT_BASE_INSTRUCTIONS) < 1000
+    assert "coding agent" in MENTE_DEFAULT_BASE_INSTRUCTIONS
+    assert "Inspect the workspace" in MENTE_DEFAULT_BASE_INSTRUCTIONS
+    assert "Do not overwrite user changes" in MENTE_DEFAULT_BASE_INSTRUCTIONS
+    assert "Keep responses concise" in MENTE_DEFAULT_BASE_INSTRUCTIONS

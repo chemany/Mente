@@ -17,7 +17,7 @@ Plan mode: write markdown plan to .hermes/plans/, no exec.
 | Source | Bundled (installed by default) |
 | Path | `skills/software-development/plan` |
 | Version | `1.0.0` |
-| Author | Hermes Agent |
+| Author | Mente |
 | License | MIT |
 | Tags | `planning`, `plan-mode`, `implementation`, `workflow` |
 | Related skills | [`writing-plans`](/user-guide/skills/bundled/software-development/software-development-writing-plans), [`subagent-driven-development`](/user-guide/skills/bundled/software-development/software-development-subagent-driven-development) |
@@ -25,7 +25,7 @@ Plan mode: write markdown plan to .hermes/plans/, no exec.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Plan Mode

@@ -1,6 +1,6 @@
 # Phase 3.2: Memory Debug Surface Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Expose persisted Mente memories through a shared debug query surface and a dedicated dashboard page so engineers can inspect what memory was promoted, stored, and later retrieved.
 
@@ -482,4 +482,3 @@ Expected:
 - URL-state test prints `memories-url-state tests passed`
 - dashboard build succeeds
 - dashboard lint succeeds
-

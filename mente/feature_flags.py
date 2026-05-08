@@ -14,6 +14,10 @@ _BRIDGE_TOOL_FLAGS = {
     "mente_memory_query": "MENTE_MEMORY_READ_TOOL_ENABLED",
     "mente_memory_save": "MENTE_MEMORY_WRITE_TOOL_ENABLED",
 }
+_BRIDGE_TOOL_FLAG_DEFAULTS = {
+    "mente_memory_query": True,
+    "mente_memory_save": False,
+}
 
 
 def is_env_flag_enabled(
@@ -43,7 +47,7 @@ def filter_enabled_bridge_tools(
         flag_name = _BRIDGE_TOOL_FLAGS.get(tool_name)
         if flag_name is not None and not is_env_flag_enabled(
             flag_name,
-            default=False,
+            default=_BRIDGE_TOOL_FLAG_DEFAULTS.get(tool_name, False),
             environment=environment,
         ):
             continue
@@ -59,7 +63,7 @@ def is_memory_read_tool_enabled(
 
     return is_env_flag_enabled(
         "MENTE_MEMORY_READ_TOOL_ENABLED",
-        default=False,
+        default=True,
         environment=environment,
     )
 
@@ -191,7 +195,7 @@ def sessionful_execution_sources(
 
     return parse_allowed_sources(
         "MENTE_SESSIONFUL_EXECUTION_SOURCES",
-        default_sources=("api_server",),
+        default_sources=("api_server", "gateway", "tui", "oneshot"),
         environment=environment,
     )
 
@@ -250,7 +254,7 @@ def build_api_server_conversation_workflow_contract(
         "task_type": "conversation",
         "adoption_enabled": adoption_enabled,
         "memory_read": {
-            "mode": "shared_repository_preload",
+            "mode": "runtime_on_demand_query",
             "enabled": True,
             "session_summary": {
                 "enabled": session_summary_enabled,

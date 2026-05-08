@@ -1,4 +1,6 @@
 from pathlib import Path
+import os
+import sys
 
 from hermes_cli.config import (
     default_release_install_policy,
@@ -6,6 +8,7 @@ from hermes_cli.config import (
     load_release_install_manifest,
     save_release_install_manifest,
 )
+from hermes_cli.runtime_override import apply_source_checkout_runtime_override
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -58,3 +61,49 @@ def test_install_scripts_advertise_release_pinned_and_offline_runtime_bootstrap(
 def test_setup_hermes_is_marked_as_developer_source_checkout_path():
     setup_script = (REPO_ROOT / "setup-hermes.sh").read_text(encoding="utf-8").lower()
     assert "developer/source-checkout path" in setup_script
+
+
+def test_source_checkout_runtime_override_is_applied_for_local_dev(monkeypatch, tmp_path):
+    monkeypatch.delenv("MENTE_CODEX_RUNTIME_BIN", raising=False)
+    monkeypatch.setattr(
+        "hermes_cli.runtime_override.load_release_install_manifest",
+        lambda project_root=None: None,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.runtime_override.expected_vendored_runtime_binary_path",
+        lambda project_root=None: tmp_path / "kernel/codex/release/artifacts/linux-x86_64/codex",
+    )
+    monkeypatch.setattr(
+        "hermes_cli.runtime_override.shutil.which",
+        lambda cmd: "/opt/codex/bin/codex" if cmd == "codex" else None,
+    )
+
+    runtime = apply_source_checkout_runtime_override(REPO_ROOT)
+
+    assert runtime == "/opt/codex/bin/codex"
+    assert os.environ["MENTE_CODEX_RUNTIME_BIN"] == "/opt/codex/bin/codex"
+
+
+def test_main_applies_source_checkout_runtime_override_before_dispatch(monkeypatch, tmp_path):
+    import hermes_cli.main as main_mod
+
+    monkeypatch.delenv("MENTE_CODEX_RUNTIME_BIN", raising=False)
+    monkeypatch.setattr(main_mod, "cmd_version", lambda args: None)
+    monkeypatch.setattr(main_mod, "_has_any_provider_configured", lambda: True)
+    monkeypatch.setattr(main_mod.sys, "argv", ["mente", "--version"])
+    monkeypatch.setattr(
+        "hermes_cli.runtime_override.load_release_install_manifest",
+        lambda project_root=None: None,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.runtime_override.expected_vendored_runtime_binary_path",
+        lambda project_root=None: tmp_path / "kernel/codex/release/artifacts/linux-x86_64/codex",
+    )
+    monkeypatch.setattr(
+        "hermes_cli.runtime_override.shutil.which",
+        lambda cmd: "/opt/codex/bin/codex" if cmd == "codex" else None,
+    )
+
+    main_mod.main()
+
+    assert os.environ["MENTE_CODEX_RUNTIME_BIN"] == "/opt/codex/bin/codex"

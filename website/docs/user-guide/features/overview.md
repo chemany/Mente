@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # Features Overview
 
-Hermes Agent includes a rich set of capabilities that extend far beyond basic chat. From persistent memory and file-aware context to browser automation and voice conversations, these features work together to make Hermes a powerful autonomous assistant.
+Mente includes a rich set of capabilities that extend far beyond basic chat. From persistent memory and file-aware context to browser automation and voice conversations, these features work together to make Mente a powerful autonomous assistant.
 
 ## Core
 

@@ -1,6 +1,6 @@
 # Phase 3.1: Live Memory Loop Wiring Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Wire the already-built Mente memory components into the real runtime so gateway and cron tasks can retrieve prior memories before execution and persist new memories after execution.
 

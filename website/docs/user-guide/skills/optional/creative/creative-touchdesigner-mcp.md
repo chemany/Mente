@@ -25,7 +25,7 @@ Control a running TouchDesigner instance via twozero MCP — create operators, s
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # TouchDesigner Integration (twozero MCP)
@@ -41,7 +41,7 @@ The following is the complete skill definition that Hermes loads when this skill
 ## Architecture
 
 ```
-Hermes Agent -> MCP (Streamable HTTP) -> twozero.tox (port 40404) -> TD Python
+Mente -> MCP (Streamable HTTP) -> twozero.tox (port 40404) -> TD Python
 ```
 
 36 native tools. Free plugin (no payment/license — confirmed April 2026).
@@ -53,7 +53,8 @@ Hub health check: `GET http://localhost:40404/mcp` returns JSON with instance PI
 Run the setup script to handle everything:
 
 ```bash
-bash "${HERMES_HOME:-$HOME/.hermes}/skills/creative/touchdesigner-mcp/scripts/setup.sh"
+AGENT_HOME="${HERMES_HOME:-${MENTE_HOME:-$HOME/.mente}}"
+bash "${AGENT_HOME}/skills/creative/touchdesigner-mcp/scripts/setup.sh"
 ```
 
 The script will:

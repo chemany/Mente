@@ -13,7 +13,7 @@ from hermes_constants import get_mente_home
 from mente.memory.fact_normalization import build_fact_identity
 from mente.memory.models import MemoryRecord
 
-MENTE_MEMORIES_SCHEMA_SQL = """
+MENTE_MEMORIES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS mente_memories (
     memory_id TEXT PRIMARY KEY,
     session_id TEXT,
@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS mente_memories (
     metadata_json TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+"""
 
+MENTE_MEMORIES_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_mente_memories_scope_lookup
 ON mente_memories(scope, session_id, task_type, score DESC, created_at DESC, memory_id DESC);
 
@@ -441,7 +443,7 @@ class SQLiteMemoryRepository:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        self._conn.executescript(MENTE_MEMORIES_SCHEMA_SQL)
+        self._conn.executescript(MENTE_MEMORIES_TABLE_SQL)
         existing_columns = {
             row["name"]
             for row in self._conn.execute("PRAGMA table_info(mente_memories)").fetchall()
@@ -455,15 +457,7 @@ class SQLiteMemoryRepository:
         for column, statement in migrations.items():
             if column not in existing_columns:
                 self._conn.execute(statement)
-        self._conn.executescript(
-            """
-            CREATE INDEX IF NOT EXISTS idx_mente_memories_fact_key_active
-            ON mente_memories(source, scope, fact_key, active);
-
-            CREATE INDEX IF NOT EXISTS idx_mente_memories_slot_key_active
-            ON mente_memories(source, scope, slot_key, active);
-            """
-        )
+        self._conn.executescript(MENTE_MEMORIES_INDEX_SQL)
         self._conn.commit()
 
     def save(self, record: MemoryRecord) -> None:

@@ -17,7 +17,7 @@ Debug Node.js via --inspect + Chrome DevTools Protocol CLI.
 | Source | Bundled (installed by default) |
 | Path | `skills/software-development/node-inspect-debugger` |
 | Version | `1.0.0` |
-| Author | Hermes Agent |
+| Author | Mente |
 | License | MIT |
 | Tags | `debugging`, `nodejs`, `node-inspect`, `cdp`, `breakpoints`, `ui-tui` |
 | Related skills | [`systematic-debugging`](/user-guide/skills/bundled/software-development/software-development-systematic-debugging), [`python-debugpy`](/user-guide/skills/bundled/software-development/software-development-python-debugpy), [`debugging-hermes-tui-commands`](/user-guide/skills/bundled/software-development/software-development-debugging-hermes-tui-commands) |
@@ -25,7 +25,7 @@ Debug Node.js via --inspect + Chrome DevTools Protocol CLI.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Node.js Inspect Debugger

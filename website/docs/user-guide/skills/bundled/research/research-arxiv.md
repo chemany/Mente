@@ -17,7 +17,7 @@ Search arXiv papers by keyword, author, category, or ID.
 | Source | Bundled (installed by default) |
 | Path | `skills/research/arxiv` |
 | Version | `1.0.0` |
-| Author | Hermes Agent |
+| Author | Mente |
 | License | MIT |
 | Tags | `Research`, `Arxiv`, `Papers`, `Academic`, `Science`, `API` |
 | Related skills | [`ocr-and-documents`](/user-guide/skills/bundled/productivity/productivity-ocr-and-documents) |
@@ -25,7 +25,7 @@ Search arXiv papers by keyword, author, category, or ID.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # arXiv Research

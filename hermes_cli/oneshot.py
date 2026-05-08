@@ -201,7 +201,7 @@ def _run_mente(
     from mente.context_builder.builder import ContextBuilder
     from mente.executors.codex import CodexExecutor
     from mente.orchestrator.service import Orchestrator
-    from mente.task_core.models import Task
+    from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode, Task
     from mente.task_core.repository import InMemoryTaskRepository
 
     task = Task(
@@ -211,6 +211,8 @@ def _run_mente(
         objective=prompt,
         user_request=prompt,
         workspace=os.getcwd(),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
         metadata={
             "model": model,
             "provider": provider,

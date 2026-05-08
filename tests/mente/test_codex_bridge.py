@@ -229,7 +229,7 @@ def test_bridge_invokes_bridge_selected_front_door_and_normalizes_subprocess_res
     fake_runtime = _write_fake_runtime(tmp_path)
     monkeypatch.setenv("MENTE_CODEX_RUNTIME_BIN", str(fake_runtime))
 
-    def fake_run(command, capture_output, text, cwd, check, env):
+    def fake_run(command, capture_output, text, cwd, check, env, stdin):
         output_path.write_text(
             '{"assistant_summary":"vendored summary","memory_candidates":[]}',
             encoding="utf-8",
@@ -237,6 +237,7 @@ def test_bridge_invokes_bridge_selected_front_door_and_normalizes_subprocess_res
         captured["command"] = command
         captured["cwd"] = cwd
         captured["env"] = env
+        captured["stdin"] = stdin
         return subprocess.CompletedProcess(command, 0, stdout="bridge stdout", stderr="")
 
     runtime_config = RuntimeConfig(
@@ -268,6 +269,7 @@ def test_bridge_invokes_bridge_selected_front_door_and_normalizes_subprocess_res
     assert result.stdout == "bridge stdout"
     assert result.raw_output == '{"assistant_summary":"vendored summary","memory_candidates":[]}'
     assert captured["env"]["MENTE_CODEX_API_KEY"] == "sk-private"
+    assert captured["stdin"] is subprocess.DEVNULL
     assert result.front_door_mode == "vendored_runtime_binary"
     assert result.front_door_strategy == "bridge_selected"
 
@@ -304,3 +306,50 @@ def test_bridge_marks_streaming_cancellation_as_interrupted(monkeypatch, tmp_pat
 
     assert result.returncode == 130
     assert result.backend_failure == "interrupted_by_user"
+
+
+def test_bridge_streaming_subprocess_disconnects_stdin_from_tui_pipe(monkeypatch, tmp_path):
+    fake_runtime = _write_fake_runtime(tmp_path)
+    monkeypatch.setenv("MENTE_CODEX_RUNTIME_BIN", str(fake_runtime))
+    captured: dict[str, object] = {}
+
+    class _FakeStream:
+        def __iter__(self):
+            return iter(())
+
+    class _FakeProcess:
+        def __init__(self):
+            self.stdout = _FakeStream()
+            self.stderr = _FakeStream()
+
+        def poll(self):
+            return 0
+
+    def fake_popen(command, stdout, stderr, text, cwd, env, bufsize, stdin):
+        captured["command"] = command
+        captured["stdin"] = stdin
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return _FakeProcess()
+
+    result = invoke_vendored_front_door(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+        sandbox="workspace-write",
+        approval_policy="never",
+        cwd=str(tmp_path),
+        workdir=str(tmp_path / "isolated-workdir"),
+        output_last_message=str(tmp_path / "out.txt"),
+        output_schema=str(tmp_path / "schema.json"),
+        add_dirs=[str(tmp_path)],
+        stdout_line_callback=lambda _line: None,
+        subprocess_popen=fake_popen,
+    )
+
+    assert result.returncode == 0
+    assert captured["stdin"] is subprocess.DEVNULL

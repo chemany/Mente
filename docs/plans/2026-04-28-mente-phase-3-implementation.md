@@ -1,6 +1,6 @@
 # Mente Phase 3 Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Add the first durable learning loop to `Mente` by introducing a persistent memory store, deterministic memory promotion and retrieval, and a replay harness that can re-run normalized tasks without going through live gateway or cron ingress.
 

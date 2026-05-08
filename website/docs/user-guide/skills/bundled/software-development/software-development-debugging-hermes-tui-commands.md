@@ -17,7 +17,7 @@ Debug Hermes TUI slash commands: Python, gateway, Ink UI.
 | Source | Bundled (installed by default) |
 | Path | `skills/software-development/debugging-hermes-tui-commands` |
 | Version | `1.0.0` |
-| Author | Hermes Agent |
+| Author | Mente |
 | License | MIT |
 | Tags | `debugging`, `hermes-agent`, `tui`, `slash-commands`, `typescript`, `python` |
 | Related skills | [`python-debugpy`](/user-guide/skills/bundled/software-development/software-development-python-debugpy), [`node-inspect-debugger`](/user-guide/skills/bundled/software-development/software-development-node-inspect-debugger), [`systematic-debugging`](/user-guide/skills/bundled/software-development/software-development-systematic-debugging) |
@@ -25,7 +25,7 @@ Debug Hermes TUI slash commands: Python, gateway, Ink UI.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Debugging Hermes TUI Slash Commands

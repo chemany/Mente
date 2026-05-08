@@ -19,14 +19,18 @@ from kernel.codex.session.protocol import KernelSessionMode, KernelSessionReques
 from mente.execution_events import ExecutionEventCallback, emit_execution_event
 from mente.executors.bridge_mcp import augment_runtime_config_for_bridge_tools
 from mente.executors.kernel_adapter import CodexKernelAdapter
-from mente.executors.prompting import normalize_user_facing_summary, render_execution_prompt
+from mente.executors.prompting import (
+    build_prompt_metrics,
+    normalize_user_facing_summary,
+    render_execution_prompt,
+)
 from mente.executors.runtime_auth import write_private_runtime_auth
 from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
 from mente.feature_flags import (
     is_sessionful_execution_enabled,
     sessionful_execution_sources,
 )
-from mente.memory.context import resolve_memory_context
+from mente.memory.context import resolve_memory_context, resolve_memory_read_mode, uses_on_demand_memory
 from mente.memory.policy import MemoryPolicyResolver
 from mente.memory.repository import MemoryRepository
 from mente.task_core.models import (
@@ -121,23 +125,28 @@ class CodexExecutor(CodexKernelAdapter):
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         """Run Codex through the vendored kernel runner and translate the result."""
-        memory_facts, _trace = resolve_memory_context(
-            request,
-            memory_repository=self._memory_repository,
-            memory_limit=self._memory_limit,
-            memory_policy_resolver=self._memory_policy_resolver,
-        )
+        enriched_request = self._prepare_request(request)
         emit_execution_event(
             self._event_callback,
             "executor.memory_context_resolved",
             {
-                "task_id": request.task_id,
-                "session_id": request.session_id,
-                "injected_count": len(memory_facts),
+                "task_id": enriched_request.task_id,
+                "session_id": enriched_request.session_id,
+                "injected_count": len(enriched_request.memory_facts),
+                "memory_read_mode": enriched_request.metadata.get("memory_read_mode"),
             },
             logger=logger,
         )
-        enriched_request = request.model_copy(update={"memory_facts": memory_facts})
+        emit_execution_event(
+            self._event_callback,
+            "executor.prompt_prepared",
+            {
+                "task_id": request.task_id,
+                "session_id": request.session_id,
+                **build_prompt_metrics(enriched_request),
+            },
+            logger=logger,
+        )
         runtime_config = self._resolve_runtime_config(enriched_request.workspace)
         runtime_config = augment_runtime_config_for_bridge_tools(
             runtime_config,
@@ -193,6 +202,32 @@ class CodexExecutor(CodexKernelAdapter):
             session_request,
             precondition_fallback_reason=precondition_fallback_reason,
             runtime_fallback_reason=runtime_fallback_reason,
+        )
+
+    def _prepare_request(self, request: ExecutionRequest) -> ExecutionRequest:
+        """Resolve memory context once, preserving thin-prompt delivery when requested."""
+
+        if bool(request.metadata.get("memory_context_prepared")):
+            return request
+
+        memory_facts, _trace = resolve_memory_context(
+            request,
+            memory_repository=self._memory_repository,
+            memory_limit=self._memory_limit,
+            memory_policy_resolver=self._memory_policy_resolver,
+        )
+        prepared_memory_facts = memory_facts
+        memory_read_mode = resolve_memory_read_mode(request)
+        if uses_on_demand_memory(request):
+            prepared_memory_facts = list(request.memory_facts)
+        metadata = dict(request.metadata)
+        metadata["memory_context_prepared"] = True
+        metadata["memory_read_mode"] = memory_read_mode
+        return request.model_copy(
+            update={
+                "memory_facts": prepared_memory_facts,
+                "metadata": metadata,
+            }
         )
 
     def _build_kernel_payload(self, request: ExecutionRequest) -> KernelExecutionPayload:
@@ -347,11 +382,21 @@ class CodexExecutor(CodexKernelAdapter):
 
     def _seed_user_skills_into_isolated_home(self, codex_home: Path) -> str:
         """Expose Mente-managed user skills inside the private Codex runtime home."""
-        source_skills = get_skills_dir()
+        user_skills = get_skills_dir()
+        bundled_skills = Path(__file__).resolve().parents[2] / "skills"
         target_skills = codex_home / ".agents" / "skills"
-        if not source_skills.is_dir():
+        has_user_skills = user_skills.is_dir()
+        has_bundled_skills = bundled_skills.is_dir()
+        if not has_user_skills and not has_bundled_skills:
             self._remove_runtime_path(target_skills)
             return "missing"
+        if has_user_skills and has_bundled_skills:
+            self._remove_runtime_path(target_skills)
+            target_skills.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(bundled_skills, target_skills, symlinks=True)
+            shutil.copytree(user_skills, target_skills, symlinks=True, dirs_exist_ok=True)
+            return "merged_copy"
+        source_skills = user_skills if has_user_skills else bundled_skills
         if target_skills.is_symlink():
             try:
                 if target_skills.resolve() == source_skills.resolve():

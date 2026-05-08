@@ -24,12 +24,12 @@ Knowledge comics (知识漫画): educational, biography, tutorial.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Knowledge Comic Creator
 
-Adapted from [baoyu-comic](https://github.com/JimLiu/baoyu-skills) for Hermes Agent's tool ecosystem.
+Adapted from [baoyu-comic](https://github.com/JimLiu/baoyu-skills) for Mente's tool ecosystem.
 
 Create original knowledge comics with flexible art style × tone combinations.
 

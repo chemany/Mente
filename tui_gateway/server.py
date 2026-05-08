@@ -33,6 +33,12 @@ _hermes_home = get_hermes_home()
 load_hermes_dotenv(
     hermes_home=_hermes_home, project_env=Path(__file__).parent.parent / ".env"
 )
+try:
+    from hermes_logging import setup_logging as _setup_logging
+
+    _setup_logging(mode="cli")
+except Exception:
+    pass
 
 
 # ── Panic logger ─────────────────────────────────────────────────────
@@ -1433,6 +1439,61 @@ class _MenteTuiTurnController:
         self.cancel_event.set()
 
 
+def _log_mente_tui_execution_diagnostic(
+    *,
+    session_id: str,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Write stable Mente diagnostics for TUI turns into agent logs."""
+    payload = payload or {}
+    normalized_type = str(event_type or "")
+    if normalized_type == "executor.prompt_prepared":
+        logger.info(
+            "Mente TUI prompt diagnostics: session_id=%s task_id=%s prompt_fingerprint=%s "
+            "memory_fact_count=%s prompt_char_count=%s memory_char_count=%s",
+            session_id,
+            payload.get("task_id"),
+            payload.get("prompt_fingerprint"),
+            payload.get("memory_fact_count"),
+            payload.get("prompt_char_count"),
+            payload.get("memory_char_count"),
+        )
+        return
+    if normalized_type != "kernel.codex.turn.completed":
+        return
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return
+    logger.info(
+        "Mente TUI usage diagnostics: session_id=%s cached_input_tokens=%s input_tokens=%s "
+        "output_tokens=%s cache_write_tokens=%s",
+        session_id,
+        usage.get("cached_input_tokens"),
+        usage.get("input_tokens"),
+        usage.get("output_tokens"),
+        usage.get("cache_write_tokens"),
+    )
+
+
+def _log_mente_tui_continuity_diagnostic(
+    *,
+    session_id: str,
+    handoff: dict[str, Any],
+) -> None:
+    """Write one continuity outcome line per TUI turn."""
+    logger.info(
+        "Mente TUI continuity diagnostics: session_id=%s continuity_status=%s "
+        "continuity_id=%s requested_mode=%s mode=%s fallback_reason=%s",
+        session_id,
+        handoff.get("continuity_status"),
+        handoff.get("continuity_id"),
+        handoff.get("requested_mode"),
+        handoff.get("mode"),
+        handoff.get("fallback_reason"),
+    )
+
+
 class MenteTuiAgent:
     """TUI-facing wrapper that preserves session shell compatibility while routing turns through Mente."""
 
@@ -1520,6 +1581,11 @@ class MenteTuiAgent:
             replay_history_in_memory_facts = True
 
         def _event_callback(event_type: str, payload: dict[str, Any]) -> None:
+            _log_mente_tui_execution_diagnostic(
+                session_id=str(getattr(self._inner_agent, "session_id", "") or self._session_key),
+                event_type=event_type,
+                payload=payload,
+            )
             self._apply_usage_event(event_type, payload)
             self._emit_progress_event(event_type, payload)
             if event_type == "kernel.codex.reasoning.completed":
@@ -1598,6 +1664,10 @@ class MenteTuiAgent:
         if not isinstance(handoff, dict):
             self._continuity_payload = None
             return
+        _log_mente_tui_continuity_diagnostic(
+            session_id=str(getattr(self._inner_agent, "session_id", "") or self._session_key),
+            handoff=handoff,
+        )
         continuity_id = str(handoff.get("continuity_id") or "").strip()
         continuity_status = str(handoff.get("continuity_status") or "").strip().lower()
         if continuity_status in {"started", "resumed"} and continuity_id:

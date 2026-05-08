@@ -1,6 +1,6 @@
 # TUI Mente Codex Unification Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Route TUI conversation execution through Mente's `CodexExecutor` so `gateway`, `oneshot`, and `tui` all share the same Mente-owned execution chain.
 

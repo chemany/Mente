@@ -17,14 +17,14 @@ Set up and use 1Password CLI (op). Use when installing the CLI, enabling desktop
 | Source | Optional — install with `hermes skills install official/security/1password` |
 | Path | `optional-skills/security/1password` |
 | Version | `1.0.0` |
-| Author | arceus77-7, enhanced by Hermes Agent |
+| Author | arceus77-7, enhanced by Mente |
 | License | MIT |
 | Tags | `security`, `secrets`, `1password`, `op`, `cli` |
 
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # 1Password CLI

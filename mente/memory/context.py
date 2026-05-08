@@ -2,13 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 
 from mente.memory.fact_normalization import build_fact_identity, normalize_memory_fact_text
 from mente.memory.models import MemoryBuildTrace, MemoryRecord, MemoryTraceItem
 from mente.memory.policy import MemoryPolicyResolver, truncate_for_policy
 from mente.memory.repository import MemoryRepository
-from mente.task_core.models import Task
+from mente.task_core.models import ExecutionRequest, Task
+
+
+def resolve_memory_read_mode(task: Task | ExecutionRequest) -> str:
+    """Return how the current task should receive Mente-managed memory."""
+
+    if _has_on_demand_memory_query_tool(task):
+        return "runtime_on_demand_query"
+    return "shared_repository_preload"
+
+
+def uses_on_demand_memory(task: Task | ExecutionRequest) -> bool:
+    """Return whether Mente should keep repository memory out of the prompt."""
+
+    return resolve_memory_read_mode(task) == "runtime_on_demand_query"
 
 
 def resolve_memory_context(
@@ -127,6 +142,35 @@ def resolve_memory_context(
     trace.injected_count = len(trace.selected)
     memory_facts.extend(task_memory_facts)
     return memory_facts, trace
+
+
+def _has_on_demand_memory_query_tool(task: Task | ExecutionRequest) -> bool:
+    if getattr(task, "task_type", None) != "conversation":
+        return False
+    tool_policy_attr = getattr(task, "tool_policy", None)
+    if isinstance(tool_policy_attr, Mapping):
+        bridge_tools = tool_policy_attr.get("bridge_tools")
+        if isinstance(bridge_tools, (list, tuple, set)):
+            if "mente_memory_query" in {
+                str(item).strip()
+                for item in bridge_tools
+                if str(item).strip()
+            }:
+                return True
+    metadata = getattr(task, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        return False
+    tool_policy = metadata.get("tool_policy")
+    if not isinstance(tool_policy, Mapping):
+        return False
+    bridge_tools = tool_policy.get("bridge_tools")
+    if not isinstance(bridge_tools, (list, tuple, set)):
+        return False
+    return "mente_memory_query" in {
+        str(item).strip()
+        for item in bridge_tools
+        if str(item).strip()
+    }
 
 
 def resolve_explicit_memory_read(
@@ -378,7 +422,7 @@ def _resolve_explicit_write_scope(
 
 def _derive_default_explicit_write_scope(task: Task) -> str:
     source = str(task.metadata.get("source") or "").strip()
-    if task.task_type == "conversation" and source in {"gateway", "api_server"}:
+    if task.task_type == "conversation" and source in {"gateway", "api_server", "tui"}:
         return "session"
     return "task_type"
 

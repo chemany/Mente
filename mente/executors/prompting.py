@@ -61,38 +61,119 @@ _CHINESE_SELF_INTRO_MARKERS: tuple[str, ...] = (
     "这台机器上",
 )
 
+_MENTE_PROJECT_SUPERPOWERS: tuple[str, ...] = (
+    "brainstorming",
+    "using-git-worktrees",
+    "writing-plans",
+    "executing-plans",
+    "test-driven-development",
+    "systematic-debugging",
+    "requesting-code-review",
+    "verification-before-completion",
+    "finishing-a-development-branch",
+)
+
+_PROJECT_DEVELOPMENT_KEYWORDS: tuple[str, ...] = (
+    "engineering",
+    "coding",
+    "development",
+    "implementation",
+    "implement",
+    "build feature",
+    "feature",
+    "refactor",
+    "bugfix",
+    "fix bug",
+    "repository",
+    "repo",
+    "codebase",
+    "项目",
+    "开发",
+    "功能",
+    "代码",
+    "重构",
+    "修复",
+    "测试",
+)
+
 
 def render_execution_prompt(request: ExecutionRequest) -> str:
     """Build a stable textual prompt from an execution request."""
-    lines = [
-        f"Objective: {request.objective}",
-        f"Task Type: {request.task_type}",
-    ]
+    lines = [f"Task: {request.objective}"]
 
     if request.constraints:
         lines.append("Constraints:")
         lines.extend(f"- {item}" for item in request.constraints)
     if request.acceptance_criteria:
-        lines.append("Acceptance Criteria:")
+        lines.append("Acceptance:")
         lines.extend(f"- {item}" for item in request.acceptance_criteria)
+    explicit_skill_refs = _normalized_skill_refs(request.skill_refs)
+    if explicit_skill_refs:
+        lines.append(f"Skills: {', '.join(explicit_skill_refs)}")
+    recommended_superpowers = _recommended_mente_superpowers(request, explicit_skill_refs)
+    if recommended_superpowers:
+        lines.append(f"Mente Superpowers: {', '.join(recommended_superpowers)}")
     if request.memory_facts:
-        lines.append("Memory Facts:")
+        lines.append("Context:")
         lines.extend(f"- {item}" for item in request.memory_facts)
-    if request.skill_refs:
-        lines.append("Skill References:")
-        lines.extend(f"- {item}" for item in request.skill_refs)
+    lines.append("Memory Access:")
+    if _tool_policy_has_bridge_tool(request, "mente_memory_query"):
+        lines.append("- Use mente_memory_query only when prior user or project context is needed.")
+    lines.append("- Do not invent prior preferences, prior decisions, or missing history.")
     lines.extend(
         [
-            "Response Contract:",
-            "- Return a JSON object that matches the provided output schema.",
-            "- assistant_summary: brief final answer for the user.",
-            "- memory_candidates: durable user or task facts worth remembering later.",
-            "- If no memory facts are provided, do not fabricate prior user preferences or project conventions.",
+            "Output:",
+            "- Return JSON matching the required schema.",
         ]
     )
     lines.append(f"User Request: {request.user_request}")
 
     return "\n".join(lines)
+
+
+def _normalized_skill_refs(skill_refs: object) -> list[str]:
+    if not isinstance(skill_refs, (list, tuple, set)):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in skill_refs:
+        value = str(item).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def _recommended_mente_superpowers(request: ExecutionRequest, explicit_skill_refs: list[str]) -> list[str]:
+    if not _looks_like_project_development_request(request):
+        return []
+    explicit = set(explicit_skill_refs)
+    return [skill for skill in _MENTE_PROJECT_SUPERPOWERS if skill not in explicit]
+
+
+def _looks_like_project_development_request(request: ExecutionRequest) -> bool:
+    haystack = " ".join(
+        str(value or "").strip().lower()
+        for value in (request.task_type, request.objective, request.user_request)
+    )
+    if not haystack:
+        return False
+    return any(keyword in haystack for keyword in _PROJECT_DEVELOPMENT_KEYWORDS)
+
+
+def _tool_policy_has_bridge_tool(request: ExecutionRequest, tool_name: str) -> bool:
+    tool_policy = request.tool_policy if isinstance(request.tool_policy, dict) else None
+    if tool_policy is None:
+        return False
+    bridge_tools = tool_policy.get("bridge_tools")
+    if not isinstance(bridge_tools, (list, tuple, set)):
+        return False
+    return tool_name in {
+        str(item).strip()
+        for item in bridge_tools
+        if str(item).strip()
+    }
 
 
 def _looks_like_chinese_identity_or_greeting_request(user_request: str | None) -> bool:

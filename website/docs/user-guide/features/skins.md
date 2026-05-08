@@ -1,12 +1,12 @@
 ---
 sidebar_position: 10
 title: "Skins & Themes"
-description: "Customize the Hermes CLI with built-in and user-defined skins"
+description: "Customize the Mente CLI with built-in and user-defined skins"
 ---
 
 # Skins & Themes
 
-Skins control the **visual presentation** of the Hermes CLI: banner colors, spinner faces and verbs, response-box labels, branding text, and the tool activity prefix.
+Skins control the **visual presentation** of the Mente CLI: banner colors, spinner faces and verbs, response-box labels, branding text, and the tool activity prefix.
 
 Conversational style and visual style are separate concepts:
 
@@ -32,12 +32,12 @@ display:
 
 | Skin | Description | Agent branding | Visual character |
 |------|-------------|----------------|------------------|
-| `default` | Classic Hermes — gold and kawaii | `Hermes Agent` | Warm gold borders, cornsilk text, kawaii faces in spinners. The familiar caduceus banner. Clean and inviting. |
+| `default` | Classic Mente — gold and kawaii | `Mente` | Warm gold borders, cornsilk text, kawaii faces in spinners. The familiar caduceus banner. Clean and inviting. |
 | `ares` | War-god theme — crimson and bronze | `Ares Agent` | Deep crimson borders with bronze accents. Aggressive spinner verbs ("forging", "marching", "tempering steel"). Custom sword-and-shield ASCII art banner. |
-| `mono` | Monochrome — clean grayscale | `Hermes Agent` | All grays — no color. Borders are `#555555`, text is `#c9d1d9`. Ideal for minimal terminal setups or screen recordings. |
-| `slate` | Cool blue — developer-focused | `Hermes Agent` | Royal blue borders (`#4169e1`), soft blue text. Calm and professional. No custom spinner — uses default faces. |
-| `daylight` | Light theme for bright terminals with dark text and cool blue accents | `Hermes Agent` | Designed for white or bright terminals. Dark slate text with blue borders, pale status surfaces, and a light completion menu that stays readable in light terminal profiles. |
-| `warm-lightmode` | Warm brown/gold text for light terminal backgrounds | `Hermes Agent` | Warm parchment tones for light terminals. Dark brown text with saddle-brown accents, cream-colored status surfaces. An earthy alternative to the cooler daylight theme. |
+| `mono` | Monochrome — clean grayscale | `Mente` | All grays — no color. Borders are `#555555`, text is `#c9d1d9`. Ideal for minimal terminal setups or screen recordings. |
+| `slate` | Cool blue — developer-focused | `Mente` | Royal blue borders (`#4169e1`), soft blue text. Calm and professional. No custom spinner — uses default faces. |
+| `daylight` | Light theme for bright terminals with dark text and cool blue accents | `Mente` | Designed for white or bright terminals. Dark slate text with blue borders, pale status surfaces, and a light completion menu that stays readable in light terminal profiles. |
+| `warm-lightmode` | Warm brown/gold text for light terminal backgrounds | `Mente` | Warm parchment tones for light terminals. Dark brown text with saddle-brown accents, cream-colored status surfaces. An earthy alternative to the cooler daylight theme. |
 | `poseidon` | Ocean-god theme — deep blue and seafoam | `Poseidon Agent` | Deep blue to seafoam gradient. Ocean-themed spinners ("charting currents", "sounding the depth"). Trident ASCII art banner. |
 | `sisyphus` | Sisyphean theme — austere grayscale with persistence | `Sisyphus Agent` | Light grays with stark contrast. Boulder-themed spinners ("pushing uphill", "resetting the boulder", "enduring the loop"). Boulder-and-hill ASCII art banner. |
 | `charizard` | Volcanic theme — burnt orange and ember | `Charizard Agent` | Warm burnt orange to ember gradient. Fire-themed spinners ("banking into the draft", "measuring burn"). Dragon-silhouette ASCII art banner. |
@@ -91,8 +91,8 @@ Text strings used throughout the CLI interface.
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `agent_name` | Name shown in banner title and status display | `Hermes Agent` |
-| `welcome` | Welcome message shown at CLI startup | `Welcome to Hermes Agent! Type your message or /help for commands.` |
+| `agent_name` | Name shown in banner title and status display | `Mente` |
+| `welcome` | Welcome message shown at CLI startup | `Welcome to Mente! Type your message or /help for commands.` |
 | `goodbye` | Message shown on exit | `Goodbye! ⚕` |
 | `response_label` | Label on the response box header | ` ⚕ Hermes ` |
 | `prompt_symbol` | Symbol before the user input prompt | `❯ ` |

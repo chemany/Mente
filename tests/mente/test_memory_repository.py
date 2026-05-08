@@ -1,5 +1,6 @@
 from mente.memory.models import MemoryRecord
 from mente.memory.repository import InMemoryMemoryRepository, SQLiteMemoryRepository
+import sqlite3
 
 
 def test_memory_repository_round_trip():
@@ -326,6 +327,44 @@ def test_sqlite_memory_repository_find_active_exact_matches_by_fact_key(tmp_path
 
     assert row is not None
     assert row.memory_id == "mem_1"
+
+
+def test_sqlite_memory_repository_migrates_legacy_table_before_creating_new_indexes(
+    tmp_path,
+):
+    db_path = tmp_path / "memory.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE mente_memories (
+            memory_id TEXT PRIMARY KEY,
+            session_id TEXT,
+            task_id TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            source TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            fact TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            score REAL NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX idx_mente_memories_scope_lookup
+        ON mente_memories(scope, session_id, task_type, score DESC, created_at DESC, memory_id DESC);
+        CREATE INDEX idx_mente_memories_source
+        ON mente_memories(source, scope, score DESC, created_at DESC, memory_id DESC);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SQLiteMemoryRepository(db_path=db_path)
+    columns = {
+        row[1]
+        for row in repo._conn.execute("PRAGMA table_info(mente_memories)").fetchall()
+    }
+
+    assert {"fact_key", "slot_key", "active", "superseded_by_memory_id"} <= columns
 
 
 def test_in_memory_memory_repository_save_resolved_fact_returns_existing_duplicate():

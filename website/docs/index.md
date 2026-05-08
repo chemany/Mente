@@ -1,13 +1,13 @@
 ---
 slug: /
 sidebar_position: 0
-title: "Hermes Agent Documentation"
+title: "Mente Documentation"
 description: "The self-improving AI agent built by Nous Research. A built-in learning loop that creates skills from experience, improves them during use, and remembers across sessions."
 hide_table_of_contents: true
 displayed_sidebar: docs
 ---
 
-# Hermes Agent
+# Mente
 
 The self-improving AI agent built by [Nous Research](https://nousresearch.com). The only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, and builds a deepening model of who you are across sessions.
 
@@ -16,7 +16,7 @@ The self-improving AI agent built by [Nous Research](https://nousresearch.com). 
   <a href="https://github.com/NousResearch/hermes-agent" style={{display: 'inline-block', padding: '0.6rem 1.2rem', border: '1px solid rgba(255,215,0,0.2)', borderRadius: '8px', textDecoration: 'none'}}>View on GitHub</a>
 </div>
 
-## What is Hermes Agent?
+## What is Mente?
 
 It's not a coding copilot tethered to an IDE or a chatbot wrapper around a single API. It's an **autonomous agent** that gets more capable the longer it runs. It lives wherever you put it — a $5 VPS, a GPU cluster, or serverless infrastructure (Daytona, Modal) that costs nearly nothing when idle. Talk to it from Telegram while it works on a cloud VM you never SSH into yourself. It's not tied to your laptop.
 
@@ -32,14 +32,14 @@ It's not a coding copilot tethered to an IDE or a chatbot wrapper around a singl
 | 🔧 **[Tools & Toolsets](/user-guide/features/tools)** | 47 built-in tools and how to configure them |
 | 🧠 **[Memory System](/user-guide/features/memory)** | Persistent memory that grows across sessions |
 | 📚 **[Skills System](/user-guide/features/skills)** | Procedural memory the agent creates and reuses |
-| 🔌 **[MCP Integration](/user-guide/features/mcp)** | Connect to MCP servers, filter their tools, and extend Hermes safely |
-| 🧭 **[Use MCP with Hermes](/guides/use-mcp-with-hermes)** | Practical MCP setup patterns, examples, and tutorials |
+| 🔌 **[MCP Integration](/user-guide/features/mcp)** | Connect to MCP servers, filter their tools, and extend Mente safely |
+| 🧭 **[Use MCP with Mente](/guides/use-mcp-with-hermes)** | Practical MCP setup patterns, examples, and tutorials |
 | 🎙️ **[Voice Mode](/user-guide/features/voice-mode)** | Real-time voice interaction in CLI, Telegram, Discord, and Discord VC |
-| 🗣️ **[Use Voice Mode with Hermes](/guides/use-voice-mode-with-hermes)** | Hands-on setup and usage patterns for Hermes voice workflows |
-| 🎭 **[Personality & SOUL.md](/user-guide/features/personality)** | Define Hermes' default voice with a global SOUL.md |
+| 🗣️ **[Use Voice Mode with Mente](/guides/use-voice-mode-with-hermes)** | Hands-on setup and usage patterns for Mente voice workflows |
+| 🎭 **[Personality & SOUL.md](/user-guide/features/personality)** | Define Mente's default voice with a global SOUL.md |
 | 📄 **[Context Files](/user-guide/features/context-files)** | Project context files that shape every conversation |
 | 🔒 **[Security](/user-guide/security)** | Command approval, authorization, container isolation |
-| 💡 **[Tips & Best Practices](/guides/tips)** | Quick wins to get the most out of Hermes |
+| 💡 **[Tips & Best Practices](/guides/tips)** | Quick wins to get the most out of Mente |
 | 🏗️ **[Architecture](/developer-guide/architecture)** | How it works under the hood |
 | ❓ **[FAQ & Troubleshooting](/reference/faq)** | Common questions and solutions |
 

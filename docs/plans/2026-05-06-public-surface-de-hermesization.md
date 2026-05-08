@@ -1,6 +1,6 @@
 # Public Surface De-Hermesization Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Remove remaining public-facing Hermes / NousResearch branding from the repo surface and replace it with Mente-branded descriptions, titles, and links.
 

@@ -25,12 +25,11 @@ from hermes_cli.config import (
     get_env_value,
     get_hermes_home,
     is_managed,
-    load_release_install_manifest,
     managed_error,
     read_raw_config,
     save_env_value,
 )
-from kernel.codex.release.runtime import expected_vendored_runtime_binary_path
+from hermes_cli.runtime_override import resolve_source_checkout_runtime_override
 # display_hermes_home is imported lazily at call sites to avoid ImportError
 # when hermes_constants is cached from a pre-update version during `hermes update`.
 from hermes_cli.setup import (
@@ -1515,22 +1514,6 @@ def _hermes_home_for_target_user(target_home_dir: str) -> str:
     return str(current_hermes)
 
 
-def _resolve_source_checkout_runtime_override() -> str | None:
-    """Return an explicit runtime override for developer/source checkouts only."""
-    release_install_manifest = load_release_install_manifest(PROJECT_ROOT)
-    if isinstance(release_install_manifest, dict) and release_install_manifest.get("install_mode") == "release":
-        return None
-
-    expected_runtime = expected_vendored_runtime_binary_path(PROJECT_ROOT)
-    if expected_runtime.exists():
-        return None
-
-    resolved_codex = shutil.which("codex")
-    if not resolved_codex:
-        return None
-    return str(Path(resolved_codex).expanduser())
-
-
 def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) -> str:
     python_path = get_python_path()
     working_dir = str(PROJECT_ROOT)
@@ -1555,7 +1538,7 @@ def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) 
     # (#8202). 30s of headroom covers the worst case we've observed.
     _drain_timeout = int(_get_restart_drain_timeout() or 0)
     restart_timeout = max(60, _drain_timeout) + 30
-    runtime_override = _resolve_source_checkout_runtime_override()
+    runtime_override = resolve_source_checkout_runtime_override(PROJECT_ROOT)
 
     if system:
         username, group_name, home_dir = _system_service_identity(run_as_user)
@@ -1604,7 +1587,7 @@ Environment="HERMES_GATEWAY_EXECUTOR=mente"
 Environment="HERMES_API_SERVER_EXECUTOR=mente"
 Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"
 Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"
-Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway"
+Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway,tui,oneshot"
 {runtime_override_env}Restart=on-failure
 RestartSec=30
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}
@@ -1647,7 +1630,7 @@ Environment="HERMES_GATEWAY_EXECUTOR=mente"
 Environment="HERMES_API_SERVER_EXECUTOR=mente"
 Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"
 Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"
-Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway"
+Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway,tui,oneshot"
 {runtime_override_env}Restart=on-failure
 RestartSec=30
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}

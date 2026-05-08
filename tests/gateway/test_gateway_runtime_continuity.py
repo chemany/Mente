@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -239,3 +240,29 @@ def test_record_gateway_runtime_continuity_result_leaves_missing_start_unbound()
 
     session_store.bind_runtime_continuity.assert_not_called()
     session_store.invalidate_runtime_continuity.assert_not_called()
+
+
+def test_record_gateway_runtime_continuity_result_logs_diagnostics(caplog):
+    session_store = MagicMock()
+
+    with caplog.at_level(logging.INFO, logger="gateway.run"):
+        gateway_run._record_gateway_runtime_continuity_result(
+            session_store=session_store,
+            session_id="sess-1",
+            task_id="task-1",
+            previous_continuity_payload=None,
+            execution_session_payload={
+                "mode": "start",
+                "continuity_id": "thread-123",
+                "continuity_status": "started",
+                "fallback_reason": None,
+                "requested_mode": "start",
+            },
+        )
+
+    assert any(
+        "continuity_status=started" in record.message
+        and "continuity_id=thread-123" in record.message
+        and "session_id=sess-1" in record.message
+        for record in caplog.records
+    )

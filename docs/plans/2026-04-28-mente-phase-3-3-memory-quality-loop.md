@@ -1,6 +1,6 @@
 # Phase 3.3: Memory Quality Loop Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Make Mente memory observable and replay-evaluable by recording why memories were injected, what was promoted, and how a replay run differs with memory enabled versus disabled.
 
@@ -422,4 +422,3 @@ Expected:
 - all targeted Phase 3 memory tests pass
 - replay comparison tests pass
 - compileall exits `0`
-

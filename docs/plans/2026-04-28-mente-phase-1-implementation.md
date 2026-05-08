@@ -1,6 +1,6 @@
 # Mente Phase 1 Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Build the first production slice of `Mente` inside a Hermes fork by introducing a schema-driven task runtime and a `CodexExecutor`, then wire one-shot CLI execution through the new path.
 

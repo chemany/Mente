@@ -17,7 +17,7 @@ Karpathy's LLM Wiki: build/query interlinked markdown KB.
 | Source | Bundled (installed by default) |
 | Path | `skills/research/llm-wiki` |
 | Version | `2.1.0` |
-| Author | Hermes Agent |
+| Author | Mente |
 | License | MIT |
 | Tags | `wiki`, `knowledge-base`, `research`, `notes`, `markdown`, `rag-alternative` |
 | Related skills | [`obsidian`](/user-guide/skills/bundled/note-taking/note-taking-obsidian), [`arxiv`](/user-guide/skills/bundled/research/research-arxiv) |
@@ -25,7 +25,7 @@ Karpathy's LLM Wiki: build/query interlinked markdown KB.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Mente loads when this skill is triggered. This is what the Mente agent sees as instructions when the skill is active.
 :::
 
 # Karpathy's LLM Wiki

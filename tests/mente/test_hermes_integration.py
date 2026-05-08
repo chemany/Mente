@@ -412,7 +412,8 @@ def test_second_run_receives_first_run_memory(monkeypatch, tmp_path):
     )
 
     assert len(seen_requests) == 2
-    assert "Memory: User prefers concise replies." in seen_requests[1].memory_facts
+    assert "Memory: User prefers concise replies." not in seen_requests[1].memory_facts
+    assert "mente_memory_query" in seen_requests[1].tool_policy["bridge_tools"]
 
 
 def test_run_gateway_task_threads_continuity_controls_into_task(monkeypatch, tmp_path):
@@ -522,7 +523,7 @@ def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_pat
         "mente_gateway_gatewayfirst:memory:0"
     ]
     assert second_result.metadata["memory_policy"]["policy_id"] == "gateway:conversation"
-    assert second_result.metadata["memory_context"]["injected_count"] == 1
+    assert second_result.metadata["memory_context"]["injected_count"] == 0
     assert second_task is not None
     assert second_task.metadata["memory_policy"]["policy_id"] == "gateway:conversation"
     assert second_task.metadata["memory_context"]["selected"][0]["memory_id"] == (

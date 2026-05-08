@@ -2,7 +2,7 @@
 name: hermes-agent-skill-authoring
 description: "Author in-repo SKILL.md: frontmatter, validator, structure."
 version: 1.0.0
-author: Hermes Agent
+author: Mente
 license: MIT
 metadata:
   hermes:
@@ -10,7 +10,7 @@ metadata:
     related_skills: [writing-plans, requesting-code-review]
 ---
 
-# Authoring Hermes-Agent Skills (in-repo)
+# Authoring Mente Skills (in-repo)
 
 ## Overview
 
@@ -43,7 +43,7 @@ Peer-matched shape used by every skill under `skills/software-development/`:
 name: my-skill-name               # lowercase, hyphens, ≤64 chars (MAX_NAME_LENGTH)
 description: Use when <trigger>. <one-line behavior>.
 version: 1.0.0
-author: Hermes Agent
+author: Mente
 license: MIT
 metadata:
   hermes:
@@ -77,7 +77,7 @@ One or two paragraphs: what and why.
 ## <Topic sections specific to the skill>
 - Quick-reference tables are common
 - Code blocks with exact commands
-- Hermes-specific recipes (tests via scripts/run_tests.sh, ui-tui paths, etc.)
+- Mente-specific recipes (tests via scripts/run_tests.sh, ui-tui paths, etc.)
 
 ## Common Pitfalls
 Numbered list of mistakes and their fixes.
