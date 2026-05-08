@@ -128,6 +128,12 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
         lines.append(
             "- Do not rediscover a workflow that is already covered by the provided skill refs."
         )
+        lines.append(
+            "- Read the referenced skill instructions before broad exploration, then execute the skill workflow as directly as possible."
+        )
+        lines.append(
+            "- If the skill workflow is blocked by a real gap or failure, diagnose the concrete blocker, fix the concrete blocker, and then continue the skill workflow."
+        )
     else:
         lines.append(
             "- If no skill refs are provided and a clearly relevant bundled skill likely exists, do at most one narrow skill check before falling back to general exploration."

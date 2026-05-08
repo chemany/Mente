@@ -735,6 +735,9 @@ def test_render_execution_prompt_prioritizes_explicit_skill_refs():
     assert "Skill Policy:" in prompt
     assert "Use the provided skill refs first" in prompt
     assert "do not do broad workspace exploration before checking them" in prompt.lower()
+    assert "Read the referenced skill instructions before broad exploration" in prompt
+    assert "If the skill workflow is blocked by a real gap or failure" in prompt
+    assert "fix the concrete blocker" in prompt
 
 
 def test_render_execution_prompt_adds_direct_workflow_policy_for_content_publishing():
