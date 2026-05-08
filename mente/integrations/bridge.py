@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import uuid
 from typing import Any
 
@@ -37,10 +38,84 @@ from mente.task_core.models import (
 )
 from mente.task_core.repository import SQLiteTaskRepository
 
+_WECHAT_PUBLISHER_SKILL_REF = "media/wechat-publisher"
+_IMAGEGEN_SKILL_REF = "imagegen"
+_CONTENT_PUBLISHING_TASK_PROFILE = "content_publishing"
+_WECHAT_PUBLISH_HINTS: tuple[str, ...] = (
+    "wechat",
+    "微信",
+    "公众号",
+    "草稿",
+    "publish",
+    "发布",
+)
+_IMAGEGEN_HINTS: tuple[str, ...] = (
+    "配图",
+    "插图",
+    "封面",
+    "海报",
+    "图片",
+    "image",
+)
+
 
 def _resolve_workspace(workspace: str | None) -> str:
     """Resolve the workspace used for a bridged task."""
     return workspace or os.getenv("TERMINAL_CWD") or os.getcwd()
+
+
+def _normalize_text_haystack(*parts: str | None) -> str:
+    return " ".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+
+
+def _infer_gateway_skill_refs(*, message: str, channel_prompt: str | None = None) -> list[str]:
+    """Infer narrow skill refs for gateway-authored content workflows."""
+
+    haystack = _normalize_text_haystack(message, channel_prompt)
+    inferred: list[str] = []
+    if any(hint in haystack for hint in _WECHAT_PUBLISH_HINTS):
+        inferred.append(_WECHAT_PUBLISHER_SKILL_REF)
+    if any(hint in haystack for hint in _IMAGEGEN_HINTS):
+        inferred.append(_IMAGEGEN_SKILL_REF)
+    return inferred
+
+
+def _resolve_gateway_task_profile(skill_refs: list[str]) -> str | None:
+    """Return a narrow execution profile for gateway requests when recognized."""
+
+    if _WECHAT_PUBLISHER_SKILL_REF in skill_refs:
+        return _CONTENT_PUBLISHING_TASK_PROFILE
+    return None
+
+
+def _resolve_gateway_workspace(
+    *,
+    workspace: str | None,
+    message: str,
+    channel_prompt: str | None,
+    skill_refs: list[str],
+) -> str:
+    """Prefer the active repo cwd for scoped content tasks over a broad home fallback."""
+
+    resolved_workspace = _resolve_workspace(workspace)
+    task_profile = _resolve_gateway_task_profile(skill_refs)
+    if task_profile != _CONTENT_PUBLISHING_TASK_PROFILE:
+        return resolved_workspace
+
+    explicit_workspace = str(workspace or "").strip()
+    if explicit_workspace and explicit_workspace not in {".", "auto", "cwd"}:
+        return resolved_workspace
+
+    current_cwd = os.getcwd()
+    home_dir = str(Path.home())
+    current_cwd_path = Path(current_cwd)
+    if resolved_workspace in {"", ".", "auto", "cwd"}:
+        return current_cwd
+    if resolved_workspace == home_dir and current_cwd and current_cwd != home_dir:
+        return current_cwd
+    if current_cwd and current_cwd != resolved_workspace and (current_cwd_path / ".git").exists():
+        return current_cwd
+    return resolved_workspace
 
 
 def _resolve_tool_policy(*, source: str, task_type: str) -> dict[str, object]:
@@ -335,7 +410,13 @@ def build_gateway_task(
     replay_history_in_memory_facts: bool = True,
 ) -> Task:
     """Create a normalized Mente task for a gateway turn."""
-    resolved_workspace = _resolve_workspace(workspace)
+    inferred_skill_refs = _infer_gateway_skill_refs(message=message, channel_prompt=channel_prompt)
+    resolved_workspace = _resolve_gateway_workspace(
+        workspace=workspace,
+        message=message,
+        channel_prompt=channel_prompt,
+        skill_refs=inferred_skill_refs,
+    )
     memory_facts: list[str] = []
     normalized_execution_mode, normalized_execution_session = normalize_api_execution_continuity(
         execution_mode=execution_mode,
@@ -363,8 +444,26 @@ def build_gateway_task(
         "chat_type": getattr(source, "chat_type", None),
         "thread_id": getattr(source, "thread_id", None),
     }
+    task_profile = _resolve_gateway_task_profile(inferred_skill_refs)
+    if task_profile is not None:
+        metadata["task_profile"] = task_profile
     if fallback_history_fact:
         metadata["fallback_history_fact"] = fallback_history_fact
+
+    constraints: list[str] = []
+    acceptance_criteria = [
+        "Respond directly to the latest user message.",
+    ]
+    if task_profile == _CONTENT_PUBLISHING_TASK_PROFILE:
+        constraints.append(
+            "Prefer the active workspace and provided conversation context; avoid broad scans outside the workspace unless the user explicitly asks."
+        )
+        acceptance_criteria.append(
+            "If the user asked for a WeChat draft workflow, create the requested article/assets in the workspace and use mente_wechat_publish_draft to publish the draft."
+        )
+        acceptance_criteria.append(
+            "Use the provided skills directly instead of rediscovering the workflow."
+        )
 
     return Task(
         task_id=f"mente_gateway_{uuid.uuid4().hex}",
@@ -374,9 +473,9 @@ def build_gateway_task(
         user_request=message,
         workspace=resolved_workspace,
         memory_facts=memory_facts,
-        acceptance_criteria=[
-            "Respond directly to the latest user message.",
-        ],
+        skill_refs=inferred_skill_refs,
+        constraints=constraints,
+        acceptance_criteria=acceptance_criteria,
         execution_mode=normalized_execution_mode,
         execution_session=normalized_execution_session,
         metadata=metadata,

@@ -13,7 +13,10 @@ from kernel.codex.session.protocol import KernelSessionMode, KernelSessionReques
 from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_runtime_home
 from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
-from mente.executors.runtime_config import RuntimeConfig
+from mente.executors.runtime_config import (
+    MENTE_CONTENT_BASE_INSTRUCTIONS,
+    RuntimeConfig,
+)
 from mente.executors.codex import CodexExecutor
 from mente.feature_flags import sessionful_execution_sources
 from mente.memory.models import MemoryRecord
@@ -449,6 +452,38 @@ def test_codex_executor_fails_closed_for_disallowed_continuity_source(monkeypatc
         "continuity_status": "fallback_stateless",
         "fallback_reason": "source_not_allowed",
     }
+
+
+def test_codex_executor_uses_content_runtime_profile_for_wechat_publish_tasks(
+    monkeypatch, tmp_path
+):
+    monkeypatch.delenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", raising=False)
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            captured["runtime_config"] = runtime_config
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Draft and publish a WeChat article.",
+        user_request="帮我写公众号文案并发布草稿",
+        workspace=str(tmp_path),
+        skill_refs=["media/wechat-publisher", "imagegen"],
+        tool_policy={"session_capable": True},
+        metadata={"source": "gateway", "task_profile": "content_publishing"},
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    overrides = captured["runtime_config"].to_codex_overrides()
+    assert f"base_instructions={json.dumps(MENTE_CONTENT_BASE_INSTRUCTIONS, ensure_ascii=True)}" in overrides
+    assert "agents.job_max_runtime_seconds=300" in overrides
 
 
 def test_codex_executor_marks_missing_thread_id_when_session_start_returns_none(

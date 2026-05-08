@@ -112,6 +112,43 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     assert "timestamp" not in history_fact
 
 
+def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_workspace(
+    monkeypatch, tmp_path
+):
+    project_root = tmp_path / "Mente"
+    fake_home = tmp_path / "home"
+    project_root.mkdir()
+    fake_home.mkdir()
+    (project_root / ".git").mkdir()
+    monkeypatch.chdir(project_root)
+    monkeypatch.setenv("TERMINAL_CWD", str(fake_home))
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+    )
+
+    assert task.workspace == str(project_root)
+    assert task.skill_refs == ["media/wechat-publisher", "imagegen"]
+    assert task.metadata["task_profile"] == "content_publishing"
+    assert any(
+        "use mente_wechat_publish_draft" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+
+
 def test_build_api_server_task_sets_api_server_source(tmp_path):
     task = build_api_server_task(
         user_message="Remember this preference",

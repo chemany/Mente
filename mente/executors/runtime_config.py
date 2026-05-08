@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from kernel.codex.config import load_private_codex_config, load_private_model_settings
+from mente.task_core.models import ExecutionRequest
 from mente.executors.runtime_home import resolve_runtime_home
 
 MENTE_DEFAULT_BASE_INSTRUCTIONS = (
@@ -16,6 +18,16 @@ MENTE_DEFAULT_BASE_INSTRUCTIONS = (
     "Do not overwrite user changes you did not make or use destructive git/file operations unless explicitly requested. "
     "Keep responses concise, action-oriented, and focused on the task result."
 )
+MENTE_CONTENT_BASE_INSTRUCTIONS = (
+    "You are Mente's content and publishing agent. "
+    "Gather only the minimum repository or workspace context needed to complete the requested draft, asset, or publication workflow. "
+    "Prefer direct delivery over exploratory workspace scanning. "
+    "When a publishing tool or content skill is already provided, use it directly instead of rediscovering the workflow. "
+    "Keep responses concise, action-oriented, and focused on the requested deliverable."
+)
+_CONTENT_PUBLISHING_TASK_PROFILE = "content_publishing"
+_WECHAT_PUBLISHER_SKILL_REF = "media/wechat-publisher"
+_CONTENT_PUBLISHING_MAX_RUNTIME_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -65,6 +77,42 @@ def resolve_runtime_config(workspace: str | Path) -> RuntimeConfig:
         ignore_rules=ignore_rules,
         codex_config=merged,
         subprocess_env=subprocess_env,
+    )
+
+
+def adapt_runtime_config_for_request(
+    runtime_config: RuntimeConfig,
+    request: ExecutionRequest,
+) -> RuntimeConfig:
+    """Apply lightweight request-scoped runtime hints without mutating base config."""
+
+    if not _is_content_publishing_request(request):
+        return runtime_config
+
+    codex_config = deepcopy(runtime_config.codex_config)
+    existing_base_instructions = codex_config.get("base_instructions")
+    if (
+        not isinstance(existing_base_instructions, str)
+        or not existing_base_instructions.strip()
+        or existing_base_instructions == MENTE_DEFAULT_BASE_INSTRUCTIONS
+    ):
+        codex_config["base_instructions"] = MENTE_CONTENT_BASE_INSTRUCTIONS
+
+    agents_config = codex_config.get("agents")
+    if not isinstance(agents_config, dict):
+        agents_config = {}
+        codex_config["agents"] = agents_config
+    agents_config.setdefault(
+        "job_max_runtime_seconds",
+        _CONTENT_PUBLISHING_MAX_RUNTIME_SECONDS,
+    )
+
+    return RuntimeConfig(
+        runtime_home=runtime_config.runtime_home,
+        ignore_user_config=runtime_config.ignore_user_config,
+        ignore_rules=runtime_config.ignore_rules,
+        codex_config=codex_config,
+        subprocess_env=dict(runtime_config.subprocess_env),
     )
 
 
@@ -216,6 +264,15 @@ def _flatten_value(prefix: str, value: object) -> list[str]:
     if isinstance(value, (str, bool, int, float)):
         return [_format_config_override(prefix, value)]
     return []
+
+
+def _is_content_publishing_request(request: ExecutionRequest) -> bool:
+    task_profile = str(request.metadata.get("task_profile") or "").strip()
+    if task_profile == _CONTENT_PUBLISHING_TASK_PROFILE:
+        return True
+    return _WECHAT_PUBLISHER_SKILL_REF in {
+        str(item).strip() for item in (request.skill_refs or []) if str(item).strip()
+    }
 
 
 def _format_config_override(key: str, value: object) -> str:

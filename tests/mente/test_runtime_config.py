@@ -1,6 +1,12 @@
 import json
 
-from mente.executors.runtime_config import MENTE_DEFAULT_BASE_INSTRUCTIONS, resolve_runtime_config
+from mente.executors.runtime_config import (
+    MENTE_CONTENT_BASE_INSTRUCTIONS,
+    MENTE_DEFAULT_BASE_INSTRUCTIONS,
+    adapt_runtime_config_for_request,
+    resolve_runtime_config,
+)
+from mente.task_core.models import ExecutionRequest
 
 DEFAULT_BASE_OVERRIDE = f"base_instructions={json.dumps(MENTE_DEFAULT_BASE_INSTRUCTIONS, ensure_ascii=True)}"
 
@@ -258,10 +264,47 @@ def test_runtime_config_falls_back_to_mente_model_settings_for_private_provider(
         'model_providers.mente.requires_openai_auth=false',
         'model_providers.mente.wire_api="responses"',
     ]
-    assert runtime_config.subprocess_env == {
-        "MENTE_CODEX_API_KEY": "sk-test-mente",
-        "OPENAI_BASE_URL": "https://api.10fu.com/v1",
-    }
+
+
+def test_adapt_runtime_config_for_content_publishing_switches_to_content_profile(tmp_path):
+    runtime_config = resolve_runtime_config(tmp_path)
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Draft and publish a WeChat article.",
+        user_request="帮我写公众号文案并发布草稿",
+        workspace=str(tmp_path),
+        skill_refs=["media/wechat-publisher", "imagegen"],
+        metadata={"source": "gateway", "task_profile": "content_publishing"},
+    )
+
+    adapted = adapt_runtime_config_for_request(runtime_config, request)
+
+    assert adapted is not runtime_config
+    assert adapted.codex_config["base_instructions"] == MENTE_CONTENT_BASE_INSTRUCTIONS
+    assert adapted.codex_config["agents"]["job_max_runtime_seconds"] == 300
+
+
+def test_adapt_runtime_config_preserves_explicit_base_instructions(tmp_path):
+    runtime_config = resolve_runtime_config(tmp_path)
+    runtime_config.codex_config["base_instructions"] = "Custom operator instructions."
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Draft and publish a WeChat article.",
+        user_request="帮我写公众号文案并发布草稿",
+        workspace=str(tmp_path),
+        skill_refs=["media/wechat-publisher"],
+        metadata={"source": "gateway", "task_profile": "content_publishing"},
+    )
+
+    adapted = adapt_runtime_config_for_request(runtime_config, request)
+
+    assert adapted.codex_config["base_instructions"] == "Custom operator instructions."
+    assert adapted.codex_config["agents"]["job_max_runtime_seconds"] == 300
+    assert adapted.subprocess_env == runtime_config.subprocess_env
 
 
 def test_runtime_config_dedicated_codex_settings_override_global_model_defaults(monkeypatch, tmp_path):

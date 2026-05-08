@@ -25,7 +25,11 @@ from mente.executors.prompting import (
     render_execution_prompt,
 )
 from mente.executors.runtime_auth import write_private_runtime_auth
-from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
+from mente.executors.runtime_config import (
+    RuntimeConfig,
+    adapt_runtime_config_for_request,
+    resolve_runtime_config,
+)
 from mente.feature_flags import (
     is_sessionful_execution_enabled,
     sessionful_execution_sources,
@@ -96,7 +100,7 @@ class CodexExecutor(CodexKernelAdapter):
         runtime_config: RuntimeConfig | None = None,
     ) -> list[str]:
         """Build the bridge-owned vendored command for a request."""
-        resolved_runtime_config = runtime_config or self._resolve_runtime_config(request.workspace)
+        resolved_runtime_config = runtime_config or self._resolve_runtime_config_for_request(request)
         if config_overrides is not None:
             resolved_runtime_config = RuntimeConfig(
                 runtime_home=resolved_runtime_config.runtime_home,
@@ -147,7 +151,7 @@ class CodexExecutor(CodexKernelAdapter):
             },
             logger=logger,
         )
-        runtime_config = self._resolve_runtime_config(enriched_request.workspace)
+        runtime_config = self._resolve_runtime_config_for_request(enriched_request)
         runtime_config = augment_runtime_config_for_bridge_tools(
             runtime_config,
             enriched_request,
@@ -425,6 +429,14 @@ class CodexExecutor(CodexKernelAdapter):
         if self._runtime_config is not None:
             return self._runtime_config
         return self._runtime_config_resolver(workspace)
+
+    def _resolve_runtime_config_for_request(self, request: ExecutionRequest) -> RuntimeConfig:
+        """Resolve workspace config, then apply request-scoped runtime hints."""
+
+        return adapt_runtime_config_for_request(
+            self._resolve_runtime_config(request.workspace),
+            request,
+        )
 
     def _translate_kernel_result(
         self,
