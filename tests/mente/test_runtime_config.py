@@ -419,5 +419,7 @@ def test_default_runtime_base_instructions_stay_small_but_keep_engineering_guard
     assert "If relevant skills are provided" in MENTE_DEFAULT_BASE_INSTRUCTIONS
     assert "follow the skill workflow before improvising" in MENTE_DEFAULT_BASE_INSTRUCTIONS
     assert "diagnose the concrete blocker" in MENTE_DEFAULT_BASE_INSTRUCTIONS
+    assert "If skills specify scripts or commands" in MENTE_DEFAULT_BASE_INSTRUCTIONS
+    assert "run the most direct one first" in MENTE_DEFAULT_BASE_INSTRUCTIONS
     assert "Do not overwrite user changes" in MENTE_DEFAULT_BASE_INSTRUCTIONS
     assert "Keep responses concise" in MENTE_DEFAULT_BASE_INSTRUCTIONS

@@ -738,6 +738,8 @@ def test_render_execution_prompt_prioritizes_explicit_skill_refs():
     assert "Read the referenced skill instructions before broad exploration" in prompt
     assert "If the skill workflow is blocked by a real gap or failure" in prompt
     assert "fix the concrete blocker" in prompt
+    assert "If the skill documentation names concrete scripts or commands" in prompt
+    assert "run the most direct workflow entrypoint first" in prompt
 
 
 def test_render_execution_prompt_adds_direct_workflow_policy_for_content_publishing():
@@ -760,6 +762,7 @@ def test_render_execution_prompt_adds_direct_workflow_policy_for_content_publish
     assert "Do not read large numbers of repository files" in prompt
     assert "call mente_wechat_publish_draft to publish" in prompt
     assert "make reasonable defaults and continue" in prompt
+    assert "prefer running that entrypoint instead of manually reconstructing the workflow" in prompt
 
 
 def test_render_execution_prompt_uses_lightweight_skill_fallback_when_no_explicit_refs():

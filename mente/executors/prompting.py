@@ -132,6 +132,9 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
             "- Read the referenced skill instructions before broad exploration, then execute the skill workflow as directly as possible."
         )
         lines.append(
+            "- If the skill documentation names concrete scripts or commands, run the most direct workflow entrypoint first instead of manually reconstructing the workflow."
+        )
+        lines.append(
             "- If the skill workflow is blocked by a real gap or failure, diagnose the concrete blocker, fix the concrete blocker, and then continue the skill workflow."
         )
     else:
@@ -149,6 +152,9 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
         )
         lines.append(
             "- Draft the requested article and assets in the workspace, then call mente_wechat_publish_draft to publish."
+        )
+        lines.append(
+            "- When the provided skill already defines a concrete workflow entrypoint, prefer running that entrypoint instead of manually reconstructing the workflow."
         )
         lines.append(
             "- If key editorial details are unspecified, make reasonable defaults and continue instead of exploring broadly."
