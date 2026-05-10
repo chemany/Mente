@@ -34,6 +34,7 @@ MENTE_CONTENT_BASE_INSTRUCTIONS = (
 _CONTENT_PUBLISHING_TASK_PROFILE = "content_publishing"
 _WECHAT_PUBLISHER_SKILL_REF = "media/wechat-publisher"
 _CONTENT_PUBLISHING_MAX_RUNTIME_SECONDS = 300
+MENTE_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT = 160000
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,7 @@ def _apply_explicit_codex_runtime_settings(
     merged: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, str]]:
     if not merged:
-        return {"base_instructions": MENTE_DEFAULT_BASE_INSTRUCTIONS}, {}
+        return _ensure_default_runtime_defaults({}), {}
 
     resolved = dict(merged)
     subprocess_env: dict[str, str] = {}
@@ -154,10 +155,10 @@ def _apply_explicit_codex_runtime_settings(
         api_key = api_key.strip()
 
     if _has_explicit_codex_provider_config(resolved):
-        return _ensure_default_base_instructions(resolved), subprocess_env
+        return _ensure_default_runtime_defaults(resolved), subprocess_env
 
     if not any((base_url, api_key)):
-        return _ensure_default_base_instructions(resolved), subprocess_env
+        return _ensure_default_runtime_defaults(resolved), subprocess_env
 
     model_providers = resolved.get("model_providers")
     if not isinstance(model_providers, dict):
@@ -183,7 +184,7 @@ def _apply_explicit_codex_runtime_settings(
     if base_url:
         subprocess_env["OPENAI_BASE_URL"] = base_url
 
-    return _ensure_default_base_instructions(resolved), subprocess_env
+    return _ensure_default_runtime_defaults(resolved), subprocess_env
 
 
 def _apply_mente_model_runtime_fallback(
@@ -201,12 +202,12 @@ def _apply_mente_model_runtime_fallback(
         resolved["model"] = model_name
 
     if _has_explicit_codex_provider_config(resolved):
-        return _ensure_default_base_instructions(resolved), subprocess_env
+        return _ensure_default_runtime_defaults(resolved), subprocess_env
 
     base_url = mente_model_settings.get("base_url", "")
     api_key = mente_model_settings.get("api_key", "")
     if not base_url and not api_key:
-        return _ensure_default_base_instructions(resolved), subprocess_env
+        return _ensure_default_runtime_defaults(resolved), subprocess_env
 
     model_providers = resolved.get("model_providers")
     if not isinstance(model_providers, dict):
@@ -232,19 +233,22 @@ def _apply_mente_model_runtime_fallback(
     if base_url:
         subprocess_env["OPENAI_BASE_URL"] = base_url
 
-    return _ensure_default_base_instructions(resolved), subprocess_env
+    return _ensure_default_runtime_defaults(resolved), subprocess_env
 
 
 def _has_explicit_codex_provider_config(config: dict[str, object]) -> bool:
     return any(key in config for key in ("model_provider", "openai_base_url", "model_providers"))
 
 
-def _ensure_default_base_instructions(config: dict[str, object]) -> dict[str, object]:
+def _ensure_default_runtime_defaults(config: dict[str, object]) -> dict[str, object]:
     resolved = dict(config)
-    existing = resolved.get("base_instructions")
-    if isinstance(existing, str) and existing.strip():
-        return resolved
-    resolved["base_instructions"] = MENTE_DEFAULT_BASE_INSTRUCTIONS
+    existing_base_instructions = resolved.get("base_instructions")
+    if not (isinstance(existing_base_instructions, str) and existing_base_instructions.strip()):
+        resolved["base_instructions"] = MENTE_DEFAULT_BASE_INSTRUCTIONS
+
+    if not isinstance(resolved.get("model_auto_compact_token_limit"), int):
+        resolved["model_auto_compact_token_limit"] = MENTE_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT
+
     return resolved
 
 

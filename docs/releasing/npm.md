@@ -20,6 +20,8 @@ npm run release:check:npm
 npm pack --dry-run
 ```
 
+The packaged private runtime currently ships with a default `codex.model_auto_compact_token_limit` of `160000`. If you intentionally change that default in code, update the docs and verification steps in the same release.
+
 Optional GitHub-side preflight:
 
 1. Open `Actions` -> `npm-publish`.
@@ -57,3 +59,11 @@ Then test the real install path:
 npm install -g mente-agent
 mente --help
 ```
+
+Also verify the runtime-config docs still match the shipped default:
+
+- `README.md`
+- `README.zh.md`
+- `website/docs/user-guide/configuration.md`
+
+They should all describe the same default `codex.model_auto_compact_token_limit` value: `160000`.

@@ -73,6 +73,28 @@ Multiple references in a single value work: `url: "${HOST}:${PORT}"`. If a refer
 
 For AI provider setup (OpenRouter, Anthropic, Copilot, custom endpoints, self-hosted LLMs, fallback models, etc.), see [AI Providers](/integrations/providers).
 
+## Mente Private Codex Runtime
+
+Mente's private Codex-backed executor reads its own `codex:` block from Mente config layers and converts that into runtime overrides for the bundled Codex runtime.
+
+The current default is:
+
+```yaml
+codex:
+  model_auto_compact_token_limit: 160000
+```
+
+If you do not set this key yourself, Mente injects `160000` automatically. This makes long-running coding and gateway sessions compact earlier than the upstream model default.
+
+You only need to add the key when you want to override the shipped default:
+
+```yaml
+codex:
+  model_auto_compact_token_limit: 120000
+```
+
+This setting is separate from the classic `compression:` block documented below. `compression:` controls Hermes/Mente conversation summarization behavior, while `codex.model_auto_compact_token_limit` controls when the private Codex runtime decides a session is large enough to compact.
+
 ### Provider Timeouts
 
 You can set `providers.<id>.request_timeout_seconds` for a provider-wide request timeout, plus `providers.<id>.models.<model>.timeout_seconds` for a model-specific override. Applies to the primary turn client on every transport (OpenAI-wire, native Anthropic, Anthropic-compatible), the fallback chain, rebuilds after credential rotation, and (for OpenAI-wire) the per-request timeout kwarg — so the configured value wins over the legacy `HERMES_API_TIMEOUT` env var.

@@ -61,6 +61,13 @@ mente
 
 The npm package is intentionally **thin**. It publishes only the launcher and installer scripts, then bootstraps the full Mente runtime on first run. By default the bootstrapper installs from the repo's `main` branch, and you can force a tagged release with `MENTE_BOOTSTRAP_RELEASE=<tag> mente`. It does **not** publish your local `.env`, `auth.json`, `~/.mente`, `~/.hermes`, sessions, logs, or other machine-local state.
 
+The bootstrapped private Codex runtime now defaults `model_auto_compact_token_limit` to `160000` to keep long-running sessions compacting earlier and more predictably. If you need a different threshold, override it in your Mente config:
+
+```yaml
+codex:
+  model_auto_compact_token_limit: 120000
+```
+
 At the moment, the repository is **ready for npm publish but not yet live on the npm registry**. Until the first public npm release is published, use Option 1 above. Once the package is published, the `npm install -g mente-agent` flow becomes the primary one-line install path.
 
 Release operators can use the short npm runbook here: [docs/releasing/npm.md](docs/releasing/npm.md).

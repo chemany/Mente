@@ -64,6 +64,7 @@ As of May 7, 2026, the package release path in this repo is:
 - [ ] `npm run test:npm-installer` passes.
 - [ ] `npm run release:check:npm` passes.
 - [ ] `npm pack --dry-run` passes.
+- [ ] Runtime-config docs still match the shipped default `codex.model_auto_compact_token_limit` value (`160000`).
 - [ ] Your local branch is up to date with `origin/main`.
 - [ ] There is no accidental dirty diff you do not want to ship.
 

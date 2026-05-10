@@ -61,6 +61,13 @@ mente
 
 这个 npm 包刻意保持 **很薄**。它只发布 launcher 和 installer 脚本，第一次运行时再自动引导完整的 Mente runtime。默认会从仓库的 `main` 分支完成 bootstrap，你也可以通过 `MENTE_BOOTSTRAP_RELEASE=<tag> mente` 强制安装某个发布版本。它 **不会** 把你本机的 `.env`、`auth.json`、`~/.mente`、`~/.hermes`、sessions、logs 或其它机器私有状态打进包里。
 
+现在，引导出来的私有 Codex runtime 默认会把 `model_auto_compact_token_limit` 设为 `160000`，让长会话更早、更稳定地触发压缩。如果你要手动覆盖这个阈值，可以在 Mente 配置里写：
+
+```yaml
+codex:
+  model_auto_compact_token_limit: 120000
+```
+
 目前仓库里的 npm 包已经 **具备可发布状态，但还没有真正发布到 npm registry**。在首个公开 npm 版本上线前，请先使用上面的方案 1。等包真正发布后，`npm install -g mente-agent` 才是对外的一键安装主路径。
 
 如果你是发布操作人，最短 npm 发布说明见：[docs/releasing/npm.md](docs/releasing/npm.md)。

@@ -15,6 +15,7 @@ from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
 from mente.executors.runtime_config import (
     MENTE_CONTENT_BASE_INSTRUCTIONS,
+    MENTE_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
     RuntimeConfig,
 )
 from mente.executors.codex import CodexExecutor
@@ -483,6 +484,10 @@ def test_codex_executor_uses_content_runtime_profile_for_wechat_publish_tasks(
     assert result.status == "success"
     overrides = captured["runtime_config"].to_codex_overrides()
     assert f"base_instructions={json.dumps(MENTE_CONTENT_BASE_INSTRUCTIONS, ensure_ascii=True)}" in overrides
+    assert (
+        f"model_auto_compact_token_limit={MENTE_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT}"
+        in overrides
+    )
     assert "agents.job_max_runtime_seconds=300" in overrides
 
 
@@ -760,9 +765,12 @@ def test_render_execution_prompt_adds_direct_workflow_policy_for_content_publish
     assert "Workflow Policy:" in prompt
     assert "Use the provided publishing skill and bridge tool path directly." in prompt
     assert "Do not read large numbers of repository files" in prompt
-    assert "call mente_wechat_publish_draft to publish" in prompt
+    assert "call mcp__mente__mente_wechat_publish_draft to publish" in prompt
+    assert "mcp__mente__mente_wechat_publish_draft is the primary publish entrypoint" in prompt
+    assert "server mente / tool mente_wechat_publish_draft" in prompt
+    assert "Treat create-article.js or publish.js as optional reference helpers only" in prompt
+    assert "stop exploring and execute the managed flow immediately" in prompt
     assert "make reasonable defaults and continue" in prompt
-    assert "prefer running that entrypoint instead of manually reconstructing the workflow" in prompt
 
 
 def test_render_execution_prompt_uses_lightweight_skill_fallback_when_no_explicit_refs():
