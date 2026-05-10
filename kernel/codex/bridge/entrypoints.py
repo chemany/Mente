@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import logging
+import os
 from pathlib import Path
+import signal
 import subprocess
 import threading
 import time
@@ -26,6 +29,9 @@ from kernel.codex.session.protocol import KernelSessionMode, KernelSessionReques
 if TYPE_CHECKING:
     from kernel.codex.runtime.protocol import KernelExecutionPayload
     from mente.executors.runtime_config import RuntimeConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,23 @@ class CodexBridgeInvocationResult:
     backend_failure: str | None = None
     front_door_mode: str = "vendored_runtime_binary"
     front_door_strategy: str = "bridge_selected"
+
+
+def _truncate_log_value(value: str, limit: int = 240) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[: limit - 3]}..."
+
+
+def _describe_command(command: list[str]) -> dict[str, object]:
+    return {
+        "argv0": command[0] if command else None,
+        "argv_count": len(command),
+        "has_resume": "resume" in command,
+        "has_json": "--json" in command,
+        "has_ephemeral": "--ephemeral" in command,
+    }
 
 
 def get_codex_handoff_surface() -> CodexSnapshotBridgeSurface:
@@ -176,6 +199,17 @@ def invoke_vendored_front_door(
             runtime_config.runtime_home,
             runtime_config.subprocess_env,
         )
+        logger.info(
+            "Mente vendored runtime launch: %s",
+            {
+                **_describe_command(command),
+                "cwd": cwd,
+                "workdir": workdir,
+                "runtime_home": str(runtime_config.runtime_home),
+                "session_mode": session.mode.value,
+                "session_id_present": bool(session.session_id),
+            },
+        )
         if stdout_line_callback is None:
             completed = subprocess_run(
                 command,
@@ -187,6 +221,15 @@ def invoke_vendored_front_door(
                 stdin=subprocess.DEVNULL,
             )
             cancelled = False
+            logger.info(
+                "Mente vendored runtime completed: %s",
+                {
+                    **_describe_command(command),
+                    "returncode": completed.returncode,
+                    "stdout_chars": len(completed.stdout or ""),
+                    "stderr_chars": len(completed.stderr or ""),
+                },
+            )
         else:
             completed, cancelled = _run_streaming_subprocess(
                 command=command,
@@ -235,39 +278,90 @@ def _run_streaming_subprocess(
         env=env,
         bufsize=1,
         stdin=subprocess.DEVNULL,
+        start_new_session=True,
     )
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
     cancelled = False
+    started_at = time.monotonic()
+    first_stdout_at: float | None = None
+    first_stderr_at: float | None = None
+    last_stdout_line: str | None = None
+    last_stderr_line: str | None = None
 
     def _read_stdout() -> None:
+        nonlocal first_stdout_at, last_stdout_line
         if process.stdout is None:
             return
         for line in process.stdout:
             stdout_lines.append(line)
             stripped = line.rstrip("\r\n")
+            if first_stdout_at is None:
+                first_stdout_at = time.monotonic()
+                logger.info(
+                    "Mente vendored runtime first stdout line after %.3fs: %s",
+                    first_stdout_at - started_at,
+                    _truncate_log_value(stripped),
+                )
             if stripped:
+                last_stdout_line = stripped
                 stdout_line_callback(stripped)
 
     def _read_stderr() -> None:
+        nonlocal first_stderr_at, last_stderr_line
         if process.stderr is None:
             return
         for line in process.stderr:
             stderr_lines.append(line)
+            stripped = line.rstrip("\r\n")
+            if first_stderr_at is None:
+                first_stderr_at = time.monotonic()
+                logger.warning(
+                    "Mente vendored runtime first stderr line after %.3fs: %s",
+                    first_stderr_at - started_at,
+                    _truncate_log_value(stripped),
+                )
+            if stripped:
+                last_stderr_line = stripped
 
     stdout_thread = threading.Thread(target=_read_stdout, daemon=True)
     stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
     stdout_thread.start()
     stderr_thread.start()
+    process_pid = getattr(process, "pid", None)
+    process_group_id = _resolve_process_group_id(process_pid)
+    logger.info(
+        "Mente vendored runtime subprocess spawned: %s",
+        {
+            **_describe_command(command),
+            "pid": process_pid,
+            "pgid": process_group_id,
+            "cwd": cwd,
+        },
+    )
     returncode: int | None = None
     while True:
         if cancel_event is not None and cancel_event.is_set():
             cancelled = True
+            elapsed = time.monotonic() - started_at
+            logger.warning(
+                "Mente vendored runtime cancellation requested: %s",
+                {
+                    "pid": process_pid,
+                    "elapsed_s": round(elapsed, 3),
+                    "stdout_lines": len(stdout_lines),
+                    "stderr_lines": len(stderr_lines),
+                    "first_stdout_s": None if first_stdout_at is None else round(first_stdout_at - started_at, 3),
+                    "first_stderr_s": None if first_stderr_at is None else round(first_stderr_at - started_at, 3),
+                    "last_stdout": _truncate_log_value(last_stdout_line or ""),
+                    "last_stderr": _truncate_log_value(last_stderr_line or ""),
+                },
+            )
             try:
-                process.terminate()
+                _signal_process(process, process_group_id, signal.SIGTERM)
                 returncode = process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                process.kill()
+                _signal_process(process, process_group_id, signal.SIGKILL)
                 returncode = process.wait(timeout=1)
             break
         returncode = process.poll()
@@ -276,9 +370,58 @@ def _run_streaming_subprocess(
         time.sleep(0.05)
     stdout_thread.join()
     stderr_thread.join()
+    elapsed = time.monotonic() - started_at
+    logger.info(
+        "Mente vendored runtime subprocess finished: %s",
+        {
+            "pid": process_pid,
+            "pgid": process_group_id,
+            "returncode": returncode,
+            "cancelled": cancelled,
+            "elapsed_s": round(elapsed, 3),
+            "stdout_lines": len(stdout_lines),
+            "stderr_lines": len(stderr_lines),
+            "first_stdout_s": None if first_stdout_at is None else round(first_stdout_at - started_at, 3),
+            "first_stderr_s": None if first_stderr_at is None else round(first_stderr_at - started_at, 3),
+            "last_stdout": _truncate_log_value(last_stdout_line or ""),
+            "last_stderr": _truncate_log_value(last_stderr_line or ""),
+        },
+    )
     return subprocess.CompletedProcess(
         command,
         returncode,
         stdout="".join(stdout_lines),
         stderr="".join(stderr_lines),
     ), cancelled
+
+
+def _resolve_process_group_id(process_pid: int | None) -> int | None:
+    if process_pid is None or not hasattr(os, "getpgid"):
+        return None
+    try:
+        return os.getpgid(process_pid)
+    except OSError:
+        return None
+
+
+def _signal_process(process: Any, process_group_id: int | None, sig: signal.Signals) -> None:
+    if process_group_id is not None and hasattr(os, "killpg"):
+        try:
+            os.killpg(process_group_id, sig)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            logger.debug(
+                "Mente vendored runtime group signal failed; falling back to direct process signal",
+                exc_info=True,
+            )
+
+    if sig == signal.SIGTERM and hasattr(process, "terminate"):
+        process.terminate()
+        return
+    if sig == signal.SIGKILL and hasattr(process, "kill"):
+        process.kill()
+        return
+    if hasattr(process, "terminate"):
+        process.terminate()

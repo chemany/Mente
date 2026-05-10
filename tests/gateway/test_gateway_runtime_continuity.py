@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -107,6 +108,72 @@ def test_resolve_gateway_runtime_continuity_plan_with_active_continuity_uses_res
     assert plan["replay_history_in_memory_facts"] is False
 
 
+def test_idle_expired_gateway_continuity_is_invalidated_and_restarts(monkeypatch):
+    monkeypatch.setenv("MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS", "3600")
+    session_store = MagicMock()
+    stale_updated_at = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+
+    payload = gateway_run._maybe_invalidate_gateway_runtime_continuity_when_idle_expired(
+        session_store=session_store,
+        session_id="sess-1",
+        continuity_payload={
+            "runtime": "codex",
+            "continuity_id": "thread-123",
+            "status": "active",
+            "updated_at": stale_updated_at,
+        },
+    )
+
+    session_store.invalidate_runtime_continuity.assert_called_once_with(
+        "sess-1",
+        reason="idle_ttl_expired",
+    )
+    assert payload["status"] == "invalidated"
+    assert payload["invalidation_reason"] == "idle_ttl_expired"
+
+    plan = gateway_run._resolve_gateway_runtime_continuity_plan(
+        session_entry=MagicMock(session_id="sess-1"),
+        history=_history(),
+        continuity_payload=payload,
+    )
+
+    assert plan["execution_mode"] is ExecutionMode.SESSIONFUL
+    assert plan["execution_session"] == ExecutionSession(mode=SessionMode.START)
+    assert plan["fallback_history_fact"].startswith("Conversation history (JSON):")
+    assert plan["replay_history_in_memory_facts"] is False
+
+
+def test_fresh_gateway_continuity_still_resumes(monkeypatch):
+    monkeypatch.setenv("MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS", "3600")
+    session_store = MagicMock()
+    fresh_updated_at = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+
+    payload = gateway_run._maybe_invalidate_gateway_runtime_continuity_when_idle_expired(
+        session_store=session_store,
+        session_id="sess-1",
+        continuity_payload={
+            "runtime": "codex",
+            "continuity_id": "thread-123",
+            "status": "active",
+            "updated_at": fresh_updated_at,
+        },
+    )
+
+    session_store.invalidate_runtime_continuity.assert_not_called()
+    assert payload["status"] == "active"
+
+    plan = gateway_run._resolve_gateway_runtime_continuity_plan(
+        session_entry=MagicMock(session_id="sess-1"),
+        history=_history(),
+        continuity_payload=payload,
+    )
+
+    assert plan["execution_session"] == ExecutionSession(
+        mode=SessionMode.RESUME,
+        continuity_id="thread-123",
+    )
+
+
 def test_resolve_gateway_runtime_continuity_plan_with_invalidated_continuity_replays_history():
     plan = gateway_run._resolve_gateway_runtime_continuity_plan(
         session_entry=MagicMock(session_id="sess-1"),
@@ -121,6 +188,24 @@ def test_resolve_gateway_runtime_continuity_plan_with_invalidated_continuity_rep
     assert plan["execution_mode"] is ExecutionMode.SESSIONFUL
     assert plan["execution_session"] == ExecutionSession(mode=SessionMode.START)
     assert plan["fallback_history_fact"].startswith("Conversation history (JSON):")
+    assert plan["replay_history_in_memory_facts"] is False
+
+
+def test_resolve_gateway_runtime_continuity_plan_prefers_session_summary_over_history_replay():
+    plan = gateway_run._resolve_gateway_runtime_continuity_plan(
+        session_entry=MagicMock(session_id="sess-1"),
+        history=_history(),
+        continuity_payload={
+            "runtime": "codex",
+            "continuity_id": "thread-123",
+            "status": "invalidated",
+        },
+        session_summary_available=True,
+    )
+
+    assert plan["execution_mode"] is ExecutionMode.SESSIONFUL
+    assert plan["execution_session"] == ExecutionSession(mode=SessionMode.START)
+    assert plan["fallback_history_fact"] is None
     assert plan["replay_history_in_memory_facts"] is False
 
 

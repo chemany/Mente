@@ -10,15 +10,18 @@ import uuid
 from typing import Any
 
 from pydantic import ValidationError
+from hermes_constants import get_skills_dir
 
 from mente.execution_events import ExecutionEventCallback
 from mente.context_builder.builder import ContextBuilder
+from mente.executors.bridge_mcp import model_visible_mcp_tool_name, publish_wechat_draft
 from mente.executors import CodexKernelAdapter, resolve_tool_exposure_policy
 from mente.executors.base import Executor
 from mente.executors.codex import CodexExecutor
 from mente.executors.runtime_config import RuntimeConfig, resolve_runtime_config
 from mente.feature_flags import (
     build_api_server_conversation_workflow_contract,
+    build_conversation_workflow_contract,
     is_remember_intent_direct_write_enabled,
     review_capability_gate,
 )
@@ -42,7 +45,7 @@ from mente.task_core.repository import SQLiteTaskRepository
 _WECHAT_PUBLISHER_SKILL_REF = "media/wechat-publisher"
 _IMAGEGEN_SKILL_REF = "imagegen"
 _CONTENT_PUBLISHING_TASK_PROFILE = "content_publishing"
-_CONTENT_PUBLISHING_HOST_TIMEOUT_SECONDS = 300.0
+_CONTENT_PUBLISHING_HOST_TIMEOUT_SECONDS = 420.0
 _WECHAT_PUBLISH_HINTS: tuple[str, ...] = (
     "wechat",
     "微信",
@@ -59,6 +62,8 @@ _IMAGEGEN_HINTS: tuple[str, ...] = (
     "图片",
     "image",
 )
+_WECHAT_PUBLISH_BRIDGE_TOOL = "mente_wechat_publish_draft"
+_WECHAT_PUBLISH_VISIBLE_TOOL = model_visible_mcp_tool_name("mente", _WECHAT_PUBLISH_BRIDGE_TOOL)
 
 
 def _build_content_publishing_workflow_brief() -> str:
@@ -70,7 +75,7 @@ def _build_content_publishing_workflow_brief() -> str:
             "1. Use the provided publishing skill refs directly instead of rediscovering the workflow.",
             "2. Draft the requested article and requested assets in the active workspace first.",
             "3. Avoid repository-wide or home-directory scans; only inspect directly relevant files if a concrete blocker appears.",
-            "4. Once the article is ready, use mente_wechat_publish_draft to publish the WeChat draft.",
+            f"4. Once the article is ready, use {_WECHAT_PUBLISH_VISIBLE_TOOL} to publish the WeChat draft.",
             "5. If editorial details are missing, choose reasonable defaults and continue.",
         ]
     )
@@ -86,9 +91,96 @@ def _build_content_publishing_output_plan(*, workspace: str, session_id: str) ->
             "Publishing output plan:",
             f"- Draft directory: {draft_dir}",
             f"- Draft article path: {article_path}",
-            "- Use the planned draft article path when calling mente_wechat_publish_draft.",
+            f"- Use the planned draft article path when calling {_WECHAT_PUBLISH_VISIBLE_TOOL}.",
         ]
     )
+
+
+def _build_content_publishing_entrypoint_brief(*, workspace: str, session_id: str) -> str:
+    """Return direct, deterministic workflow entrypoints for managed publishing tasks."""
+
+    draft_dir = Path(workspace).expanduser() / ".mente" / "publishing" / session_id
+    article_path = draft_dir / "article.md"
+    skill_root = get_skills_dir() / "media" / "wechat-publisher"
+    create_article = skill_root / "scripts" / "publisher" / "create-article.js"
+    publish_script = skill_root / "scripts" / "publisher" / "publish.js"
+    return "\n".join(
+        [
+            "Publishing entrypoints:",
+            f"- Managed publish entrypoint: {_WECHAT_PUBLISH_VISIBLE_TOOL}(article_path=<Draft article path>).",
+            f"- Underlying bridge mapping: {_WECHAT_PUBLISH_VISIBLE_TOOL} (server mente / tool {_WECHAT_PUBLISH_BRIDGE_TOOL}).",
+            f"- Preferred draft-first flow: write the article markdown to {article_path}, generate any requested assets in {draft_dir}, then call {_WECHAT_PUBLISH_VISIBLE_TOOL}.",
+            f'- Optional script reference only: node {create_article} "<文章标题>" --from {article_path}',
+            f"- Optional publish script reference only: node {publish_script} {article_path}",
+            f"- Do not treat create-article.js or publish.js as the primary publish path when {_WECHAT_PUBLISH_VISIBLE_TOOL} is available.",
+            "- If you need script details, do at most one targeted help/read check, then execute the managed flow.",
+        ]
+    )
+
+
+def _resolve_content_publishing_draft_dir(*, workspace: str, session_id: str) -> Path:
+    return Path(workspace).expanduser() / ".mente" / "publishing" / session_id
+
+
+def recover_gateway_content_publishing_artifacts(
+    *,
+    message: str,
+    session_id: str,
+    channel_prompt: str | None = None,
+    workspace: str | None = None,
+) -> dict[str, Any]:
+    """Finalize a timed-out gateway publishing task from deterministic draft artifacts."""
+
+    inferred_skill_refs = _infer_gateway_skill_refs(message=message, channel_prompt=channel_prompt)
+    task_profile = _resolve_gateway_task_profile(inferred_skill_refs)
+    if task_profile != _CONTENT_PUBLISHING_TASK_PROFILE:
+        return {
+            "ok": False,
+            "reason": "not_content_publishing",
+        }
+
+    resolved_workspace = _resolve_gateway_workspace(
+        workspace=workspace,
+        message=message,
+        channel_prompt=channel_prompt,
+        skill_refs=inferred_skill_refs,
+    )
+    draft_dir = _resolve_content_publishing_draft_dir(
+        workspace=resolved_workspace,
+        session_id=session_id,
+    )
+    article_path = draft_dir / "article.md"
+    source_path = draft_dir / "source.md"
+    publish_target: Path | None = None
+    recovered_from = ""
+    if article_path.is_file():
+        publish_target = article_path
+        recovered_from = "article.md"
+    elif source_path.is_file():
+        publish_target = source_path
+        recovered_from = "source.md"
+    else:
+        return {
+            "ok": False,
+            "reason": "draft_not_found",
+            "workspace": resolved_workspace,
+            "draft_dir": str(draft_dir),
+            "draft_article_path": str(article_path),
+            "draft_source_path": str(source_path),
+        }
+
+    publish_result = publish_wechat_draft(article_path=str(publish_target))
+    return {
+        "ok": bool(publish_result.get("ok")),
+        "reason": None if publish_result.get("ok") else str(publish_result.get("error") or "publish_failed"),
+        "failure_summary": None if publish_result.get("ok") else publish_result.get("failure_summary"),
+        "workspace": resolved_workspace,
+        "draft_dir": str(draft_dir),
+        "draft_article_path": str(article_path),
+        "draft_source_path": str(source_path),
+        "recovered_from": recovered_from,
+        "publish_result": publish_result,
+    }
 
 
 def _resolve_workspace(workspace: str | None) -> str:
@@ -495,6 +587,11 @@ def build_gateway_task(
             task_type="conversation",
             task_profile=task_profile,
         ),
+        "workflow_contract": build_conversation_workflow_contract(
+            source="gateway",
+            skill_refs=inferred_skill_refs,
+            execution_mode=normalized_execution_mode.value,
+        ),
         "platform": platform,
         "session_key": session_key,
         "user_id": getattr(source, "user_id", None),
@@ -521,14 +618,23 @@ def build_gateway_task(
                 session_id=session_id,
             )
         )
+        memory_facts.append(
+            _build_content_publishing_entrypoint_brief(
+                workspace=resolved_workspace,
+                session_id=session_id,
+            )
+        )
         constraints.append(
             "Prefer the active workspace and provided conversation context; avoid broad scans outside the workspace unless the user explicitly asks."
         )
         constraints.append(
             "Do not scan the full repository or home directory just to rediscover the publishing process."
         )
+        constraints.append(
+            f"Treat {_WECHAT_PUBLISH_VISIBLE_TOOL} as the authoritative publish entrypoint for this task; do not replace it with ad hoc script reconstruction."
+        )
         acceptance_criteria.append(
-            "If the user asked for a WeChat draft workflow, create the requested article/assets in the workspace and use mente_wechat_publish_draft to publish the draft."
+            f"If the user asked for a WeChat draft workflow, create the requested article/assets in the workspace and use {_WECHAT_PUBLISH_VISIBLE_TOOL} to publish the draft."
         )
         acceptance_criteria.append(
             "Use the provided skills directly instead of rediscovering the workflow."
@@ -630,6 +736,10 @@ def build_tui_task(
     metadata = {
         "source": "tui",
         "tool_policy": _resolve_tool_policy(source="tui", task_type="conversation"),
+        "workflow_contract": build_conversation_workflow_contract(
+            source="tui",
+            execution_mode=normalized_execution_mode.value,
+        ),
     }
     if fallback_history_fact:
         metadata["fallback_history_fact"] = fallback_history_fact
@@ -700,6 +810,12 @@ def run_gateway_task(
             repository=repository,
             memory_repository=memory_repository,
         )
+        _apply_post_turn_conversation_workflow_contract(
+            task=task,
+            result=result,
+            repository=repository,
+            memory_repository=memory_repository,
+        )
         return result
     finally:
         for repo in (memory_repository, repository):
@@ -750,30 +866,12 @@ def run_api_server_task(
             repository=repository,
             memory_repository=memory_repository,
         )
-        result.metadata["workflow_contract"] = dict(task.metadata.get("workflow_contract") or {})
-        workflow_contract = result.metadata["workflow_contract"]
-        memory_review_contract = workflow_contract.get("memory_review")
-        if isinstance(memory_review_contract, dict) and bool(memory_review_contract.get("enabled")):
-            result.metadata["memory_review"] = run_post_turn_memory_review(
-                task_id=task.task_id,
-                repository=repository,
-                memory_repository=memory_repository,
-            )
-        skill_review_contract = workflow_contract.get("skill_review")
-        if isinstance(skill_review_contract, dict) and bool(skill_review_contract.get("enabled")):
-            result.metadata["skill_review"] = run_post_turn_skill_review(
-                task_id=task.task_id,
-                repository=repository,
-            )
-        session_synthesis_contract = workflow_contract.get("session_synthesis")
-        if isinstance(session_synthesis_contract, dict) and bool(
-            session_synthesis_contract.get("enabled")
-        ):
-            result.metadata["session_synthesis"] = run_post_turn_session_synthesis(
-                task_id=task.task_id,
-                repository=repository,
-                memory_repository=memory_repository,
-            )
+        _apply_post_turn_conversation_workflow_contract(
+            task=task,
+            result=result,
+            repository=repository,
+            memory_repository=memory_repository,
+        )
         return result
     finally:
         for repo in (memory_repository, repository):
@@ -817,6 +915,12 @@ def run_tui_task(
             cancel_event=cancel_event,
         ).run(task)
         _persist_remember_intent_direct_write(
+            task=task,
+            result=result,
+            repository=repository,
+            memory_repository=memory_repository,
+        )
+        _apply_post_turn_conversation_workflow_contract(
             task=task,
             result=result,
             repository=repository,
@@ -924,6 +1028,45 @@ def _persist_remember_intent_direct_write(
         metadata_key="remember_intent_direct_write",
         metadata_value=outcome,
     )
+
+
+def _apply_post_turn_conversation_workflow_contract(
+    *,
+    task: Task,
+    result: ExecutionResult,
+    repository: SQLiteTaskRepository,
+    memory_repository: SQLiteMemoryRepository,
+) -> None:
+    """Apply contract-driven post-turn review hooks for conversation tasks."""
+
+    workflow_contract = dict(task.metadata.get("workflow_contract") or {})
+    if not workflow_contract:
+        return
+
+    result.metadata["workflow_contract"] = workflow_contract
+
+    memory_review_contract = workflow_contract.get("memory_review")
+    if isinstance(memory_review_contract, dict) and bool(memory_review_contract.get("enabled")):
+        result.metadata["memory_review"] = run_post_turn_memory_review(
+            task_id=task.task_id,
+            repository=repository,
+            memory_repository=memory_repository,
+        )
+    skill_review_contract = workflow_contract.get("skill_review")
+    if isinstance(skill_review_contract, dict) and bool(skill_review_contract.get("enabled")):
+        result.metadata["skill_review"] = run_post_turn_skill_review(
+            task_id=task.task_id,
+            repository=repository,
+        )
+    session_synthesis_contract = workflow_contract.get("session_synthesis")
+    if isinstance(session_synthesis_contract, dict) and bool(
+        session_synthesis_contract.get("enabled")
+    ):
+        result.metadata["session_synthesis"] = run_post_turn_session_synthesis(
+            task_id=task.task_id,
+            repository=repository,
+            memory_repository=memory_repository,
+        )
 
 
 def _remember_intent_direct_write_enabled(task: Task) -> tuple[bool, str | None]:

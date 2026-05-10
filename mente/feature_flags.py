@@ -174,6 +174,31 @@ def is_gateway_runtime_continuity_enabled(
     )
 
 
+def gateway_runtime_continuity_idle_ttl_seconds(
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> float | None:
+    """Return the maximum idle age for one gateway continuity binding.
+
+    ``None`` disables idle-age invalidation.
+    """
+
+    env = environment or os.environ
+    raw = env.get("MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS")
+    if raw is None:
+        return 4 * 60 * 60
+    text = str(raw).strip()
+    if not text:
+        return 4 * 60 * 60
+    try:
+        value = float(text)
+    except ValueError:
+        return 4 * 60 * 60
+    if value <= 0:
+        return None
+    return value
+
+
 def is_api_server_conversation_adoption_enabled(
     *,
     environment: Mapping[str, str] | None = None,
@@ -208,7 +233,7 @@ def session_synthesis_sources(
 
     return parse_allowed_sources(
         "MENTE_SESSION_SYNTHESIS_SOURCES",
-        default_sources=("api_server",),
+        default_sources=("api_server", "gateway", "tui", "oneshot"),
         environment=environment,
     )
 
@@ -230,27 +255,44 @@ def session_synthesis_turn_interval(
     return interval if interval > 0 else 5
 
 
-def build_api_server_conversation_workflow_contract(
+def build_conversation_workflow_contract(
     *,
+    source: str,
     skill_refs: Sequence[str] | None = None,
     execution_mode: str = "stateless",
     environment: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build the machine-readable rollout contract for the api_server conversation slice."""
+    """Build the machine-readable rollout contract for one conversation entrypoint."""
 
+    normalized_source = str(source).strip() or "unknown"
     normalized_skill_refs = [
         str(item).strip()
         for item in (skill_refs or [])
         if str(item).strip()
     ]
-    adoption_enabled = is_api_server_conversation_adoption_enabled(environment=environment)
+    if normalized_source == "api_server":
+        adoption_enabled = is_api_server_conversation_adoption_enabled(environment=environment)
+        workflow_id = API_SERVER_CONVERSATION_WORKFLOW_ID
+        adoption_id = API_SERVER_CONVERSATION_ADOPTION_ID
+    else:
+        adoption_enabled = True
+        workflow_id = f"{normalized_source}_conversation"
+        adoption_id = f"{normalized_source}_conversation_memory_and_skill_v1"
+
     session_summary_enabled = adoption_enabled and is_session_summary_retrieval_enabled(
         environment=environment
     )
+    session_synthesis_enabled = (
+        adoption_enabled
+        and is_session_synthesis_enabled(environment=environment)
+        and normalized_source in session_synthesis_sources(environment=environment)
+    )
+    review_enabled = normalized_source == "api_server" and adoption_enabled
+
     return {
-        "workflow_id": API_SERVER_CONVERSATION_WORKFLOW_ID,
-        "adoption_id": API_SERVER_CONVERSATION_ADOPTION_ID,
-        "source": "api_server",
+        "workflow_id": workflow_id,
+        "adoption_id": adoption_id,
+        "source": normalized_source,
         "task_type": "conversation",
         "adoption_enabled": adoption_enabled,
         "memory_read": {
@@ -271,8 +313,7 @@ def build_api_server_conversation_workflow_contract(
         },
         "session_synthesis": {
             "mode": "post_turn_periodic",
-            "enabled": adoption_enabled
-            and is_session_synthesis_enabled(environment=environment),
+            "enabled": session_synthesis_enabled,
             "turn_interval": session_synthesis_turn_interval(environment=environment),
             "summary_scope": "session",
             "summary_kind": "session_summary",
@@ -281,16 +322,16 @@ def build_api_server_conversation_workflow_contract(
         },
         "memory_review": {
             "mode": "post_turn",
-            "enabled": adoption_enabled,
+            "enabled": review_enabled,
         },
         "remember_intent_direct_write": {
             "mode": "post_turn_direct_write",
-            "enabled": adoption_enabled
+            "enabled": review_enabled
             and is_remember_intent_direct_write_enabled(environment=environment),
         },
         "skill_review": {
             "mode": "suggest",
-            "enabled": adoption_enabled and bool(normalized_skill_refs),
+            "enabled": review_enabled and bool(normalized_skill_refs),
             "requires_skill_refs": True,
             "skill_refs": normalized_skill_refs,
         },
@@ -302,6 +343,21 @@ def build_api_server_conversation_workflow_contract(
     }
 
 
+def build_api_server_conversation_workflow_contract(
+    *,
+    skill_refs: Sequence[str] | None = None,
+    execution_mode: str = "stateless",
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build the machine-readable rollout contract for the api_server conversation slice."""
+    return build_conversation_workflow_contract(
+        source="api_server",
+        skill_refs=skill_refs,
+        execution_mode=execution_mode,
+        environment=environment,
+    )
+
+
 def review_capability_gate(
     *,
     source: str,
@@ -311,13 +367,15 @@ def review_capability_gate(
 ) -> tuple[bool | None, str | None]:
     """Return a workflow-contract decision for review capabilities, or None for legacy paths."""
 
-    if source != "api_server" or task_type != "conversation":
+    if task_type != "conversation":
         return None, None
 
     contract = metadata.get("workflow_contract")
     if not isinstance(contract, Mapping):
+        return (False, "workflow_not_adopted") if source == "api_server" else (None, None)
+    if str(contract.get("source") or "").strip() != source:
         return False, "workflow_not_adopted"
-    if contract.get("workflow_id") != API_SERVER_CONVERSATION_WORKFLOW_ID:
+    if str(contract.get("task_type") or "").strip() != task_type:
         return False, "workflow_not_adopted"
     if not bool(contract.get("adoption_enabled")):
         return False, "workflow_contract_disabled"

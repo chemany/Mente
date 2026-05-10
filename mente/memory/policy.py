@@ -6,7 +6,6 @@ from collections.abc import Mapping
 
 from pydantic import BaseModel, Field
 
-from mente.feature_flags import API_SERVER_CONVERSATION_WORKFLOW_ID
 from mente.task_core.models import Task
 
 
@@ -138,17 +137,19 @@ class MemoryPolicyResolver:
         policy: MemoryPolicy,
         task: Task,
     ) -> MemoryPolicy:
-        if policy.policy_id != "api_server:conversation":
+        if task.task_type != "conversation":
             return policy
 
         source = str(task.metadata.get("source") or "").strip()
-        if source != "api_server" or task.task_type != "conversation":
+        if not source:
             return policy
 
         workflow_contract = task.metadata.get("workflow_contract")
         if not isinstance(workflow_contract, Mapping):
             return policy
-        if workflow_contract.get("workflow_id") != API_SERVER_CONVERSATION_WORKFLOW_ID:
+        if str(workflow_contract.get("source") or "").strip() != source:
+            return policy
+        if str(workflow_contract.get("task_type") or "").strip() != task.task_type:
             return policy
 
         memory_read = workflow_contract.get("memory_read")

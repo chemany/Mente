@@ -1,6 +1,9 @@
+import logging
 import subprocess
+import threading
 from pathlib import Path
 
+from kernel.codex.bridge import entrypoints as bridge_entrypoints
 from kernel.codex.bridge.entrypoints import (
     build_vendored_command,
     get_codex_handoff_surface,
@@ -325,11 +328,12 @@ def test_bridge_streaming_subprocess_disconnects_stdin_from_tui_pipe(monkeypatch
         def poll(self):
             return 0
 
-    def fake_popen(command, stdout, stderr, text, cwd, env, bufsize, stdin):
+    def fake_popen(command, stdout, stderr, text, cwd, env, bufsize, stdin, start_new_session):
         captured["command"] = command
         captured["stdin"] = stdin
         captured["cwd"] = cwd
         captured["env"] = env
+        captured["start_new_session"] = start_new_session
         return _FakeProcess()
 
     result = invoke_vendored_front_door(
@@ -353,3 +357,120 @@ def test_bridge_streaming_subprocess_disconnects_stdin_from_tui_pipe(monkeypatch
 
     assert result.returncode == 0
     assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["start_new_session"] is True
+
+
+def test_bridge_streaming_subprocess_logs_first_output_boundaries(monkeypatch, tmp_path, caplog):
+    fake_runtime = _write_fake_runtime(tmp_path)
+    monkeypatch.setenv("MENTE_CODEX_RUNTIME_BIN", str(fake_runtime))
+
+    class _FakeStream:
+        def __init__(self, lines):
+            self._lines = lines
+
+        def __iter__(self):
+            return iter(self._lines)
+
+    class _FakeProcess:
+        def __init__(self):
+            self.pid = 43210
+            self.stdout = _FakeStream(
+                [
+                    '{"type":"turn.started"}\n',
+                    '{"type":"turn.completed"}\n',
+                ]
+            )
+            self.stderr = _FakeStream(["diagnostic warning\n"])
+
+        def poll(self):
+            return 0
+
+    caplog.set_level(logging.INFO, logger="kernel.codex.bridge.entrypoints")
+
+    result = invoke_vendored_front_door(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+        sandbox="workspace-write",
+        approval_policy="never",
+        cwd=str(tmp_path),
+        workdir=str(tmp_path / "isolated-workdir"),
+        output_last_message=str(tmp_path / "out.txt"),
+        output_schema=str(tmp_path / "schema.json"),
+        add_dirs=[str(tmp_path)],
+        stdout_line_callback=lambda _line: None,
+        subprocess_popen=lambda *args, **kwargs: _FakeProcess(),
+    )
+
+    assert result.returncode == 0
+    assert "first stdout line" in caplog.text
+    assert "first stderr line" in caplog.text
+    assert "subprocess finished" in caplog.text
+
+
+def test_bridge_streaming_subprocess_logs_cancellation_diagnostics(monkeypatch, tmp_path, caplog):
+    fake_runtime = _write_fake_runtime(tmp_path)
+    monkeypatch.setenv("MENTE_CODEX_RUNTIME_BIN", str(fake_runtime))
+    cancel_event = threading.Event()
+    cancel_event.set()
+    terminated: dict[str, bool] = {"called": False}
+    signalled: list[tuple[int, int]] = []
+
+    class _FakeStream:
+        def __iter__(self):
+            return iter(())
+
+    class _FakeProcess:
+        def __init__(self):
+            self.pid = 54321
+            self.stdout = _FakeStream()
+            self.stderr = _FakeStream()
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            terminated["called"] = True
+
+        def wait(self, timeout=None):
+            return 130
+
+    monkeypatch.setattr(bridge_entrypoints.os, "getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(
+        bridge_entrypoints.os,
+        "killpg",
+        lambda pgid, sig: signalled.append((pgid, int(sig))),
+        raising=False,
+    )
+
+    caplog.set_level(logging.INFO, logger="kernel.codex.bridge.entrypoints")
+
+    result = invoke_vendored_front_door(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+        sandbox="workspace-write",
+        approval_policy="never",
+        cwd=str(tmp_path),
+        workdir=str(tmp_path / "isolated-workdir"),
+        output_last_message=str(tmp_path / "out.txt"),
+        output_schema=str(tmp_path / "schema.json"),
+        add_dirs=[str(tmp_path)],
+        stdout_line_callback=lambda _line: None,
+        cancel_event=cancel_event,
+        subprocess_popen=lambda *args, **kwargs: _FakeProcess(),
+    )
+
+    assert terminated["called"] is False
+    assert result.returncode == 130
+    assert result.backend_failure == "interrupted_by_user"
+    assert "cancellation requested" in caplog.text
+    assert signalled

@@ -6,6 +6,7 @@ import hashlib
 import re
 from typing import Any
 
+from mente.executors.bridge_mcp import model_visible_mcp_tool_name
 from mente.task_core.models import ExecutionRequest
 
 
@@ -105,6 +106,10 @@ _MACHINE_FAILURE_DUMP_MARKERS: tuple[str, ...] = (
     '"assistant_summary"',
     '"memory_candidates"',
 )
+_MENTE_WECHAT_PUBLISH_MCP_TOOL = model_visible_mcp_tool_name(
+    "mente",
+    "mente_wechat_publish_draft",
+)
 
 
 def render_execution_prompt(request: ExecutionRequest) -> str:
@@ -151,13 +156,23 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
             "- Do not read large numbers of repository files, skill files, examples, or scripts unless a concrete blocker requires one targeted read."
         )
         lines.append(
-            "- Draft the requested article and assets in the workspace, then call mente_wechat_publish_draft to publish."
+            f"- Draft the requested article and assets in the workspace, then call {_MENTE_WECHAT_PUBLISH_MCP_TOOL} to publish."
         )
         lines.append(
-            "- When the provided skill already defines a concrete workflow entrypoint, prefer running that entrypoint instead of manually reconstructing the workflow."
+            f"- For Mente-managed WeChat publishing tasks, {_MENTE_WECHAT_PUBLISH_MCP_TOOL} is the primary publish entrypoint even if the skill also contains create-article.js or publish.js."
+        )
+        lines.append(
+            "- Treat create-article.js or publish.js as optional reference helpers only; do not keep reading them repeatedly to decide the main flow."
+        )
+        lines.append(
+            "- If one targeted skill read or one targeted script help check is enough to execute, stop exploring and execute the managed flow immediately."
         )
         lines.append(
             "- If key editorial details are unspecified, make reasonable defaults and continue instead of exploring broadly."
+        )
+        lines.append(
+            "- The publish bridge tool is exposed to the model as "
+            f"{_MENTE_WECHAT_PUBLISH_MCP_TOOL} (server mente / tool mente_wechat_publish_draft)."
         )
     recommended_superpowers = _recommended_mente_superpowers(request, explicit_skill_refs)
     if recommended_superpowers:

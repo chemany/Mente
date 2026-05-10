@@ -109,9 +109,39 @@ def test_augment_runtime_config_leaves_unmapped_bridge_tools_unchanged(tmp_path)
     assert augmented == runtime_config
 
 
-def test_augment_runtime_config_does_not_inject_memory_query_when_flag_is_off_by_default(
+def test_augment_runtime_config_injects_memory_query_when_flag_is_on_by_default(
     tmp_path,
 ):
+    runtime_config = RuntimeConfig(
+        runtime_home=tmp_path / "private-runtime-home",
+        codex_config={"model": "gpt-5.5"},
+    )
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Recall any prior preferences.",
+        workspace=str(tmp_path),
+        metadata={"source": "gateway"},
+        tool_policy={
+            "policy_id": "gateway:conversation",
+            "source": "gateway",
+            "bridge_tools": ["mente_memory_query"],
+        },
+    )
+
+    augmented = augment_runtime_config_for_bridge_tools(runtime_config, request)
+    overrides = augmented.to_codex_overrides()
+
+    assert 'mcp_servers.mente.enabled_tools=["mente_memory_query"]' in overrides
+
+
+def test_augment_runtime_config_does_not_inject_memory_query_when_flag_is_explicitly_disabled(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MENTE_MEMORY_READ_TOOL_ENABLED", "0")
     runtime_config = RuntimeConfig(
         runtime_home=tmp_path / "private-runtime-home",
         codex_config={"model": "gpt-5.5"},
@@ -551,7 +581,7 @@ def test_query_mente_memory_returns_source_filtered_success_for_gateway_conversa
     }
 
 
-def test_query_mente_memory_denies_when_read_tool_flag_is_off_by_default():
+def test_query_mente_memory_allows_reads_when_flag_is_on_by_default():
     repo = InMemoryMemoryRepository()
     repo.save(
         MemoryRecord(
@@ -571,6 +601,47 @@ def test_query_mente_memory_denies_when_read_tool_flag_is_off_by_default():
         environment=_bridge_env(
             bridge_tools=["mente_memory_query"],
         ),
+    )
+
+    assert result == {
+        "ok": True,
+        "policy_id": "gateway:conversation",
+        "results": [
+            {
+                "memory_id": "mem_gateway_session",
+                "task_id": "task_old_1",
+                "scope": "session",
+                "fact": "Gateway session memory.",
+                "source": "gateway",
+                "task_type": "conversation",
+            }
+        ],
+    }
+
+
+def test_query_mente_memory_denies_when_read_tool_flag_is_explicitly_disabled():
+    repo = InMemoryMemoryRepository()
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_gateway_session",
+            session_id="session_1",
+            task_id="task_old_1",
+            task_type="conversation",
+            source="gateway",
+            scope="session",
+            fact="Gateway session memory.",
+            score=1.0,
+        )
+    )
+
+    environment = _bridge_env(
+        bridge_tools=["mente_memory_query"],
+    )
+    environment["MENTE_MEMORY_READ_TOOL_ENABLED"] = "0"
+
+    result = query_mente_memory(
+        repository=repo,
+        environment=environment,
     )
 
     assert result == {
@@ -619,6 +690,53 @@ def test_publish_wechat_draft_invokes_host_publish_script(tmp_path):
     assert captured["kwargs"]["env"]["HOME"]
 
 
+def test_publish_wechat_draft_finalizes_source_markdown_via_create_article(tmp_path):
+    skill_root = tmp_path / "skills" / "media" / "wechat-publisher"
+    create_script = skill_root / "scripts" / "publisher" / "create-article.js"
+    create_script.parent.mkdir(parents=True, exist_ok=True)
+    create_script.write_text("// stub", encoding="utf-8")
+    source_path = tmp_path / "source.md"
+    source_path.write_text(
+        "---\n"
+        "title: 从 source 收口发布\n"
+        "---\n\n"
+        "# Draft\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+        stdout = "published from source"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return _Completed()
+
+    result = publish_wechat_draft(
+        article_path=str(source_path),
+        skill_root=skill_root,
+        subprocess_run=fake_run,
+    )
+
+    assert result["ok"] is True
+    assert result["article_path"] == str(source_path)
+    assert result["source_path"] == str(source_path)
+    assert result["finalize_mode"] == "source_markdown"
+    assert captured["command"] == [
+        "node",
+        str(create_script),
+        "从 source 收口发布",
+        "--from",
+        str(source_path),
+        "--publish",
+    ]
+    assert captured["kwargs"]["cwd"] == str(skill_root)
+    assert captured["kwargs"]["env"]["HOME"]
+
+
 def test_publish_wechat_draft_returns_structured_failure_for_missing_article(tmp_path):
     skill_root = tmp_path / "skills" / "media" / "wechat-publisher"
     publish_script = skill_root / "scripts" / "publisher" / "publish.js"
@@ -632,3 +750,146 @@ def test_publish_wechat_draft_returns_structured_failure_for_missing_article(tmp
 
     assert result["ok"] is False
     assert result["error"] == "article_not_found"
+
+
+def test_publish_wechat_draft_classifies_wechat_ip_whitelist_failure(tmp_path):
+    skill_root = tmp_path / "skills" / "media" / "wechat-publisher"
+    publish_script = skill_root / "scripts" / "publisher" / "publish.js"
+    publish_script.parent.mkdir(parents=True, exist_ok=True)
+    publish_script.write_text("// stub", encoding="utf-8")
+    article_path = tmp_path / "article.md"
+    article_path.write_text("# Draft", encoding="utf-8")
+
+    class _Completed:
+        returncode = 1
+        stdout = "🔐 正在获取 access_token...\n"
+        stderr = "❌ 错误: invalid ip 113.124.103.244 ipv6 ::ffff:113.124.103.244, not in whitelist"
+
+    def fake_run(command, **kwargs):
+        return _Completed()
+
+    result = publish_wechat_draft(
+        article_path=str(article_path),
+        skill_root=skill_root,
+        subprocess_run=fake_run,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "wechat_ip_not_whitelisted"
+    assert result["failure_summary"] == (
+        "微信公众号接口拒绝访问：当前服务器 IP 未加入白名单。文章与配图已生成，请在微信公众平台后台将该服务器 IP 加入白名单后重试。"
+    )
+    assert result["error_detail"] == (
+        "invalid ip 113.124.103.244 ipv6 ::ffff:113.124.103.244, not in whitelist"
+    )
+
+
+def test_publish_wechat_draft_prepares_article_with_uploaded_images_and_normalized_cover(
+    tmp_path,
+):
+    skill_root = tmp_path / "skills" / "media" / "wechat-publisher"
+    publish_script = skill_root / "scripts" / "publisher" / "publish.js"
+    publish_script.parent.mkdir(parents=True, exist_ok=True)
+    publish_script.write_text("// stub", encoding="utf-8")
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    (tmp_path / "cover.png").write_bytes(b"cover")
+    (tmp_path / "banner.png").write_bytes(b"banner")
+    (images_dir / "workflow-map.png").write_bytes(b"workflow")
+
+    article_path = tmp_path / "article.md"
+    article_path.write_text(
+        "---\n"
+        "title: Demo\n"
+        "cover: ./cover.jpg\n"
+        "---\n\n"
+        "![Banner](./banner.jpg)\n\n"
+        "![Map](./images/workflow-map.jpg)\n",
+        encoding="utf-8",
+    )
+
+    uploaded_paths: list[str] = []
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+        stdout = "published"
+        stderr = ""
+
+    def fake_upload(image_path: Path, access_token: str) -> str:
+        uploaded_paths.append(str(image_path))
+        return f"https://wx.example/{image_path.name}"
+
+    def fake_access_token_loader(*, skill_root: Path) -> str:
+        assert skill_root == skill_root_ref
+        return "token-123"
+
+    def fake_run(command, **kwargs):
+        prepared_path = Path(command[2])
+        captured["command"] = command
+        captured["prepared_path"] = prepared_path
+        captured["prepared_text"] = prepared_path.read_text(encoding="utf-8")
+        captured["kwargs"] = kwargs
+        return _Completed()
+
+    skill_root_ref = skill_root
+    result = publish_wechat_draft(
+        article_path=str(article_path),
+        skill_root=skill_root,
+        subprocess_run=fake_run,
+        wechat_access_token_loader=fake_access_token_loader,
+        wechat_image_uploader=fake_upload,
+    )
+
+    assert result["ok"] is True
+    assert result["article_path"] == str(article_path)
+    assert captured["command"] == [
+        "node",
+        str(publish_script),
+        str(captured["prepared_path"]),
+        "lapis",
+        "solarized-light",
+    ]
+    assert captured["prepared_path"] != article_path
+    assert "cover: ./cover.png" in captured["prepared_text"]
+    assert "![Banner](https://wx.example/banner.png)" in captured["prepared_text"]
+    assert "![Map](https://wx.example/workflow-map.png)" in captured["prepared_text"]
+    assert article_path.read_text(encoding="utf-8").count(".jpg") == 3
+    assert uploaded_paths == [
+        str(tmp_path / "banner.png"),
+        str(images_dir / "workflow-map.png"),
+    ]
+
+
+def test_publish_wechat_draft_creates_wenyan_cache_dir_under_host_home(
+    tmp_path,
+    monkeypatch,
+):
+    skill_root = tmp_path / "skills" / "media" / "wechat-publisher"
+    publish_script = skill_root / "scripts" / "publisher" / "publish.js"
+    publish_script.parent.mkdir(parents=True, exist_ok=True)
+    publish_script.write_text("// stub", encoding="utf-8")
+    article_path = tmp_path / "article.md"
+    article_path.write_text("# Draft", encoding="utf-8")
+    host_home = tmp_path / "host-home"
+    monkeypatch.setenv("MENTE_HOST_HOME", str(host_home))
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+        stdout = "published"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured["cache_dir_exists"] = (host_home / ".config" / "wenyan-md").is_dir()
+        return _Completed()
+
+    result = publish_wechat_draft(
+        article_path=str(article_path),
+        skill_root=skill_root,
+        subprocess_run=fake_run,
+    )
+
+    assert result["ok"] is True
+    assert captured["cache_dir_exists"] is True

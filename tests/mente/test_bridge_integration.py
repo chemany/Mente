@@ -13,6 +13,7 @@ from mente.integrations.bridge import (
     build_gateway_task,
     extract_execution_session_handoff,
     normalize_api_execution_continuity,
+    recover_gateway_content_publishing_artifacts,
     resolve_gateway_task_host_timeout_seconds,
     run_post_turn_memory_review,
     run_post_turn_skill_review,
@@ -154,12 +155,24 @@ def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_worksp
         fact.startswith("Publishing output plan:")
         for fact in task.memory_facts
     )
+    entrypoint_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Publishing entrypoints:")
+    )
+    assert "mente_wechat_publish_draft" in entrypoint_fact
+    assert "mcp__mente__mente_wechat_publish_draft" in entrypoint_fact
+    assert "create-article.js" in entrypoint_fact
+    assert "publish.js" in entrypoint_fact
+    assert "not treat create-article.js or publish.js as the primary publish path" in entrypoint_fact
     assert any(
         "do not scan the full repository" in constraint.lower()
         for constraint in task.constraints
     )
     assert any(
-        "use mente_wechat_publish_draft" in criterion.lower()
+        "authoritative publish entrypoint" in constraint.lower()
+        for constraint in task.constraints
+    )
+    assert any(
+        "use mcp__mente__mente_wechat_publish_draft" in criterion.lower()
         for criterion in task.acceptance_criteria
     )
     assert any(
@@ -173,9 +186,128 @@ def test_resolve_gateway_task_host_timeout_seconds_detects_content_publishing():
         resolve_gateway_task_host_timeout_seconds(
             message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
         )
-        == 300.0
+        == 420.0
     )
     assert resolve_gateway_task_host_timeout_seconds(message="你好") is None
+
+
+def test_recover_gateway_content_publishing_artifacts_finalizes_source_markdown(
+    monkeypatch,
+    tmp_path,
+):
+    project_root = tmp_path / "Mente"
+    fake_home = tmp_path / "home"
+    draft_dir = project_root / ".mente" / "publishing" / "session-1"
+    project_root.mkdir()
+    fake_home.mkdir()
+    (project_root / ".git").mkdir()
+    draft_dir.mkdir(parents=True)
+    source_path = draft_dir / "source.md"
+    source_path.write_text(
+        "---\n"
+        "title: Mente 发布链收口\n"
+        "---\n\n"
+        "# Draft\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project_root)
+    monkeypatch.setenv("TERMINAL_CWD", str(fake_home))
+    captured: dict[str, object] = {}
+
+    def _fake_publish_wechat_draft(**kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "article_path": kwargs["article_path"],
+            "finalize_mode": "source_markdown",
+        }
+
+    monkeypatch.setattr(mente_bridge, "publish_wechat_draft", _fake_publish_wechat_draft)
+
+    result = recover_gateway_content_publishing_artifacts(
+        message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        session_id="session-1",
+    )
+
+    assert result["ok"] is True
+    assert result["draft_dir"] == str(draft_dir)
+    assert result["publish_result"]["finalize_mode"] == "source_markdown"
+    assert captured["article_path"] == str(source_path)
+
+
+def test_recover_gateway_content_publishing_artifacts_publishes_article_markdown(
+    monkeypatch,
+    tmp_path,
+):
+    project_root = tmp_path / "Mente"
+    fake_home = tmp_path / "home"
+    draft_dir = project_root / ".mente" / "publishing" / "session-1"
+    project_root.mkdir()
+    fake_home.mkdir()
+    (project_root / ".git").mkdir()
+    draft_dir.mkdir(parents=True)
+    article_path = draft_dir / "article.md"
+    article_path.write_text("# Draft\n", encoding="utf-8")
+    monkeypatch.chdir(project_root)
+    monkeypatch.setenv("TERMINAL_CWD", str(fake_home))
+    captured: dict[str, object] = {}
+
+    def _fake_publish_wechat_draft(**kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "article_path": kwargs["article_path"],
+            "finalize_mode": "article_markdown",
+        }
+
+    monkeypatch.setattr(mente_bridge, "publish_wechat_draft", _fake_publish_wechat_draft)
+
+    result = recover_gateway_content_publishing_artifacts(
+        message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        session_id="session-1",
+    )
+
+    assert result["ok"] is True
+    assert result["recovered_from"] == "article.md"
+    assert result["publish_result"]["finalize_mode"] == "article_markdown"
+    assert captured["article_path"] == str(article_path)
+
+
+def test_recover_gateway_content_publishing_artifacts_surfaces_publish_failure_summary(
+    monkeypatch,
+    tmp_path,
+):
+    project_root = tmp_path / "Mente"
+    fake_home = tmp_path / "home"
+    draft_dir = project_root / ".mente" / "publishing" / "session-1"
+    project_root.mkdir()
+    fake_home.mkdir()
+    (project_root / ".git").mkdir()
+    draft_dir.mkdir(parents=True)
+    article_path = draft_dir / "article.md"
+    article_path.write_text("# Draft\n", encoding="utf-8")
+    monkeypatch.chdir(project_root)
+    monkeypatch.setenv("TERMINAL_CWD", str(fake_home))
+
+    def _fake_publish_wechat_draft(**kwargs):
+        return {
+            "ok": False,
+            "article_path": kwargs["article_path"],
+            "error": "wechat_ip_not_whitelisted",
+            "failure_summary": "微信公众号接口拒绝访问：当前服务器 IP 未加入白名单。",
+            "stderr": "invalid ip 1.2.3.4, not in whitelist",
+        }
+
+    monkeypatch.setattr(mente_bridge, "publish_wechat_draft", _fake_publish_wechat_draft)
+
+    result = recover_gateway_content_publishing_artifacts(
+        message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        session_id="session-1",
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "wechat_ip_not_whitelisted"
+    assert result["failure_summary"] == "微信公众号接口拒绝访问：当前服务器 IP 未加入白名单。"
 
 
 def test_build_api_server_task_sets_api_server_source(tmp_path):
@@ -878,6 +1010,102 @@ def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_pat
     assert second_task.metadata["memory_audit"]["selected"][0]["memory_id"] == (
         "mente_gateway_gatewayfirst:memory:0"
     )
+
+
+def test_gateway_adopted_second_run_surfaces_session_summary_in_memory_context_and_memory_audit(
+    monkeypatch,
+    tmp_path,
+):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+    monkeypatch.setenv("MENTE_SESSION_SUMMARY_RETRIEVAL_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_SOURCES", "gateway")
+    monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_TURN_INTERVAL", "1")
+
+    class _FakeUuid:
+        def __init__(self, value):
+            self.hex = value
+
+    uuids = iter((_FakeUuid("gatewaysummaryseed"), _FakeUuid("gatewaysummaryfollowup")))
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: next(uuids))
+
+    def _fake_execute(self, request):
+        if request.task_id.endswith("gatewaysummaryseed"):
+            return ExecutionResult(
+                status="success",
+                summary="Remember that I prefer concise replies in this chat.",
+            )
+        return ExecutionResult(
+            status="success",
+            summary="Using the prior session summary.",
+        )
+
+    monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    first_result = run_gateway_task(
+        message="Remember that I prefer concise replies in this chat.",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        channel_prompt="be concise",
+        workspace=str(tmp_path),
+    )
+    second_result = run_gateway_task(
+        message="Use my prior preference.",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        channel_prompt="be concise",
+        workspace=str(tmp_path),
+    )
+
+    summary_id = "session_summary:gateway:session-1:gateway_conversation"
+    stored_task = SQLiteTaskRepository(db_path=task_db_path).get(
+        "mente_gateway_gatewaysummaryfollowup"
+    )
+    summary_memory = SQLiteMemoryRepository(db_path=memory_db_path).get(summary_id)
+    selected = second_result.metadata["memory_context"]["selected"]
+    audit_selected = second_result.metadata["memory_audit"]["selected"]
+    summary_item = selected[0]
+    audit_summary_item = audit_selected[0]
+
+    assert first_result.metadata["session_synthesis"]["status"] == "persisted"
+    assert summary_item["memory_id"] == summary_id
+    assert summary_item["kind"] == "session_summary"
+    assert summary_item["reason"] == "session_summary_priority"
+    assert audit_summary_item["memory_id"] == summary_id
+    assert audit_summary_item["kind"] == "session_summary"
+    assert audit_summary_item["reason"] == "session_summary_priority"
+    assert audit_summary_item["fact"] == summary_item["fact"]
+    assert summary_memory is not None
+    assert summary_memory.source == "gateway"
+    assert summary_memory.task_type == "conversation"
+    assert stored_task is not None
+    assert stored_task.metadata["memory_context"]["selected"][0] == summary_item
+    assert stored_task.metadata["memory_audit"]["selected"][0] == audit_summary_item
+    assert second_result.metadata["workflow_contract"]["memory_read"]["session_summary"] == {
+        "enabled": True,
+        "scope": "session",
+        "kind": "session_summary",
+        "priority": "before_generic_memories",
+        "max_results": 1,
+        "counts_toward_existing_budgets": True,
+    }
 
 
 def test_run_cron_task_persists_task_record(tmp_path, monkeypatch):

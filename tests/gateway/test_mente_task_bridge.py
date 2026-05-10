@@ -785,7 +785,208 @@ async def test_run_agent_mente_host_timeout_cancels_stalled_turn(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_agent_mente_emits_codex_command_detail_progress(monkeypatch):
+async def test_run_agent_mente_host_timeout_recovers_publishing_draft_when_source_exists(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+    monkeypatch.setattr(
+        gateway_run,
+        "_resolve_mente_gateway_host_timeout_seconds",
+        lambda **_kwargs: 0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        gateway_run,
+        "_MENTE_GATEWAY_CANCEL_GRACE_SECONDS",
+        0.01,
+        raising=False,
+    )
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        await asyncio.sleep(0.05)
+        return {
+            "final_response": "late",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+        }
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        gateway_run,
+        "_attempt_mente_gateway_timeout_recovery",
+        lambda **_kwargs: {
+            "ok": True,
+            "final_response": "📰 已根据已生成草稿完成公众号草稿发布。",
+            "failed": False,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+        },
+        raising=False,
+    )
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=14,
+    )
+
+    assert result["final_response"] == "📰 已根据已生成草稿完成公众号草稿发布。"
+    assert result["failed"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_host_timeout_recovers_after_fast_cancelled_failure(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+    monkeypatch.setattr(
+        gateway_run,
+        "_resolve_mente_gateway_host_timeout_seconds",
+        lambda **_kwargs: 0.01,
+        raising=False,
+    )
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        await asyncio.sleep(0.02)
+        return {
+            "final_response": "⚠️ 任务已取消。",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+            "failed": True,
+        }
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _fake_to_thread)
+
+    captured: dict[str, object] = {}
+
+    def _fake_recovery(**kwargs):
+        captured.update(kwargs)
+        return {
+            "final_response": "📰 已根据已生成草稿完成公众号草稿发布。",
+            "failed": False,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+        }
+
+    monkeypatch.setattr(
+        gateway_run,
+        "_attempt_mente_gateway_timeout_recovery",
+        _fake_recovery,
+        raising=False,
+    )
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=15,
+    )
+
+    assert captured["session_id"] == "session-1"
+    assert result["final_response"] == "📰 已根据已生成草稿完成公众号草稿发布。"
+    assert result["failed"] is False
+
+
+def test_attempt_mente_gateway_timeout_recovery_returns_specific_publish_failure(monkeypatch):
+    monkeypatch.setattr(
+        gateway_run,
+        "logger",
+        MagicMock(),
+    )
+
+    monkeypatch.setattr(
+        "mente.integrations.bridge.recover_gateway_content_publishing_artifacts",
+        lambda **_kwargs: {
+            "ok": False,
+            "reason": "wechat_ip_not_whitelisted",
+            "failure_summary": "微信公众号接口拒绝访问：当前服务器 IP 未加入白名单。文章与配图已生成，请在微信公众平台后台将该服务器 IP 加入白名单后重试。",
+            "publish_result": {
+                "stdout": "🔐 正在获取 access_token...",
+                "stderr": "invalid ip 1.2.3.4, not in whitelist",
+            },
+        },
+    )
+
+    result = gateway_run._attempt_mente_gateway_timeout_recovery(
+        message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        channel_prompt=None,
+        session_id="session-1",
+        history_length=0,
+    )
+
+    assert result["failed"] is True
+    assert result["final_response"] == (
+        "⚠️ 微信公众号接口拒绝访问：当前服务器 IP 未加入白名单。文章与配图已生成，请在微信公众平台后台将该服务器 IP 加入白名单后重试。"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_emits_compact_progress_without_raw_command_detail(monkeypatch):
     monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
     monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
 
@@ -794,11 +995,14 @@ async def test_run_agent_mente_emits_codex_command_detail_progress(monkeypatch):
 
     monkeypatch.setattr(gateway_run.asyncio, "to_thread", _direct_to_thread)
 
-    command = "/bin/bash -lc 'which google-chrome'"
+    command = "/bin/bash -lc 'sed -n \"1,40p\" README.zh.md'"
+    tool_name = "mcp__mente__mente_memory_query"
 
     def _fake_mente_turn(**kwargs):
         event_callback = kwargs.get("event_callback")
         assert callable(event_callback)
+        event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
+        event_callback("kernel.codex.mcp_tool.completed", {"tool": tool_name})
         event_callback("kernel.codex.command.started", {"command": command})
         event_callback(
             "kernel.codex.command.completed",
@@ -856,8 +1060,29 @@ async def test_run_agent_mente_emits_codex_command_detail_progress(monkeypatch):
     assert "🤖 Mente 已开始执行" not in all_progress_text
     assert "🧮 Mente 回合完成" not in all_progress_text
     assert "📨 Mente runtime 已返回" not in all_progress_text
-    assert f"💻 执行命令：{command}" in all_progress_text
-    assert f"✅ 命令完成：{command}" in all_progress_text
+    assert "🛠️ 工具：mente_memory_query" in all_progress_text
+    assert "✅ 工具完成：mente_memory_query" in all_progress_text
+    assert "💻 Bash · sed" in all_progress_text
+    assert "✅ Bash · sed 完成" in all_progress_text
+    assert command not in all_progress_text
+    assert tool_name not in all_progress_text
+
+
+def test_resolve_mente_gateway_progress_detail_summarizes_python_commands():
+    started = gateway_run._resolve_mente_gateway_progress_detail(
+        "kernel.codex.command.started",
+        {"command": "/bin/bash -lc \"python3 - <<'PY'\nprint('hi')\nPY\""},
+    )
+    completed = gateway_run._resolve_mente_gateway_progress_detail(
+        "kernel.codex.command.completed",
+        {
+            "command": "/bin/bash -lc \"python3 - <<'PY'\nprint('hi')\nPY\"",
+            "exit_code": 0,
+        },
+    )
+
+    assert started == "🐍 Bash · Python 脚本"
+    assert completed == "✅ Bash · Python 脚本 完成"
 
 
 @pytest.mark.asyncio

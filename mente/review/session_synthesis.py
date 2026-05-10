@@ -188,8 +188,6 @@ class SessionSynthesisWorker:
             return False, "missing_source"
         if source not in session_synthesis_sources():
             return False, "unsupported_source"
-        if source != "api_server":
-            return False, "unsupported_source"
         if task.task_type != "conversation":
             return False, "unsupported_task_type"
 
@@ -244,7 +242,7 @@ class SessionSynthesisWorker:
         if not isinstance(artifact, Mapping):
             return False
         source = str(task.metadata.get("source") or "").strip()
-        if source != "api_server" or task.task_type != "conversation":
+        if not source or task.task_type != "conversation":
             return False
         workflow_gate, _ = review_capability_gate(
             source=source,

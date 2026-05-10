@@ -1,4 +1,7 @@
-from mente.feature_flags import build_api_server_conversation_workflow_contract
+from mente.feature_flags import (
+    build_api_server_conversation_workflow_contract,
+    build_conversation_workflow_contract,
+)
 from mente.memory.policy import MemoryPolicyResolver
 from mente.task_core.models import Task
 
@@ -109,6 +112,35 @@ def test_memory_policy_adopted_api_server_workflow_enables_session_summary_field
     policy = resolver.resolve(task)
 
     assert policy.policy_id == "api_server:conversation"
+    assert policy.session_summary_retrieval_enabled is True
+    assert policy.session_summary_scope == "session"
+    assert policy.session_summary_kind == "session_summary"
+    assert policy.max_session_summary_results == 1
+    assert policy.max_chars_per_session_summary == 160
+
+
+def test_memory_policy_adopted_gateway_workflow_enables_session_summary_fields():
+    resolver = MemoryPolicyResolver.default()
+    task = Task(
+        task_id="task_gateway_1",
+        session_id="session_gateway_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply",
+        metadata={
+            "source": "gateway",
+            "workflow_contract": build_conversation_workflow_contract(
+                source="gateway",
+                environment={
+                    "MENTE_SESSION_SUMMARY_RETRIEVAL_ENABLED": "1",
+                },
+            ),
+        },
+    )
+
+    policy = resolver.resolve(task)
+
+    assert policy.policy_id == "gateway:conversation"
     assert policy.session_summary_retrieval_enabled is True
     assert policy.session_summary_scope == "session"
     assert policy.session_summary_kind == "session_summary"

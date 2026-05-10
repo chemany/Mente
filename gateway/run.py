@@ -21,6 +21,7 @@ import logging
 import os
 import queue
 import re
+import shlex
 import sys
 import signal
 import tempfile
@@ -29,7 +30,7 @@ import time
 from collections import OrderedDict
 from contextvars import copy_context
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional, Any, List
 
 from agent.account_usage import fetch_account_usage, render_account_usage_lines
@@ -91,7 +92,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Resolve the canonical Mente home first, then expose it to legacy Hermes code.
 from hermes_constants import bootstrap_mente_home, get_hermes_home
 from utils import atomic_yaml_write, base_url_host_matches, is_truthy_value
-from mente.feature_flags import is_gateway_runtime_continuity_enabled
+from mente.feature_flags import (
+    gateway_runtime_continuity_idle_ttl_seconds,
+    is_gateway_runtime_continuity_enabled,
+    is_session_summary_retrieval_enabled,
+)
+from mente.memory.repository import SQLiteMemoryRepository
 from mente.task_core.task_query import execute_task_query, parse_gateway_task_query
 from mente.task_core.repository import SQLiteTaskRepository
 
@@ -142,6 +148,7 @@ def _resolve_gateway_runtime_continuity_plan(
     session_entry,
     history: List[Dict[str, Any]],
     continuity_payload: Dict[str, Any] | None,
+    session_summary_available: bool = False,
 ) -> Dict[str, Any]:
     """Resolve whether one gateway turn should start or resume runtime continuity."""
     if not is_gateway_runtime_continuity_enabled():
@@ -175,6 +182,14 @@ def _resolve_gateway_runtime_continuity_plan(
             "replay_history_in_memory_facts": False,
         }
 
+    if session_summary_available:
+        return {
+            "execution_mode": ExecutionMode.SESSIONFUL,
+            "execution_session": ExecutionSession(mode=SessionMode.START),
+            "fallback_history_fact": None,
+            "replay_history_in_memory_facts": False,
+        }
+
     fallback_history_fact = _build_gateway_fallback_history_fact(history)
     return {
         "execution_mode": ExecutionMode.SESSIONFUL,
@@ -182,6 +197,33 @@ def _resolve_gateway_runtime_continuity_plan(
         "fallback_history_fact": fallback_history_fact,
         "replay_history_in_memory_facts": False,
     }
+
+
+def _has_gateway_session_summary(
+    *,
+    session_id: str,
+    source: str = "gateway",
+) -> bool:
+    """Return whether one gateway session already has a synthesized session summary."""
+
+    if not session_id or not is_session_summary_retrieval_enabled():
+        return False
+
+    repository = SQLiteMemoryRepository()
+    try:
+        rows = repository.list_relevant_by_scope(
+            session_id=session_id,
+            task_type="conversation",
+            memory_scope="session",
+            limit=1,
+            source=source,
+            kind="session_summary",
+        )
+        return bool(rows)
+    finally:
+        close = getattr(repository, "close", None)
+        if callable(close):
+            close()
 
 
 def _record_gateway_runtime_continuity_result(
@@ -273,6 +315,70 @@ def _maybe_invalidate_gateway_runtime_continuity_when_disabled(
     payload = dict(continuity_payload)
     payload["status"] = "invalidated"
     payload["invalidation_reason"] = "continuity_disabled"
+    return payload
+
+
+def _parse_gateway_runtime_continuity_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _maybe_invalidate_gateway_runtime_continuity_when_idle_expired(
+    *,
+    session_store,
+    session_id: str | None,
+    continuity_payload: Dict[str, Any] | None,
+) -> Dict[str, Any] | None:
+    """Retire stale gateway continuity so long-idle chats start fresh."""
+    if not isinstance(continuity_payload, dict):
+        return continuity_payload
+
+    ttl_seconds = gateway_runtime_continuity_idle_ttl_seconds()
+    if ttl_seconds is None:
+        return dict(continuity_payload)
+
+    runtime = str(continuity_payload.get("runtime") or "").strip().lower()
+    status = str(continuity_payload.get("status") or "").strip().lower()
+    continuity_id = str(continuity_payload.get("continuity_id") or "").strip()
+    updated_at = _parse_gateway_runtime_continuity_timestamp(
+        continuity_payload.get("updated_at")
+    )
+    if (
+        runtime != _GATEWAY_RUNTIME_CONTINUITY_RUNTIME
+        or status != "active"
+        or not continuity_id
+        or updated_at is None
+    ):
+        return dict(continuity_payload)
+
+    idle_seconds = (datetime.now(timezone.utc) - updated_at).total_seconds()
+    if idle_seconds <= ttl_seconds:
+        return dict(continuity_payload)
+
+    _invalidate_gateway_runtime_continuity(
+        session_store=session_store,
+        session_id=session_id,
+        reason="idle_ttl_expired",
+    )
+    logger.info(
+        "Gateway runtime continuity expired by idle TTL: session_id=%s continuity_id=%s idle_seconds=%.0f ttl_seconds=%.0f",
+        session_id,
+        continuity_id,
+        idle_seconds,
+        ttl_seconds,
+    )
+    payload = dict(continuity_payload)
+    payload["status"] = "invalidated"
+    payload["invalidation_reason"] = "idle_ttl_expired"
     return payload
 
 
@@ -441,6 +547,90 @@ def _build_mente_gateway_timeout_result(
         "mente_task_id": None,
         "execution_session": None,
     }
+
+
+def _attempt_mente_gateway_timeout_recovery(
+    *,
+    message: str,
+    channel_prompt: str | None,
+    session_id: str,
+    history_length: int,
+) -> Dict[str, Any] | None:
+    """Attempt a narrow host-side recovery for timed-out managed publishing turns."""
+
+    from mente.integrations.bridge import recover_gateway_content_publishing_artifacts
+
+    recovery = recover_gateway_content_publishing_artifacts(
+        message=message,
+        channel_prompt=channel_prompt,
+        session_id=session_id,
+    )
+    if not isinstance(recovery, dict) or not recovery.get("ok"):
+        if isinstance(recovery, dict) and recovery.get("reason") not in {None, "not_content_publishing", "draft_not_found"}:
+            publish_result = recovery.get("publish_result") if isinstance(recovery.get("publish_result"), dict) else {}
+            stdout_excerpt = _truncate_mente_gateway_publish_diagnostic(publish_result.get("stdout"))
+            stderr_excerpt = _truncate_mente_gateway_publish_diagnostic(publish_result.get("stderr"))
+            logger.warning(
+                "Mente gateway timeout recovery failed for session %s: %s | stdout=%r | stderr=%r",
+                session_id,
+                recovery.get("reason"),
+                stdout_excerpt,
+                stderr_excerpt,
+            )
+            failure_summary = str(recovery.get("failure_summary") or "").strip()
+            if failure_summary:
+                return {
+                    "final_response": _format_mente_gateway_failed_response(
+                        summary=failure_summary,
+                        failure_reason=str(recovery.get("reason") or ""),
+                    ),
+                    "last_reasoning": None,
+                    "messages": [],
+                    "api_calls": 0,
+                    "failed": True,
+                    "compression_exhausted": False,
+                    "tools": [],
+                    "history_offset": history_length,
+                    "last_prompt_tokens": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "model": None,
+                    "session_id": session_id,
+                    "response_previewed": False,
+                    "mente_timeout_recovery": recovery,
+                }
+        return None
+    logger.info(
+        "Mente gateway timeout recovery succeeded for session %s via %s",
+        session_id,
+        recovery.get("recovered_from") or "managed publishing artifacts",
+    )
+    return {
+        "final_response": "📰 已根据已生成草稿完成公众号草稿发布。",
+        "last_reasoning": None,
+        "messages": [],
+        "api_calls": 0,
+        "failed": False,
+        "compression_exhausted": False,
+        "tools": [],
+        "history_offset": history_length,
+        "last_prompt_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "model": None,
+        "session_id": session_id,
+        "response_previewed": False,
+        "mente_timeout_recovery": recovery,
+    }
+
+
+def _truncate_mente_gateway_publish_diagnostic(value: Any, limit: int = 240) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
 
 
 def _format_mente_gateway_failed_response(
@@ -1009,6 +1199,72 @@ def _resolve_mente_gateway_progress_step(
     return _MENTE_GATEWAY_PROGRESS_PROTOCOL.get(str(event_type or ""))
 
 
+def _summarize_mente_gateway_tool_name(tool_name: str) -> str | None:
+    value = str(tool_name or "").strip()
+    if not value:
+        return None
+    if value.startswith("mcp__"):
+        parts = [part for part in value.split("__") if part]
+        if parts:
+            return parts[-1]
+    return value
+
+
+def _summarize_mente_gateway_exec_tokens(tokens: list[str]) -> tuple[str, str] | None:
+    if not tokens:
+        return None
+    head = Path(tokens[0]).name.strip().lower()
+    if not head:
+        return None
+
+    if head.startswith("python") or head == "py":
+        return "🐍", "Python 脚本"
+    if head == "node":
+        return "🟢", "Node 脚本"
+    if head in {"curl", "wget"}:
+        return "🌐", head
+    if head == "git":
+        sub = next((part for part in tokens[1:] if not str(part).startswith("-")), "")
+        return "🌿", f"git · {sub}" if sub else "git"
+    if head == "npm":
+        sub = next((part for part in tokens[1:] if not str(part).startswith("-")), "")
+        return "🟢", f"npm · {sub}" if sub else "npm"
+    return "💻", head
+
+
+def _summarize_mente_gateway_command(command: str) -> tuple[str, str] | None:
+    text = str(command or "").strip()
+    if not text:
+        return None
+    try:
+        tokens = shlex.split(text, posix=True)
+    except ValueError:
+        tokens = text.split()
+    if not tokens:
+        return None
+
+    shell_name = Path(tokens[0]).name.strip().lower()
+    if shell_name in {"bash", "sh", "zsh", "fish"}:
+        shell_label = shell_name.capitalize()
+        inner_command = ""
+        for index, token in enumerate(tokens[1:], start=1):
+            if token in {"-c", "-lc"} and index + 1 < len(tokens):
+                inner_command = tokens[index + 1]
+                break
+        if inner_command:
+            try:
+                inner_tokens = shlex.split(inner_command, posix=True)
+            except ValueError:
+                inner_tokens = inner_command.split()
+            summarized = _summarize_mente_gateway_exec_tokens(inner_tokens)
+            if summarized is not None:
+                icon, detail = summarized
+                return icon, f"{shell_label} · {detail}"
+        return "💻", f"{shell_label} 命令"
+
+    return _summarize_mente_gateway_exec_tokens(tokens)
+
+
 def _resolve_mente_gateway_progress_detail(
     event_type: str,
     payload: dict[str, Any] | None = None,
@@ -1019,23 +1275,35 @@ def _resolve_mente_gateway_progress_detail(
     if normalized_type == "kernel.codex.command.started":
         command = str(payload.get("command") or "").strip()
         if command:
-            return f"💻 执行命令：{command}"
+            summarized = _summarize_mente_gateway_command(command)
+            if summarized is not None:
+                icon, detail = summarized
+                return f"{icon} {detail}"
     if normalized_type == "kernel.codex.command.completed":
         command = str(payload.get("command") or "").strip()
         if command:
             exit_code = payload.get("exit_code")
-            prefix = "✅" if exit_code == 0 else "❌"
-            return f"{prefix} 命令完成：{command}"
+            summarized = _summarize_mente_gateway_command(command)
+            if summarized is not None:
+                _icon, detail = summarized
+                prefix = "✅" if exit_code == 0 else "❌"
+                suffix = "完成" if exit_code == 0 else "失败"
+                return f"{prefix} {detail} {suffix}"
     if normalized_type == "kernel.codex.mcp_tool.started":
         tool_name = str(payload.get("tool") or "").strip()
         if tool_name:
-            return f"🛠️ 调用工具：{tool_name}"
+            summarized_tool = _summarize_mente_gateway_tool_name(tool_name)
+            if summarized_tool:
+                return f"🛠️ 工具：{summarized_tool}"
     if normalized_type == "kernel.codex.mcp_tool.completed":
         tool_name = str(payload.get("tool") or "").strip()
         if tool_name:
             error = payload.get("error")
-            prefix = "✅" if not error else "❌"
-            return f"{prefix} 工具完成：{tool_name}"
+            summarized_tool = _summarize_mente_gateway_tool_name(tool_name)
+            if summarized_tool:
+                prefix = "✅" if not error else "❌"
+                label = "工具完成" if not error else "工具失败"
+                return f"{prefix} {label}：{summarized_tool}"
     return None
 
 
@@ -10468,10 +10736,16 @@ class GatewayRunner:
                     session_id=session_id,
                     continuity_payload=continuity_payload,
                 )
+                continuity_payload = _maybe_invalidate_gateway_runtime_continuity_when_idle_expired(
+                    session_store=self.session_store,
+                    session_id=session_id,
+                    continuity_payload=continuity_payload,
+                )
             continuity_plan = _resolve_gateway_runtime_continuity_plan(
                 session_entry=None,
                 history=history,
                 continuity_payload=continuity_payload,
+                session_summary_available=_has_gateway_session_summary(session_id=session_id),
             )
             _resolved_tp = resolve_display_setting(user_config, platform_key, "tool_progress")
             progress_mode = (
@@ -10568,12 +10842,28 @@ class GatewayRunner:
                                 asyncio.shield(mente_thread_task),
                                 timeout=_MENTE_GATEWAY_CANCEL_GRACE_SECONDS,
                             )
+                            if result.get("failed", False):
+                                recovered_result = _attempt_mente_gateway_timeout_recovery(
+                                    message=message,
+                                    channel_prompt=channel_prompt,
+                                    session_id=session_id,
+                                    history_length=len(history),
+                                )
+                                if recovered_result is not None:
+                                    result = recovered_result
                         except asyncio.TimeoutError:
-                            result = _build_mente_gateway_timeout_result(
+                            result = _attempt_mente_gateway_timeout_recovery(
+                                message=message,
+                                channel_prompt=channel_prompt,
                                 session_id=session_id,
                                 history_length=len(history),
-                                timeout_seconds=gateway_timeout_seconds,
                             )
+                            if result is None:
+                                result = _build_mente_gateway_timeout_result(
+                                    session_id=session_id,
+                                    history_length=len(history),
+                                    timeout_seconds=gateway_timeout_seconds,
+                                )
                 else:
                     result = await mente_thread_task
                 if self.session_store is not None and hasattr(self.session_store, "bind_runtime_continuity"):
