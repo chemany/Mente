@@ -254,6 +254,38 @@ def test_record_gateway_runtime_continuity_result_binds_active_continuity():
     session_store.invalidate_runtime_continuity.assert_not_called()
 
 
+def test_record_gateway_runtime_continuity_result_invalidates_deep_research_thread_after_binding():
+    session_store = MagicMock()
+
+    gateway_run._record_gateway_runtime_continuity_result(
+        session_store=session_store,
+        session_id="sess-1",
+        task_id="task-1",
+        previous_continuity_payload=None,
+        execution_session_payload={
+            "mode": "start",
+            "continuity_id": "thread-123",
+            "continuity_status": "started",
+            "fallback_reason": None,
+        },
+        task_profile="deep_research",
+    )
+
+    session_store.bind_runtime_continuity.assert_called_once_with(
+        "sess-1",
+        runtime="codex",
+        continuity_id="thread-123",
+        status="active",
+        last_task_id="task-1",
+        last_mode="start",
+        last_fallback_reason=None,
+    )
+    session_store.invalidate_runtime_continuity.assert_called_once_with(
+        "sess-1",
+        reason="deep_research_completed",
+    )
+
+
 def test_record_gateway_runtime_continuity_result_invalidates_previous_resume_on_fallback():
     session_store = MagicMock()
 

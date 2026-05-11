@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 import threading
 import uuid
@@ -48,6 +49,7 @@ _DEEP_RESEARCH_SKILL_REF = "research/deep-research-pro"
 _CONTENT_PUBLISHING_TASK_PROFILE = "content_publishing"
 _DEEP_RESEARCH_TASK_PROFILE = "deep_research"
 _CONTENT_PUBLISHING_HOST_TIMEOUT_SECONDS = 420.0
+_DEEP_RESEARCH_NOTIFY_INTERVAL_SECONDS = 60.0
 _WECHAT_PUBLISH_HINTS: tuple[str, ...] = (
     "wechat",
     "微信",
@@ -129,6 +131,27 @@ def _build_deep_research_output_plan() -> str:
             "- Required artifact formats: Markdown (.md), HTML (.html), DOCX (.docx)",
             "- Final reply requirement: include a concise conclusion plus the generated artifact paths.",
             "- If one format fails, continue producing the remaining artifacts and explain the concrete blocker.",
+        ]
+    )
+
+
+def _build_deep_research_execution_plan(*, workspace: str) -> str:
+    """Return deterministic orchestration guidance for managed deep research."""
+
+    skill_root = get_skills_dir() / "research" / "deep-research-pro"
+    resolved_workspace = Path(workspace).expanduser()
+    return "\n".join(
+        [
+            "Deep research execution plan:",
+            "- Prefer one parent orchestrator plus 3 parallel delegate_task workers instead of a single agent writing all 7 chapters serially.",
+            "- Recommended worker ownership: chapter_1 + chapter_4; chapter_2 + chapter_3; chapter_5 + chapter_6 + chapter_7.",
+            f"- Active workspace: {resolved_workspace}",
+            f"- Skill root: {skill_root}",
+            f"- Preferred direct parallel entrypoint: {skill_root / 'deep_research_pro.py'}",
+            "- Keep exploration scoped to the active workspace and the deep-research skill root.",
+            "- Avoid broad repository or home-directory scans before delegating work.",
+            "- Each worker should finish its assigned chapters, save intermediate chapter artifacts, and return concise findings plus artifact paths to the parent.",
+            "- The parent should merge validated chapter outputs once, then generate the final Markdown, HTML, and DOCX report artifacts.",
         ]
     )
 
@@ -265,6 +288,27 @@ def resolve_gateway_task_host_timeout_seconds(
     if task_profile == _CONTENT_PUBLISHING_TASK_PROFILE:
         return _CONTENT_PUBLISHING_HOST_TIMEOUT_SECONDS
     return None
+
+
+def resolve_gateway_task_notify_interval_seconds(
+    *,
+    message: str,
+    configured_seconds: float | int | None,
+    channel_prompt: str | None = None,
+) -> float | None:
+    """Return the effective progress-heartbeat interval for gateway tasks."""
+
+    if configured_seconds is None:
+        return None
+    interval = float(configured_seconds)
+    if interval <= 0:
+        return None
+
+    skill_refs = _infer_gateway_skill_refs(message=message, channel_prompt=channel_prompt)
+    task_profile = _resolve_gateway_task_profile(skill_refs)
+    if task_profile == _DEEP_RESEARCH_TASK_PROFILE:
+        return min(interval, _DEEP_RESEARCH_NOTIFY_INTERVAL_SECONDS)
+    return interval
 
 
 def _resolve_gateway_workspace(
@@ -468,6 +512,60 @@ def _build_conversation_history_fact(history: list[dict[str, Any]]) -> str | Non
     return f"Conversation history (JSON):\n{serialized_history}"
 
 
+def _looks_like_continue_task_request(message: str) -> bool:
+    """Return whether the latest user message likely asks to resume prior work."""
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "continue",
+        "resume",
+        "pick up",
+        "继续",
+        "接着",
+        "继续任务",
+        "继续刚才",
+        "继续上一个",
+        "刚才的任务",
+        "上一条任务",
+        "上一个任务",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _build_recent_task_snapshot_fact(snapshot: Mapping[str, Any]) -> str | None:
+    """Render one bounded short-term task snapshot as a memory fact."""
+    user_request = str(snapshot.get("user_request") or "").strip()
+    if not user_request:
+        return None
+    status = str(snapshot.get("status") or "").strip() or "running"
+    assistant_summary = str(snapshot.get("assistant_summary") or "").strip()
+    follow_up_tasks = [
+        str(item).strip()
+        for item in snapshot.get("follow_up_tasks") or []
+        if str(item).strip()
+    ]
+    metadata = snapshot.get("metadata") if isinstance(snapshot.get("metadata"), Mapping) else {}
+    lines = [
+        "Recent active task snapshot:",
+        f"- Status: {status}",
+        f"- Original request: {user_request}",
+    ]
+    if assistant_summary:
+        lines.append(f"- Latest progress summary: {assistant_summary}")
+    if follow_up_tasks:
+        lines.append(
+            "- Pending follow-up: " + "; ".join(follow_up_tasks[:3])
+        )
+    task_profile = str(metadata.get("task_profile") or "").strip()
+    if task_profile:
+        lines.append(f"- Task profile: {task_profile}")
+    lines.append(
+        "- If the user asks to continue or resume the previous task, continue from this snapshot instead of claiming the prior task is unavailable."
+    )
+    return "\n".join(lines)
+
+
 def _normalize_skill_refs(skill_refs: list[str] | tuple[str, ...] | None) -> list[str]:
     """Normalize caller-provided skill refs into a stable list."""
     normalized: list[str] = []
@@ -596,6 +694,7 @@ def build_gateway_task(
     execution_session: ExecutionSession | dict[str, Any] | None = None,
     fallback_history_fact: str | None = None,
     replay_history_in_memory_facts: bool = True,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
 ) -> Task:
     """Create a normalized Mente task for a gateway turn."""
     inferred_skill_refs = _infer_gateway_skill_refs(message=message, channel_prompt=channel_prompt)
@@ -618,6 +717,10 @@ def build_gateway_task(
     history_fact = _build_conversation_history_fact(history)
     if history_fact and replay_history_in_memory_facts:
         memory_facts.append(history_fact)
+    if recent_task_snapshot and _looks_like_continue_task_request(message):
+        snapshot_fact = _build_recent_task_snapshot_fact(recent_task_snapshot)
+        if snapshot_fact:
+            memory_facts.append(snapshot_fact)
 
     platform = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
     task_profile = _resolve_gateway_task_profile(inferred_skill_refs)
@@ -685,6 +788,7 @@ def build_gateway_task(
         )
     if _DEEP_RESEARCH_SKILL_REF in inferred_skill_refs:
         memory_facts.append(_build_deep_research_workflow_brief())
+        memory_facts.append(_build_deep_research_execution_plan(workspace=resolved_workspace))
         memory_facts.append(_build_deep_research_output_plan())
         constraints.append(
             "Do not stop after intermediate findings; complete the full deep-research report workflow in this turn."
@@ -834,6 +938,7 @@ def run_gateway_task(
     execution_session: ExecutionSession | dict[str, Any] | None = None,
     fallback_history_fact: str | None = None,
     replay_history_in_memory_facts: bool = True,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
     event_callback: ExecutionEventCallback | None = None,
     cancel_event: Any | None = None,
 ) -> ExecutionResult:
@@ -851,6 +956,7 @@ def run_gateway_task(
         execution_session=execution_session,
         fallback_history_fact=fallback_history_fact,
         replay_history_in_memory_facts=replay_history_in_memory_facts,
+        recent_task_snapshot=recent_task_snapshot,
     )
     repository = _build_task_repository()
     memory_repository = _build_memory_repository()
@@ -875,6 +981,9 @@ def run_gateway_task(
             repository=repository,
             memory_repository=memory_repository,
         )
+        task_profile = task.metadata.get("task_profile")
+        if isinstance(task_profile, str) and task_profile.strip():
+            result.metadata.setdefault("task_profile", task_profile.strip())
         return result
     finally:
         for repo in (memory_repository, repository):

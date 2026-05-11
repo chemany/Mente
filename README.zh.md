@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://chemany.github.io/Mente/docs/"><img src="https://img.shields.io/badge/Docs-chemany.github.io%2FMente%2Fdocs-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href="https://www.npmjs.com/package/mente-agent"><img src="https://img.shields.io/npm/v/mente-agent?style=for-the-badge&logo=npm&logoColor=white" alt="npm version"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/chemany/Mente/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
   <a href="https://github.com/chemany/Mente"><img src="https://img.shields.io/badge/GitHub-chemany%2FMente-111827?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Repository"></a>
@@ -22,6 +23,8 @@
 - **对外统一使用 Mente**，CLI、网关进度、消息平台和用户可见回复都不再混用旧品牌。
 - **内部执行仍然使用 Codex 支撑的执行器**，这次调整是展示层收口，不是能力降级。
 - **网关执行进度重新可见**，对外显示为 Mente 的步骤名称，同时保留底层命令和工具活动明细。
+- **长任务现在会补充自然语言解释**，在原始 Bash / 工具活动之外，用户还能看到意图、当前发现和下一步，不再只能看命令日志。
+- **短期任务记忆现在可以跨网关重启保留**，如果任务执行到一半重启，用户说“继续任务”时，Mente 会基于最近活跃任务快照接着做，而不是把上一条任务当成丢失。
 - **配置和管理类操作已经明确化**，通过专门的 Mente skill 处理 API key、provider 鉴权、`.env`、`config.yaml` 与网关重启边界。
 
 <p align="center">
@@ -32,8 +35,8 @@
 
 <table>
 <tr><td><b>真正可用的终端界面</b></td><td>完整 TUI，支持多行输入、斜杠命令补全、会话历史、打断并改向，以及实时工具输出流。</td></tr>
-<tr><td><b>跟着你工作的入口</b></td><td>Telegram、Discord、Slack、WhatsApp、Signal 和 CLI 共用同一个网关进程。支持语音转写，也支持跨平台连续对话。</td></tr>
-<tr><td><b>闭环学习能力</b></td><td>带周期性提醒的 agent 记忆系统；复杂任务后自动产出技能；技能在使用中持续改进；基于 FTS5 的会话检索与 LLM 摘要；集成 <a href="https://github.com/plastic-labs/honcho">Honcho</a> 用户建模；兼容 <a href="https://agentskills.io">agentskills.io</a> 开放标准。</td></tr>
+<tr><td><b>跟着你工作的入口</b></td><td>Telegram、Discord、Slack、WhatsApp、Signal 和 CLI 共用同一个网关进程。支持语音转写、跨平台连续对话，也支持网关重启后的在途任务恢复。</td></tr>
+<tr><td><b>闭环学习能力</b></td><td>带周期性提醒的 agent 记忆系统；重启后可用于“继续任务”的短期活跃任务快照；复杂任务后自动产出技能；技能在使用中持续改进；基于 FTS5 的会话检索与 LLM 摘要；集成 <a href="https://github.com/plastic-labs/honcho">Honcho</a> 用户建模；兼容 <a href="https://agentskills.io">agentskills.io</a> 开放标准。</td></tr>
 <tr><td><b>定时自动化</b></td><td>内置 cron 调度，可把结果投递到任意平台。日报、夜间备份、每周审计都能用自然语言配置后无人值守执行。</td></tr>
 <tr><td><b>委派与并行</b></td><td>可以生成隔离子代理并行工作，也可以写 Python 脚本通过 RPC 调工具，把多步流程压缩成零上下文成本的单回合执行。</td></tr>
 <tr><td><b>不只跑在你的笔记本上</b></td><td>内置六种终端后端：local、Docker、SSH、Daytona、Singularity、Modal。Daytona 和 Modal 支持类 serverless 持久环境，空闲时休眠、需要时唤醒，几乎不花闲置成本。既能跑在 $5 VPS，也能跑在 GPU 集群。</td></tr>
@@ -61,14 +64,14 @@ mente
 
 这个 npm 包刻意保持 **很薄**。它只发布 launcher 和 installer 脚本，第一次运行时再自动引导完整的 Mente runtime。默认会从仓库的 `main` 分支完成 bootstrap，你也可以通过 `MENTE_BOOTSTRAP_RELEASE=<tag> mente` 强制安装某个发布版本。它 **不会** 把你本机的 `.env`、`auth.json`、`~/.mente`、`~/.hermes`、sessions、logs 或其它机器私有状态打进包里。
 
+现在这个公开 npm 包已经正式上线，所以 `npm install -g mente-agent` 已经是可用的安装路径，不再只是预留说明。包本身仍然保持极薄：你先装 launcher，第一次运行时再拉取匹配的完整 runtime。
+
 现在，引导出来的私有 Codex runtime 默认会把 `model_auto_compact_token_limit` 设为 `160000`，让长会话更早、更稳定地触发压缩。如果你要手动覆盖这个阈值，可以在 Mente 配置里写：
 
 ```yaml
 codex:
   model_auto_compact_token_limit: 120000
 ```
-
-目前仓库里的 npm 包已经 **具备可发布状态，但还没有真正发布到 npm registry**。在首个公开 npm 版本上线前，请先使用上面的方案 1。等包真正发布后，`npm install -g mente-agent` 才是对外的一键安装主路径。
 
 如果你是发布操作人，最短 npm 发布说明见：[docs/releasing/npm.md](docs/releasing/npm.md)。
 
@@ -108,9 +111,11 @@ mente doctor        # 检查并诊断问题
 当前 README 反映的是 Mente 最新的打包和 runtime 方向：
 
 - **GitHub 访客当前可用的一条安装命令：** `curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash`
-- **npm 发布后的目标一条安装命令：** `npm install -g mente-agent`
+- **已经可用的一条 npm 安装命令：** `npm install -g mente-agent`
 - **统一的可见 agent 身份：** 对外回复和进度统一呈现为 `Mente`
 - **同样深度的底层执行能力：** 复杂编码和工具执行仍然走 Codex-backed executor
+- **更稳的网关连续性：** 最近活跃任务快照可让用户在网关重启后继续中断中的任务
+- **更易读的长任务过程：** 现在会把自然语言阶段总结和底层命令/工具活动一起呈现
 - **更安全的运维表面：** 打包采用白名单方式，配置/管理操作也有 API key、provider 鉴权和重启边界的明确处理
 
 如果你是从 GitHub 第一次接触 Mente，最实用的理解方式是：

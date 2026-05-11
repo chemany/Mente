@@ -30,37 +30,40 @@ class KernelStructuredOutput(BaseModel):
 
 def build_structured_output_schema() -> dict[str, object]:
     """Return the schema expected from the transport backend."""
+    properties = {
+        "assistant_summary": {"type": "string"},
+        "memory_candidates": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "completion_status": {
+            "type": "string",
+            "enum": ["success", "blocked"],
+        },
+        "changed_files": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "artifacts_out": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "verification_results": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "follow_up_tasks": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    }
     return {
         "type": "object",
         "additionalProperties": False,
-        "properties": {
-            "assistant_summary": {"type": "string"},
-            "memory_candidates": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "completion_status": {
-                "type": "string",
-                "enum": ["success", "blocked"],
-            },
-            "changed_files": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "artifacts_out": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "verification_results": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "follow_up_tasks": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-        },
-        "required": ["assistant_summary", "memory_candidates", "completion_status"],
+        "properties": properties,
+        # Some providers reject object schemas unless required covers every
+        # declared property, even when fields are semantically optional.
+        "required": list(properties.keys()),
     }
 
 

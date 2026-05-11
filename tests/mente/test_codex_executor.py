@@ -792,6 +792,10 @@ def test_render_execution_prompt_adds_report_delivery_policy_for_deep_research()
 
     assert "Workflow Policy:" in prompt
     assert "Use the provided deep-research skill directly and complete the full report workflow in this turn." in prompt
+    assert "Use delegate_task to launch parallel chapter workers" in prompt
+    assert "chapter_1 + chapter_4" in prompt
+    assert "chapter_2 + chapter_3" in prompt
+    assert "chapter_5 + chapter_6 + chapter_7" in prompt
     assert "Do not stop at intermediate findings or end by asking whether the user wants the formal report." in prompt
     assert "Generate the final report artifacts in Markdown, HTML, and DOCX, then report the exact paths in the final reply." in prompt
     assert "If one format generation step fails" in prompt

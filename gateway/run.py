@@ -116,6 +116,7 @@ from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
 
 
 _GATEWAY_RUNTIME_CONTINUITY_RUNTIME = "codex"
+_GATEWAY_RUNTIME_CONTINUITY_RESET_TASK_PROFILES = frozenset({"deep_research"})
 _MENTE_GATEWAY_CANCEL_GRACE_SECONDS = 5.0
 
 
@@ -142,6 +143,122 @@ def _build_gateway_fallback_history_fact(history: List[Dict[str, Any]]) -> str |
         sort_keys=True,
         separators=(",", ":"),
         default=str,
+    )
+
+
+def _looks_like_gateway_resume_request(message: str) -> bool:
+    """Return whether the latest user message likely refers to prior in-flight work."""
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "continue",
+        "resume",
+        "pick up",
+        "继续",
+        "接着",
+        "继续任务",
+        "继续刚才",
+        "继续上一个",
+        "刚才的任务",
+        "上一条任务",
+        "上一个任务",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _bind_gateway_recent_task_snapshot_start(
+    *,
+    session_store,
+    session_id: str,
+    message: str,
+    previous_snapshot: Dict[str, Any] | None,
+) -> None:
+    """Persist one short-term running-task snapshot before execution begins."""
+    if session_store is None or not hasattr(session_store, "bind_recent_task_snapshot"):
+        return
+    snapshot_request = str(message or "").strip()
+    snapshot_summary = ""
+    snapshot_follow_up: list[str] = []
+    snapshot_metadata: dict[str, Any] = {}
+    if _looks_like_gateway_resume_request(message) and isinstance(previous_snapshot, dict):
+        snapshot_request = str(previous_snapshot.get("user_request") or snapshot_request).strip()
+        snapshot_summary = str(previous_snapshot.get("assistant_summary") or "").strip()
+        snapshot_follow_up = [
+            str(item).strip()
+            for item in previous_snapshot.get("follow_up_tasks") or []
+            if str(item).strip()
+        ]
+        if isinstance(previous_snapshot.get("metadata"), dict):
+            snapshot_metadata = dict(previous_snapshot["metadata"])
+    session_store.bind_recent_task_snapshot(
+        session_id,
+        user_request=snapshot_request,
+        status="running",
+        assistant_summary=snapshot_summary,
+        follow_up_tasks=snapshot_follow_up,
+        metadata=snapshot_metadata,
+    )
+
+
+def _finalize_gateway_recent_task_snapshot(
+    *,
+    session_store,
+    session_id: str,
+    message: str,
+    result: Dict[str, Any],
+    previous_snapshot: Dict[str, Any] | None,
+) -> None:
+    """Update or clear the short-term task snapshot after one gateway turn."""
+    if session_store is None:
+        return
+    follow_up_tasks = [
+        str(item).strip()
+        for item in result.get("follow_up_tasks") or []
+        if str(item).strip()
+    ]
+    if not result.get("failed", False) and not follow_up_tasks:
+        if hasattr(session_store, "clear_recent_task_snapshot"):
+            session_store.clear_recent_task_snapshot(session_id)
+        return
+
+    if not hasattr(session_store, "bind_recent_task_snapshot"):
+        return
+
+    snapshot_request = str(message or "").strip()
+    if _looks_like_gateway_resume_request(message) and isinstance(previous_snapshot, dict):
+        snapshot_request = str(previous_snapshot.get("user_request") or snapshot_request).strip()
+
+    snapshot_status = "needs_follow_up"
+    if result.get("failed", False):
+        snapshot_status = str(result.get("failure_reason") or "failed").strip() or "failed"
+
+    assistant_summary = str(
+        result.get("assistant_summary")
+        or result.get("final_response")
+        or ""
+    ).strip()
+    snapshot_metadata = {
+        "task_id": result.get("mente_task_id"),
+        "task_profile": result.get("task_profile"),
+        "artifacts_out": [
+            str(item).strip()
+            for item in result.get("artifacts_out") or []
+            if str(item).strip()
+        ],
+        "memory_candidates": [
+            str(item).strip()
+            for item in result.get("memory_candidates") or []
+            if str(item).strip()
+        ],
+    }
+    session_store.bind_recent_task_snapshot(
+        session_id,
+        user_request=snapshot_request,
+        status=snapshot_status,
+        assistant_summary=assistant_summary,
+        follow_up_tasks=follow_up_tasks,
+        metadata=snapshot_metadata,
     )
 
 
@@ -234,6 +351,7 @@ def _record_gateway_runtime_continuity_result(
     task_id: str | None,
     previous_continuity_payload: Dict[str, Any] | None,
     execution_session_payload: Dict[str, Any] | None,
+    task_profile: str | None = None,
 ) -> None:
     """Persist or invalidate runtime continuity based on one Mente execution result."""
     if not isinstance(execution_session_payload, dict):
@@ -250,6 +368,7 @@ def _record_gateway_runtime_continuity_result(
     mode = str(execution_session_payload.get("mode") or "").strip().lower() or None
     fallback_reason = str(execution_session_payload.get("fallback_reason") or "").strip() or None
     requested_mode = str(execution_session_payload.get("requested_mode") or "").strip().lower()
+    normalized_task_profile = str(task_profile or "").strip().lower()
     previous_runtime = ""
     if isinstance(previous_continuity_payload, dict):
         previous_runtime = str(previous_continuity_payload.get("runtime") or "").strip().lower()
@@ -264,6 +383,11 @@ def _record_gateway_runtime_continuity_result(
             last_mode=mode,
             last_fallback_reason=fallback_reason,
         )
+        if normalized_task_profile in _GATEWAY_RUNTIME_CONTINUITY_RESET_TASK_PROFILES:
+            session_store.invalidate_runtime_continuity(
+                session_id,
+                reason=f"{normalized_task_profile}_completed",
+            )
         return
 
     if (
@@ -415,6 +539,7 @@ def _run_mente_gateway_turn(
     execution_session: ExecutionSession | dict[str, Any] | None = None,
     fallback_history_fact: str | None = None,
     replay_history_in_memory_facts: bool = True,
+    recent_task_snapshot: Dict[str, Any] | None = None,
     event_callback=None,
     cancel_event=None,
 ) -> Dict[str, Any]:
@@ -437,6 +562,7 @@ def _run_mente_gateway_turn(
         "execution_session": execution_session,
         "fallback_history_fact": fallback_history_fact,
         "replay_history_in_memory_facts": replay_history_in_memory_facts,
+        "recent_task_snapshot": recent_task_snapshot,
     }
     supported_params = inspect.signature(run_gateway_task).parameters
     accepts_var_kwargs = any(
@@ -479,6 +605,11 @@ def _run_mente_gateway_turn(
         "response_previewed": False,
         "mente_task_id": result.metadata.get("task_id"),
         "execution_session": result.metadata.get("execution_session"),
+        "task_profile": result.metadata.get("task_profile"),
+        "assistant_summary": result.summary,
+        "follow_up_tasks": list(result.follow_up_tasks),
+        "artifacts_out": list(result.artifacts_out),
+        "memory_candidates": list(result.memory_candidates),
     }
 
 
@@ -519,6 +650,22 @@ def _resolve_mente_gateway_host_timeout_seconds(
 
     return resolve_gateway_task_host_timeout_seconds(
         message=message,
+        channel_prompt=channel_prompt,
+    )
+
+
+def _resolve_gateway_notify_interval_seconds(
+    *,
+    message: str,
+    configured_seconds: float | int | None,
+    channel_prompt: str | None = None,
+) -> float | None:
+    """Resolve the effective long-task notify interval for gateway turns."""
+    from mente.integrations.bridge import resolve_gateway_task_notify_interval_seconds
+
+    return resolve_gateway_task_notify_interval_seconds(
+        message=message,
+        configured_seconds=configured_seconds,
         channel_prompt=channel_prompt,
     )
 
@@ -1428,6 +1575,14 @@ def _resolve_mente_gateway_progress_detail(
     """Map low-level Mente/Codex events into user-facing detail lines."""
     payload = payload or {}
     normalized_type = str(event_type or "")
+    if normalized_type in {
+        "kernel.codex.agent_message.started",
+        "kernel.codex.agent_message.updated",
+        "kernel.codex.agent_message.completed",
+    }:
+        text = str(payload.get("text") or "").strip()
+        if text:
+            return _truncate_mente_gateway_progress_text(text, limit=280)
     if normalized_type == "kernel.codex.command.started":
         command = str(payload.get("command") or "").strip()
         if command:
@@ -1463,6 +1618,98 @@ def _resolve_mente_gateway_progress_detail(
     return None
 
 
+def _resolve_mente_gateway_progress_explanation(
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> str | None:
+    """Return one short natural-language intent line for notable runtime steps."""
+    payload = payload or {}
+    normalized_type = str(event_type or "")
+    if normalized_type != "kernel.codex.command.started":
+        return None
+
+    command = str(payload.get("command") or "").strip()
+    if not command:
+        return None
+
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    if not tokens:
+        return None
+
+    shell_name = Path(tokens[0]).name.strip().lower()
+    if shell_name in {"bash", "sh", "zsh", "fish"}:
+        for index, token in enumerate(tokens[1:], start=1):
+            if token in {"-c", "-lc"} and index + 1 < len(tokens):
+                inner_command = tokens[index + 1]
+                try:
+                    tokens = shlex.split(inner_command, posix=True)
+                except ValueError:
+                    tokens = inner_command.split()
+                break
+    if not tokens:
+        return None
+
+    head = Path(tokens[0]).name.strip().lower()
+    args = [str(token or "").strip() for token in tokens[1:]]
+    target = next(
+        (
+            _summarize_mente_gateway_path_token(token)
+            for token in args
+            if _summarize_mente_gateway_path_token(token)
+        ),
+        None,
+    )
+
+    if head == "sed":
+        if target == "SKILL.md":
+            return "先读取 SKILL.md，确认当前技能指引和执行入口。"
+        if target:
+            return f"先读取 {target}，确认当前配置或实现细节，再决定下一步。"
+        return "先读取目标文件，确认当前配置或实现细节，再决定下一步。"
+    if head == "rg":
+        if target:
+            return f"先按关键词检索 {target}，快速定位相关代码、日志或配置入口。"
+        return "先按关键词检索相关代码、日志或配置入口，缩小排查范围。"
+    if head == "ls":
+        if target:
+            return f"先查看 {target} 的目录结构，确认后续该从哪里继续。"
+        return "先查看当前目录结构，确认后续该从哪里继续。"
+    if head == "find":
+        if target:
+            return f"先遍历 {target} 附近的文件位置，确认相关入口是否真的存在。"
+        return "先遍历目标目录，确认相关文件和入口位置。"
+    if head in {"python", "python3", "py"}:
+        return "先用一段临时 Python 脚本做定向检查或提取，避免手工处理大量文本。"
+    if head == "pwd":
+        return "先确认当前工作目录，避免后续命令跑偏。"
+    if head == "git":
+        subcommand = next((part for part in args if part and not part.startswith("-")), "")
+        if subcommand == "status":
+            return "先确认当前工作区状态，避免覆盖已有改动。"
+        if subcommand:
+            return f"先检查 git {subcommand} 的结果，确认当前代码状态。"
+        return "先检查当前 git 状态，确认代码上下文。"
+    if head in {"pytest", "run_tests.sh"}:
+        return "先运行测试复现问题，并验证当前改动是否真正生效。"
+    if head == "ssh":
+        return "先连到远端主机，核对实际部署环境和运行状态。"
+    if head in {"curl", "wget"}:
+        return "先直接请求目标地址，确认接口或资源的实际返回。"
+    if head == "systemctl":
+        subcommand = next((part for part in args if part and not part.startswith("-")), "")
+        if subcommand == "restart":
+            return "先重启服务，再确认它是否稳定回到运行状态。"
+        if subcommand == "start":
+            return "先显式拉起服务，避免停在重启过渡态。"
+        if subcommand == "status":
+            return "先核对服务状态，确认问题是在运行期还是启动期。"
+        return "先检查服务管理命令的结果，确认当前进程状态。"
+    return "先执行一条定向命令收集证据，再据此决定下一步。"
+
+
 def _resolve_mente_gateway_progress_summary_item(
     event_type: str,
     payload: dict[str, Any] | None = None,
@@ -1470,6 +1717,14 @@ def _resolve_mente_gateway_progress_summary_item(
     """Return one compact checkpoint label suitable for cancel/failure summaries."""
     payload = payload or {}
     normalized_type = str(event_type or "")
+    if normalized_type in {
+        "kernel.codex.agent_message.started",
+        "kernel.codex.agent_message.updated",
+        "kernel.codex.agent_message.completed",
+    }:
+        text = str(payload.get("text") or "").strip()
+        if text:
+            return _truncate_mente_gateway_progress_text(text, limit=96)
     if normalized_type == "kernel.codex.command.started":
         command = str(payload.get("command") or "").strip()
         if command:
@@ -10983,16 +11238,30 @@ class GatewayRunner:
                 or os.getenv("HERMES_TOOL_PROGRESS_MODE")
                 or "all"
             )
+            recent_task_snapshot = None
+            if self.session_store is not None and hasattr(self.session_store, "get_recent_task_snapshot"):
+                recent_task_snapshot = self.session_store.get_recent_task_snapshot(session_id)
+            _bind_gateway_recent_task_snapshot_start(
+                session_store=self.session_store,
+                session_id=session_id,
+                message=message,
+                previous_snapshot=recent_task_snapshot,
+            )
             tool_progress_enabled = progress_mode != "off" and source.platform != Platform.WEBHOOK
             progress_queue = queue.Queue() if tool_progress_enabled else None
             progress_task = None
             mente_progress_last = [None]
+            mente_progress_last_detail = [None]
             mente_progress_active = [True]
             mente_progress_summary_items: list[str] = []
+            mente_notify_message_id: list[str | None] = [None]
             cancel_event = threading.Event()
             mente_run_handle = _MenteGatewayRunHandle(cancel_event, session_id=session_id)
-            _MENTE_NOTIFY_INTERVAL_RAW = float(os.getenv("HERMES_AGENT_NOTIFY_INTERVAL", 180))
-            _MENTE_NOTIFY_INTERVAL = _MENTE_NOTIFY_INTERVAL_RAW if _MENTE_NOTIFY_INTERVAL_RAW > 0 else None
+            _MENTE_NOTIFY_INTERVAL = _resolve_gateway_notify_interval_seconds(
+                message=message,
+                channel_prompt=channel_prompt,
+                configured_seconds=float(os.getenv("HERMES_AGENT_NOTIFY_INTERVAL", 180)),
+            )
             _mente_notify_start = time.time()
             gateway_timeout_seconds = _resolve_mente_gateway_host_timeout_seconds(
                 message=message,
@@ -11017,8 +11286,13 @@ class GatewayRunner:
                 if step is not None and step != mente_progress_last[0]:
                     mente_progress_last[0] = step
                     progress_queue.put(("step", step))
+                explanation = _resolve_mente_gateway_progress_explanation(event_type, payload)
+                if explanation and explanation != mente_progress_last_detail[0]:
+                    mente_progress_last_detail[0] = explanation
+                    progress_queue.put(("detail", explanation))
                 detail = _resolve_mente_gateway_progress_detail(event_type, payload)
-                if detail:
+                if detail and detail != mente_progress_last_detail[0]:
+                    mente_progress_last_detail[0] = detail
                     progress_queue.put(("detail", detail))
                 summary_item = _resolve_mente_gateway_progress_summary_item(event_type, payload)
                 if summary_item:
@@ -11041,24 +11315,54 @@ class GatewayRunner:
             async def _notify_mente_long_running() -> None:
                 if _MENTE_NOTIFY_INTERVAL is None:
                     return
-                _notify_adapter = self.adapters.get(source.platform)
-                if not _notify_adapter:
-                    return
                 while True:
                     await asyncio.sleep(_MENTE_NOTIFY_INTERVAL)
                     if not mente_progress_active[0] or not _run_still_current():
                         return
-                    try:
-                        await _notify_adapter.send(
-                            source.chat_id,
-                            _format_mente_gateway_phase_update(
-                                list(mente_progress_summary_items),
-                                elapsed_seconds=time.time() - _mente_notify_start,
-                            ),
-                            metadata=_progress_metadata,
+                    await _publish_mente_phase_update()
+
+            async def _publish_mente_phase_update() -> None:
+                _notify_adapter = self.adapters.get(source.platform)
+                if not _notify_adapter:
+                    return
+                _notify_supports_edit = (
+                    type(_notify_adapter).edit_message is not BasePlatformAdapter.edit_message
+                )
+                _phase_update = _format_mente_gateway_phase_update(
+                    list(mente_progress_summary_items),
+                    elapsed_seconds=time.time() - _mente_notify_start,
+                )
+                try:
+                    if mente_notify_message_id[0] and _notify_supports_edit:
+                        _edit_result = await _notify_adapter.edit_message(
+                            chat_id=source.chat_id,
+                            message_id=mente_notify_message_id[0],
+                            content=_phase_update,
+                            finalize=False,
                         )
-                    except Exception as _ne:
-                        logger.debug("Mente long-running phase update error: %s", _ne)
+                        if getattr(_edit_result, "success", False):
+                            return
+                        logger.debug(
+                            "Mente long-running phase update edit failed: %s",
+                            getattr(_edit_result, "error", None),
+                        )
+                        mente_notify_message_id[0] = None
+
+                    _send_result = await _notify_adapter.send(
+                        source.chat_id,
+                        _phase_update,
+                        metadata=_progress_metadata,
+                    )
+                    if getattr(_send_result, "success", False):
+                        if _notify_supports_edit and getattr(_send_result, "message_id", None):
+                            mente_notify_message_id[0] = _send_result.message_id
+                    else:
+                        logger.debug(
+                            "Mente long-running phase update send failed: %s",
+                            getattr(_send_result, "error", None),
+                        )
+                except Exception as _ne:
+                    logger.debug("Mente long-running phase update error: %s", _ne)
 
             mente_notify_task = asyncio.create_task(_notify_mente_long_running())
 
@@ -11082,6 +11386,7 @@ class GatewayRunner:
                     execution_session=continuity_plan["execution_session"],
                     fallback_history_fact=continuity_plan["fallback_history_fact"],
                     replay_history_in_memory_facts=continuity_plan["replay_history_in_memory_facts"],
+                    recent_task_snapshot=recent_task_snapshot,
                     event_callback=_mente_event_callback,
                     cancel_event=cancel_event,
                 )
@@ -11137,7 +11442,22 @@ class GatewayRunner:
                         task_id=result.get("mente_task_id"),
                         previous_continuity_payload=continuity_payload,
                         execution_session_payload=result.get("execution_session"),
+                        task_profile=result.get("task_profile"),
                     )
+                _finalize_gateway_recent_task_snapshot(
+                    session_store=self.session_store,
+                    session_id=session_id,
+                    message=message,
+                    result=result,
+                    previous_snapshot=recent_task_snapshot,
+                )
+                if (
+                    _MENTE_NOTIFY_INTERVAL is not None
+                    and time.time() - _mente_notify_start >= _MENTE_NOTIFY_INTERVAL
+                    and mente_progress_summary_items
+                    and _run_still_current()
+                ):
+                    await _publish_mente_phase_update()
                 if progress_queue is not None and not result.get("failed", False):
                     progress_queue.put(("step", _MENTE_GATEWAY_PROGRESS_PROTOCOL["__gateway.completed__"]))
                 if (
@@ -12335,8 +12655,11 @@ class GatewayRunner:
         # Config: agent.gateway_notify_interval in config.yaml, or
         # HERMES_AGENT_NOTIFY_INTERVAL env var.  Default 180s (3 min).
         # 0 = disable notifications.
-        _NOTIFY_INTERVAL_RAW = float(os.getenv("HERMES_AGENT_NOTIFY_INTERVAL", 180))
-        _NOTIFY_INTERVAL = _NOTIFY_INTERVAL_RAW if _NOTIFY_INTERVAL_RAW > 0 else None
+        _NOTIFY_INTERVAL = _resolve_gateway_notify_interval_seconds(
+            message=message,
+            channel_prompt=channel_prompt,
+            configured_seconds=float(os.getenv("HERMES_AGENT_NOTIFY_INTERVAL", 180)),
+        )
         _notify_start = time.time()
 
         async def _notify_long_running():

@@ -172,8 +172,14 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
         workflow_policy_lines.extend(
             [
                 "- Use the provided deep-research skill directly and complete the full report workflow in this turn.",
+                "- Use delegate_task to launch parallel chapter workers instead of letting one agent serialize the whole report.",
+                "- Recommended worker ownership groups: chapter_1 + chapter_4, chapter_2 + chapter_3, chapter_5 + chapter_6 + chapter_7.",
+                "- If the skill root exposes a direct parallel report helper or CLI entrypoint, prefer running that managed workflow first instead of hand-rebuilding the 7-chapter loop.",
+                "- Keep the parent agent focused on orchestration, integration, and final artifact generation after the worker outputs are available.",
+                "- Avoid broad skill-tree, repository, or home-directory scans before delegating work; do at most the narrow reads needed to execute the managed workflow.",
                 "- Do not stop at intermediate findings or end by asking whether the user wants the formal report.",
                 "- Generate the final report artifacts in Markdown, HTML, and DOCX, then report the exact paths in the final reply.",
+                "- Generate the final Markdown, HTML, and DOCX artifacts once from the merged chapter outputs; do not have each worker independently rebuild the full final report.",
                 "- If one format generation step fails, fix the concrete blocker when possible and still produce the remaining artifacts instead of stopping early.",
                 "- The task is complete only after the report artifacts exist and the final reply includes both the conclusion and the artifact paths.",
             ]

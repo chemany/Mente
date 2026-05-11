@@ -97,7 +97,15 @@ def test_structured_output_schema_matches_executor_contract():
                 "items": {"type": "string"},
             },
         },
-        "required": ["assistant_summary", "memory_candidates", "completion_status"],
+        "required": [
+            "assistant_summary",
+            "memory_candidates",
+            "completion_status",
+            "changed_files",
+            "artifacts_out",
+            "verification_results",
+            "follow_up_tasks",
+        ],
     }
 
 

@@ -754,6 +754,37 @@ class TestSessionStoreRuntimeContinuity:
         assert payload["status"] == "active"
         assert payload["last_mode"] == "start"
 
+    def test_recent_task_snapshot_round_trip_reloads_and_clears(self, tmp_path):
+        first = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        first._db = None
+        first.bind_recent_task_snapshot(
+            "sess-1",
+            user_request="帮我继续排查 tavily 聚合服务配置",
+            status="running",
+            assistant_summary="已定位到 ~/services/tavily-proxy，下一步读取配置。",
+            follow_up_tasks=["读取 .env 和启动参数"],
+            metadata={"task_profile": "investigation"},
+        )
+
+        payload = first.get_recent_task_snapshot("sess-1")
+        assert payload is not None
+        assert payload["user_request"] == "帮我继续排查 tavily 聚合服务配置"
+        assert payload["status"] == "running"
+        assert payload["assistant_summary"] == "已定位到 ~/services/tavily-proxy，下一步读取配置。"
+        assert payload["follow_up_tasks"] == ["读取 .env 和启动参数"]
+        assert payload["metadata"]["task_profile"] == "investigation"
+        assert payload["updated_at"]
+
+        second = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        second._db = None
+        reloaded = second.get_recent_task_snapshot("sess-1")
+        assert reloaded is not None
+        assert reloaded["user_request"] == "帮我继续排查 tavily 聚合服务配置"
+        assert reloaded["follow_up_tasks"] == ["读取 .env 和启动参数"]
+
+        assert second.clear_recent_task_snapshot("sess-1") is True
+        assert second.get_recent_task_snapshot("sess-1") is None
+
 
 class TestWhatsAppSessionKeyConsistency:
     """Regression: WhatsApp session keys must collapse JID/LID aliases to a

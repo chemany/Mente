@@ -15,6 +15,7 @@ from mente.integrations.bridge import (
     normalize_api_execution_continuity,
     recover_gateway_content_publishing_artifacts,
     resolve_gateway_task_host_timeout_seconds,
+    resolve_gateway_task_notify_interval_seconds,
     run_post_turn_memory_review,
     run_post_turn_skill_review,
     run_api_server_task,
@@ -115,6 +116,72 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     assert "timestamp" not in history_fact
 
 
+def test_build_gateway_task_injects_recent_task_snapshot_for_continue_request(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="继续刚才的任务",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "帮我定位已部署的 tavily 聚合服务配置，整理出 url、apikey 和最小可用说明。",
+            "status": "running",
+            "assistant_summary": "已定位到 ~/services/tavily-proxy，下一步读取环境变量和启动参数。",
+            "follow_up_tasks": ["读取 .env", "确认对外 URL 和 API key"],
+            "metadata": {"task_profile": "investigation"},
+        },
+    )
+
+    snapshot_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Recent active task snapshot:")
+    )
+    assert "帮我定位已部署的 tavily 聚合服务配置" in snapshot_fact
+    assert "已定位到 ~/services/tavily-proxy" in snapshot_fact
+    assert "读取 .env" in snapshot_fact
+    assert "running" in snapshot_fact
+
+
+def test_build_gateway_task_skips_recent_task_snapshot_for_new_unrelated_request(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="帮我总结一下今天的会议纪要",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "帮我定位已部署的 tavily 聚合服务配置，整理出 url、apikey 和最小可用说明。",
+            "status": "running",
+            "assistant_summary": "已定位到 ~/services/tavily-proxy，下一步读取环境变量和启动参数。",
+            "follow_up_tasks": ["读取 .env", "确认对外 URL 和 API key"],
+        },
+    )
+
+    assert not any(
+        fact.startswith("Recent active task snapshot:")
+        for fact in task.memory_facts
+    )
+
+
 def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_workspace(
     monkeypatch, tmp_path
 ):
@@ -212,6 +279,13 @@ def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
         fact.startswith("Deep research workflow brief:")
         for fact in task.memory_facts
     )
+    entrypoint_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Deep research execution plan:")
+    )
+    assert "delegate_task" in entrypoint_fact
+    assert "chapter_1 + chapter_4" in entrypoint_fact
+    assert "chapter_2 + chapter_3" in entrypoint_fact
+    assert "chapter_5 + chapter_6 + chapter_7" in entrypoint_fact
     output_fact = next(
         fact for fact in task.memory_facts if fact.startswith("Deep research output plan:")
     )
@@ -235,6 +309,33 @@ def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
     )
 
 
+def test_build_gateway_task_deep_research_parallel_plan_is_workspace_scoped(tmp_path):
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="深度研究一下采用菜籽油制备十三碳二酸的可行性，并输出完整报告",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+    )
+
+    entrypoint_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Deep research execution plan:")
+    )
+
+    assert str(tmp_path) in entrypoint_fact
+    assert "Avoid broad repository or home-directory scans before delegating work." in entrypoint_fact
+
+
 def test_resolve_gateway_task_host_timeout_seconds_detects_content_publishing():
     assert (
         resolve_gateway_task_host_timeout_seconds(
@@ -243,6 +344,43 @@ def test_resolve_gateway_task_host_timeout_seconds_detects_content_publishing():
         == 420.0
     )
     assert resolve_gateway_task_host_timeout_seconds(message="你好") is None
+
+
+def test_resolve_gateway_task_notify_interval_seconds_caps_deep_research_defaults():
+    assert (
+        resolve_gateway_task_notify_interval_seconds(
+            message="深度研究一下采用菜籽油制备十三碳二酸的可行性，并输出完整报告",
+            configured_seconds=180,
+        )
+        == 60.0
+    )
+
+
+def test_resolve_gateway_task_notify_interval_seconds_keeps_shorter_custom_interval():
+    assert (
+        resolve_gateway_task_notify_interval_seconds(
+            message="调用深度研究技能，帮我完整调研一个化工路线",
+            configured_seconds=45,
+        )
+        == 45.0
+    )
+
+
+def test_resolve_gateway_task_notify_interval_seconds_leaves_normal_tasks_unchanged():
+    assert (
+        resolve_gateway_task_notify_interval_seconds(
+            message="你好，帮我总结今天的安排",
+            configured_seconds=180,
+        )
+        == 180.0
+    )
+    assert (
+        resolve_gateway_task_notify_interval_seconds(
+            message="深度研究一下采用菜籽油制备十三碳二酸的可行性",
+            configured_seconds=0,
+        )
+        is None
+    )
 
 
 def test_recover_gateway_content_publishing_artifacts_finalizes_source_markdown(
@@ -1225,6 +1363,39 @@ def test_run_gateway_task_persists_task_record(tmp_path, monkeypatch):
     assert stored is not None
     assert stored.metadata["source"] == "gateway"
     assert stored.status.value == "succeeded"
+
+
+def test_run_gateway_task_returns_task_profile_in_result_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(tmp_path / "state.db"))
+
+    class _FakeUuid:
+        hex = "gatewayprofile"
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(
+        "mente.integrations.bridge.CodexExecutor.execute",
+        lambda self, request: ExecutionResult(status="success", summary="done"),
+    )
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = run_gateway_task(
+        message="深度研究一下采用菜籽油制备十三碳二酸的可行性，并输出完整报告",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+    )
+
+    assert result.status == "success"
+    assert result.metadata["task_profile"] == "deep_research"
 
 
 def test_run_gateway_task_threads_cancel_event_into_orchestrator(monkeypatch, tmp_path):

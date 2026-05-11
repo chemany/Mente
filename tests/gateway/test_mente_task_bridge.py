@@ -303,6 +303,52 @@ def test_run_mente_gateway_turn_collapses_long_failed_summary(monkeypatch):
     assert result["final_response"] == "⚠️ 任务已取消。"
 
 
+def test_run_mente_gateway_turn_exposes_task_snapshot_fields(monkeypatch):
+    def _fake_run_gateway_task(**kwargs):
+        return ExecutionResult(
+            status="success",
+            summary="已定位服务目录，待读取配置。",
+            follow_up_tasks=["读取 .env", "确认 URL"],
+            artifacts_out=["/tmp/report.md"],
+            memory_candidates=["用户偏好需要自然语言解释"],
+            metadata={
+                "task_id": "task-123",
+                "execution_session": {
+                    "mode": "start",
+                    "continuity_id": "thread-123",
+                    "continuity_status": "started",
+                },
+                "task_profile": "investigation",
+            },
+        )
+
+    monkeypatch.setattr("mente.integrations.bridge.run_gateway_task", _fake_run_gateway_task)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = gateway_run._run_mente_gateway_turn(
+        message="继续任务",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+    )
+
+    assert result["mente_task_id"] == "task-123"
+    assert result["assistant_summary"] == "已定位服务目录，待读取配置。"
+    assert result["follow_up_tasks"] == ["读取 .env", "确认 URL"]
+    assert result["artifacts_out"] == ["/tmp/report.md"]
+    assert result["memory_candidates"] == ["用户偏好需要自然语言解释"]
+    assert result["task_profile"] == "investigation"
+
+
 def test_format_mente_memory_review_outcome_persisted():
     assert gateway_run._format_mente_memory_review_outcome(
         {
@@ -997,10 +1043,15 @@ async def test_run_agent_mente_emits_compact_progress_without_raw_command_detail
 
     command = "/bin/bash -lc 'sed -n \"1,40p\" README.zh.md'"
     tool_name = "mcp__mente__mente_memory_query"
+    agent_message = "先核对技能指引，再读取 README 里的相关部署说明。"
 
     def _fake_mente_turn(**kwargs):
         event_callback = kwargs.get("event_callback")
         assert callable(event_callback)
+        event_callback(
+            "kernel.codex.agent_message.completed",
+            {"item_id": "msg-1", "status": "completed", "text": agent_message},
+        )
         event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
         event_callback("kernel.codex.mcp_tool.completed", {"tool": tool_name})
         event_callback("kernel.codex.command.started", {"command": command})
@@ -1060,6 +1111,7 @@ async def test_run_agent_mente_emits_compact_progress_without_raw_command_detail
     assert "🤖 Mente 已开始执行" not in all_progress_text
     assert "🧮 Mente 回合完成" not in all_progress_text
     assert "📨 Mente runtime 已返回" not in all_progress_text
+    assert agent_message in all_progress_text
     assert "🛠️ 工具：mente_memory_query" in all_progress_text
     assert "✅ 工具完成：mente_memory_query" in all_progress_text
     assert "💻 Bash · sed README.zh.md" in all_progress_text
@@ -1081,10 +1133,15 @@ async def test_run_agent_mente_interrupted_failure_includes_recent_progress_summ
     command = "/bin/bash -lc 'rg -n \"十三碳二酸|菜籽油\" ~/.mente/logs/agent.log ~/.mente/logs/gateway.log'"
     tool_name = "mcp__mente__mente_memory_query"
     python_command = "/bin/bash -lc \"python3 - <<'PY'\nprint('paper fetch')\nPY\""
+    agent_message = "先查日志和记忆线索，再决定要不要继续抓论文。"
 
     def _fake_mente_turn(**kwargs):
         event_callback = kwargs.get("event_callback")
         assert callable(event_callback)
+        event_callback(
+            "kernel.codex.agent_message.completed",
+            {"item_id": "msg-1", "status": "completed", "text": agent_message},
+        )
         event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
         event_callback("kernel.codex.command.started", {"command": command})
         event_callback("kernel.codex.command.started", {"command": python_command})
@@ -1133,6 +1190,7 @@ async def test_run_agent_mente_interrupted_failure_includes_recent_progress_summ
     assert result["failed"] is True
     assert "⚠️ 任务已取消。" in result["final_response"]
     assert "已执行到：" in result["final_response"]
+    assert agent_message in result["final_response"]
     assert "工具：mente_memory_query" in result["final_response"]
     assert "Bash · rg 十三碳二酸|菜籽油 agent.log" in result["final_response"]
     assert "Bash · Python 脚本（内联）" in result["final_response"]
@@ -1152,10 +1210,15 @@ async def test_run_agent_mente_long_running_emits_phase_update(monkeypatch):
 
     command = "/bin/bash -lc 'rg -n \"十三碳二酸|菜籽油\" ~/.mente/logs/agent.log ~/.mente/logs/gateway.log'"
     tool_name = "mcp__mente__mente_memory_query"
+    agent_message = "先整理已有线索，再看日志里是否出现同类工艺关键词。"
 
     def _fake_mente_turn(**kwargs):
         event_callback = kwargs.get("event_callback")
         assert callable(event_callback)
+        event_callback(
+            "kernel.codex.agent_message.completed",
+            {"item_id": "msg-1", "status": "completed", "text": agent_message},
+        )
         event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
         event_callback("kernel.codex.command.started", {"command": command})
         return {
@@ -1202,9 +1265,189 @@ async def test_run_agent_mente_long_running_emits_phase_update(monkeypatch):
 
     assert result["failed"] is False
     phase_updates = [entry["content"] for entry in adapter.sent if "阶段进展" in entry["content"]]
+    phase_updates.extend(
+        entry["content"] for entry in adapter.edits if "阶段进展" in entry["content"]
+    )
     assert phase_updates
+    assert any(agent_message in entry for entry in phase_updates)
     assert any("工具：mente_memory_query" in entry for entry in phase_updates)
     assert any("Bash · rg 十三碳二酸|菜籽油 agent.log" in entry for entry in phase_updates)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_long_running_reuses_editable_phase_update_message(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setenv("HERMES_AGENT_NOTIFY_INTERVAL", "0.01")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _delayed_to_thread(func, *args, **kwargs):
+        await asyncio.sleep(0.045)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _delayed_to_thread)
+
+    command = "/bin/bash -lc 'rg -n \"邻苯二酚|环氧异丁烷\" ~/.mente/logs/agent.log'"
+    agent_message = "先确认公开路线，再判断一锅法是否值得继续投入。"
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        event_callback(
+            "kernel.codex.agent_message.completed",
+            {"item_id": "msg-1", "status": "completed", "text": agent_message},
+        )
+        event_callback("kernel.codex.command.started", {"command": command})
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+            "failed": False,
+            "failure_reason": None,
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="我们公司有环氧异丁烷这个产品，成本接近0,我想开发邻苯二酚和环氧异丁烷开环/脱水/重排/关环制备呋喃酚的工艺，你帮我深度研究下可行性，工艺流程越简单越好。",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=13,
+    )
+
+    assert result["failed"] is False
+    phase_sends = [entry for entry in adapter.sent if "阶段进展" in entry["content"]]
+    phase_edits = [entry for entry in adapter.edits if "阶段进展" in entry["content"]]
+    assert len(phase_sends) == 1
+    assert phase_edits
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_progress_details_include_command_explanation(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _delayed_to_thread(func, *args, **kwargs):
+        await asyncio.sleep(0.03)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _delayed_to_thread)
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        event_callback(
+            "kernel.codex.command.started",
+            {"command": "/bin/bash -lc 'sed -n \"1,200p\" SKILL.md'"},
+        )
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+            "failed": False,
+            "failure_reason": None,
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="检查一个技能工作流",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=14,
+    )
+
+    assert result["failed"] is False
+    progress_text = "\n".join(
+        [entry["content"] for entry in adapter.sent] + [entry["content"] for entry in adapter.edits]
+    )
+    assert "先读取 SKILL.md，确认当前技能指引和执行入口。" in progress_text
+    assert "💻 Bash · sed SKILL.md" in progress_text
+
+
+def test_resolve_mente_gateway_progress_detail_surfaces_agent_message_text():
+    detail = gateway_run._resolve_mente_gateway_progress_detail(
+        "kernel.codex.agent_message.completed",
+        {
+            "item_id": "msg-1",
+            "status": "completed",
+            "text": "先确认 SSH 别名，再上远端看实际部署目录。",
+        },
+    )
+
+    assert detail == "先确认 SSH 别名，再上远端看实际部署目录。"
+
+
+def test_resolve_mente_gateway_progress_detail_surfaces_updated_agent_message_text():
+    detail = gateway_run._resolve_mente_gateway_progress_detail(
+        "kernel.codex.agent_message.updated",
+        {
+            "item_id": "msg-1",
+            "status": "in_progress",
+            "text": "我先读取技能说明，确认这个工作流的标准入口。",
+            "phase": "commentary",
+        },
+    )
+
+    assert detail == "我先读取技能说明，确认这个工作流的标准入口。"
+
+
+def test_resolve_mente_gateway_progress_explanation_explains_skill_reads():
+    detail = gateway_run._resolve_mente_gateway_progress_explanation(
+        "kernel.codex.command.started",
+        {"command": "/bin/bash -lc 'sed -n \"1,200p\" SKILL.md'"},
+    )
+
+    assert detail == "先读取 SKILL.md，确认当前技能指引和执行入口。"
 
 
 def test_resolve_mente_gateway_progress_detail_summarizes_python_commands():

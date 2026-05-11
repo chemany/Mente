@@ -651,6 +651,7 @@ class SessionStore:
         self.config = config
         self._entries: Dict[str, SessionEntry] = {}
         self._runtime_continuity: Dict[str, Dict[str, Any]] = {}
+        self._recent_task_snapshots: Dict[str, Dict[str, Any]] = {}
         self._loaded = False
         self._lock = threading.Lock()
         self._has_active_processes_fn = has_active_processes_fn
@@ -676,6 +677,7 @@ class SessionStore:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         sessions_file = self.sessions_dir / "sessions.json"
         runtime_continuity_file = self.sessions_dir / "runtime_continuity.json"
+        recent_task_snapshots_file = self.sessions_dir / "recent_task_snapshots.json"
 
         if sessions_file.exists():
             try:
@@ -700,6 +702,17 @@ class SessionStore:
                                 self._runtime_continuity[str(session_id)] = dict(payload)
             except Exception as e:
                 print(f"[gateway] Warning: Failed to load runtime continuity: {e}")
+
+        if recent_task_snapshots_file.exists():
+            try:
+                with open(recent_task_snapshots_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        for session_id, payload in data.items():
+                            if isinstance(payload, dict):
+                                self._recent_task_snapshots[str(session_id)] = dict(payload)
+            except Exception as e:
+                print(f"[gateway] Warning: Failed to load recent task snapshots: {e}")
 
         self._loaded = True
 
@@ -728,6 +741,7 @@ class SessionStore:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         sessions_file = self.sessions_dir / "sessions.json"
         runtime_continuity_file = self.sessions_dir / "runtime_continuity.json"
+        recent_task_snapshots_file = self.sessions_dir / "recent_task_snapshots.json"
 
         self._atomic_write_json(
             sessions_file,
@@ -736,6 +750,10 @@ class SessionStore:
         self._atomic_write_json(
             runtime_continuity_file,
             {key: dict(payload) for key, payload in self._runtime_continuity.items()},
+        )
+        self._atomic_write_json(
+            recent_task_snapshots_file,
+            {key: dict(payload) for key, payload in self._recent_task_snapshots.items()},
         )
     
     def _generate_session_key(self, source: SessionSource) -> str:
@@ -1282,6 +1300,53 @@ class SessionStore:
             if session_id not in self._runtime_continuity:
                 return False
             self._runtime_continuity.pop(session_id, None)
+            self._save()
+            return True
+
+    def get_recent_task_snapshot(self, session_id: str) -> Dict[str, Any] | None:
+        """Return the persisted short-term task snapshot for one session."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            payload = self._recent_task_snapshots.get(session_id)
+            return dict(payload) if payload is not None else None
+
+    def bind_recent_task_snapshot(
+        self,
+        session_id: str,
+        *,
+        user_request: str,
+        status: str,
+        assistant_summary: str | None = None,
+        follow_up_tasks: list[str] | None = None,
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        """Create or update one short-term task snapshot for one session."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            existing = dict(self._recent_task_snapshots.get(session_id) or {})
+            payload = {
+                "user_request": str(user_request or "").strip(),
+                "status": str(status or "").strip() or "running",
+                "assistant_summary": str(assistant_summary or "").strip(),
+                "follow_up_tasks": [
+                    str(item).strip()
+                    for item in (follow_up_tasks or [])
+                    if str(item).strip()
+                ],
+                "metadata": dict(metadata or {}),
+                "created_at": existing.get("created_at") or _now().isoformat(),
+                "updated_at": _now().isoformat(),
+            }
+            self._recent_task_snapshots[session_id] = payload
+            self._save()
+
+    def clear_recent_task_snapshot(self, session_id: str) -> bool:
+        """Delete one short-term task snapshot entirely."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            if session_id not in self._recent_task_snapshots:
+                return False
+            self._recent_task_snapshots.pop(session_id, None)
             self._save()
             return True
 

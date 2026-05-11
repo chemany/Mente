@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://chemany.github.io/Mente/docs/"><img src="https://img.shields.io/badge/Docs-chemany.github.io%2FMente%2Fdocs-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href="https://www.npmjs.com/package/mente-agent"><img src="https://img.shields.io/npm/v/mente-agent?style=for-the-badge&logo=npm&logoColor=white" alt="npm version"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/chemany/Mente/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
   <a href="https://github.com/chemany/Mente"><img src="https://img.shields.io/badge/GitHub-chemany%2FMente-111827?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Repository"></a>
@@ -22,6 +23,8 @@ This branch also completes a product-surface consolidation pass:
 - **External surface is uniformly Mente** across CLI, gateway progress, messaging, and user-facing replies.
 - **Internal execution still runs on the Codex-backed executor** — the rename is presentation-layer cleanup, not a runtime downgrade.
 - **Gateway progress is visible again** with Mente-facing step names while preserving detailed command/tool activity.
+- **Long-running gateway work now explains itself in natural language** before and during raw Bash / tool activity, so users can see intent, findings, and next steps instead of only command logs.
+- **Short-term task memory now survives gateway restarts** — if a task was in-flight, users can say "continue task" and Mente resumes from a recent active-task snapshot instead of acting like the previous task disappeared.
 - **Config/admin operations are now explicit** through a dedicated Mente skill for API keys, provider auth, `.env`, `config.yaml`, and gateway restart rules.
 
 <p align="center">
@@ -32,8 +35,8 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), [Open
 
 <table>
 <tr><td><b>A real terminal interface</b></td><td>Full TUI with multiline editing, slash-command autocomplete, conversation history, interrupt-and-redirect, and streaming tool output.</td></tr>
-<tr><td><b>Lives where you do</b></td><td>Telegram, Discord, Slack, WhatsApp, Signal, and CLI — all from a single gateway process. Voice memo transcription, cross-platform conversation continuity.</td></tr>
-<tr><td><b>A closed learning loop</b></td><td>Agent-curated memory with periodic nudges. Autonomous skill creation after complex tasks. Skills self-improve during use. FTS5 session search with LLM summarization for cross-session recall. <a href="https://github.com/plastic-labs/honcho">Honcho</a> dialectic user modeling. Compatible with the <a href="https://agentskills.io">agentskills.io</a> open standard.</td></tr>
+<tr><td><b>Lives where you do</b></td><td>Telegram, Discord, Slack, WhatsApp, Signal, and CLI — all from a single gateway process. Voice memo transcription, cross-platform conversation continuity, and restart-safe recovery for in-flight gateway tasks.</td></tr>
+<tr><td><b>A closed learning loop</b></td><td>Agent-curated memory with periodic nudges. Short-term active-task snapshots for "continue task" recovery after restarts. Autonomous skill creation after complex tasks. Skills self-improve during use. FTS5 session search with LLM summarization for cross-session recall. <a href="https://github.com/plastic-labs/honcho">Honcho</a> dialectic user modeling. Compatible with the <a href="https://agentskills.io">agentskills.io</a> open standard.</td></tr>
 <tr><td><b>Scheduled automations</b></td><td>Built-in cron scheduler with delivery to any platform. Daily reports, nightly backups, weekly audits — all in natural language, running unattended.</td></tr>
 <tr><td><b>Delegates and parallelizes</b></td><td>Spawn isolated subagents for parallel workstreams. Write Python scripts that call tools via RPC, collapsing multi-step pipelines into zero-context-cost turns.</td></tr>
 <tr><td><b>Runs anywhere, not just your laptop</b></td><td>Six terminal backends — local, Docker, SSH, Daytona, Singularity, and Modal. Daytona and Modal offer serverless persistence — your agent's environment hibernates when idle and wakes on demand, costing nearly nothing between sessions. Run it on a $5 VPS or a GPU cluster.</td></tr>
@@ -61,14 +64,14 @@ mente
 
 The npm package is intentionally **thin**. It publishes only the launcher and installer scripts, then bootstraps the full Mente runtime on first run. By default the bootstrapper installs from the repo's `main` branch, and you can force a tagged release with `MENTE_BOOTSTRAP_RELEASE=<tag> mente`. It does **not** publish your local `.env`, `auth.json`, `~/.mente`, `~/.hermes`, sessions, logs, or other machine-local state.
 
+The public package is live on npm, so `npm install -g mente-agent` is now a supported install path, not a placeholder. The bootstrapper remains intentionally minimal: the package gets you the launcher, and first run pulls the matching full runtime.
+
 The bootstrapped private Codex runtime now defaults `model_auto_compact_token_limit` to `160000` to keep long-running sessions compacting earlier and more predictably. If you need a different threshold, override it in your Mente config:
 
 ```yaml
 codex:
   model_auto_compact_token_limit: 120000
 ```
-
-At the moment, the repository is **ready for npm publish but not yet live on the npm registry**. Until the first public npm release is published, use Option 1 above. Once the package is published, the `npm install -g mente-agent` flow becomes the primary one-line install path.
 
 Release operators can use the short npm runbook here: [docs/releasing/npm.md](docs/releasing/npm.md).
 
@@ -108,9 +111,11 @@ mente doctor        # Diagnose any issues
 This README tracks the current Mente packaging and runtime direction:
 
 - **One current install command for GitHub visitors:** `curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash`
-- **One intended npm install command after publish:** `npm install -g mente-agent`
+- **One live npm install command:** `npm install -g mente-agent`
 - **One visible agent identity:** user-facing replies and progress now present as `Mente`
 - **Same execution depth under the hood:** complex coding and tool work still route through the Codex-backed executor
+- **Better gateway continuity:** recent active-task snapshots let users resume interrupted work with "continue task" even after a gateway restart
+- **More readable long-task progress:** natural-language stage summaries now accompany raw command and tool activity
 - **Safer operations surface:** packaging is whitelist-based, and config/admin actions now have explicit handling for API keys, provider auth, and restart boundaries
 
 If you are evaluating Mente from GitHub, the practical model is:
