@@ -44,6 +44,10 @@ def test_kernel_execution_result_carries_kernel_owned_summary_memory_and_debug_f
         assistant_summary="done",
         memory_candidates=["remember this"],
         commands_run=["codex exec --ephemeral"],
+        changed_files=["report.md"],
+        artifacts_out=["report.md", "report.docx"],
+        verification_results=["checked output files exist"],
+        follow_up_tasks=[],
         debug={"returncode": 0, "backend": "cli"},
         backend_failure=None,
     )
@@ -53,6 +57,10 @@ def test_kernel_execution_result_carries_kernel_owned_summary_memory_and_debug_f
         "assistant_summary": "done",
         "memory_candidates": ["remember this"],
         "commands_run": ["codex exec --ephemeral"],
+        "changed_files": ["report.md"],
+        "artifacts_out": ["report.md", "report.docx"],
+        "verification_results": ["checked output files exist"],
+        "follow_up_tasks": [],
         "debug": {"returncode": 0, "backend": "cli"},
         "backend_failure": None,
     }
@@ -153,6 +161,11 @@ def test_kernel_runner_normalizes_stateless_transport_output(monkeypatch, tmp_pa
                     {
                         "assistant_summary": "vendored summary",
                         "memory_candidates": ["remember this"],
+                        "completion_status": "success",
+                        "changed_files": ["article.md"],
+                        "artifacts_out": ["article.md", "article.html"],
+                        "verification_results": ["validated markdown output"],
+                        "follow_up_tasks": [],
                     }
                 ),
             )
@@ -181,8 +194,49 @@ def test_kernel_runner_normalizes_stateless_transport_output(monkeypatch, tmp_pa
     assert result.status == "success"
     assert result.assistant_summary == "vendored summary"
     assert result.memory_candidates == ["remember this"]
+    assert result.changed_files == ["article.md"]
+    assert result.artifacts_out == ["article.md", "article.html"]
+    assert result.verification_results == ["validated markdown output"]
+    assert result.follow_up_tasks == []
     assert result.commands_run == ["codex exec --ephemeral"]
     assert result.debug["returncode"] == 0
+
+
+def test_kernel_runner_respects_blocked_completion_status(tmp_path):
+    class _Transport:
+        def execute(self, request: KernelTransportRequest) -> KernelTransportResponse:
+            return KernelTransportResponse(
+                command=["codex", "exec", "--ephemeral"],
+                returncode=0,
+                stdout="",
+                stderr="",
+                raw_output=json.dumps(
+                    {
+                        "assistant_summary": "缺少发布凭证，无法完成最终发布。",
+                        "memory_candidates": [],
+                        "completion_status": "blocked",
+                        "changed_files": ["draft/article.md"],
+                        "artifacts_out": ["draft/article.md"],
+                        "verification_results": ["generated draft successfully"],
+                        "follow_up_tasks": ["configure publish credentials and retry"],
+                    }
+                ),
+            )
+
+    runner = KernelRunner(transport=_Transport())
+    result = runner.run(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+    )
+
+    assert result.status == "blocked"
+    assert result.artifacts_out == ["draft/article.md"]
+    assert result.follow_up_tasks == ["configure publish credentials and retry"]
 
 
 def test_kernel_runner_preserves_session_mode_when_transport_supports_it(tmp_path):

@@ -745,6 +745,9 @@ def test_render_execution_prompt_prioritizes_explicit_skill_refs():
     assert "fix the concrete blocker" in prompt
     assert "If the skill documentation names concrete scripts or commands" in prompt
     assert "run the most direct workflow entrypoint first" in prompt
+    assert "Before finalizing, self-check the referenced skill requirements" in prompt
+    assert "artifacts_out" in prompt
+    assert "completion_status" in prompt
 
 
 def test_render_execution_prompt_adds_direct_workflow_policy_for_content_publishing():
@@ -771,6 +774,28 @@ def test_render_execution_prompt_adds_direct_workflow_policy_for_content_publish
     assert "Treat create-article.js or publish.js as optional reference helpers only" in prompt
     assert "stop exploring and execute the managed flow immediately" in prompt
     assert "make reasonable defaults and continue" in prompt
+
+
+def test_render_execution_prompt_adds_report_delivery_policy_for_deep_research():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Complete a deep research report",
+        user_request="深度研究一下采用菜籽油制备十三碳二酸的可行性，并输出完整报告",
+        workspace=".",
+        skill_refs=["research/deep-research-pro"],
+        metadata={"source": "gateway", "task_profile": "deep_research"},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Workflow Policy:" in prompt
+    assert "Use the provided deep-research skill directly and complete the full report workflow in this turn." in prompt
+    assert "Do not stop at intermediate findings or end by asking whether the user wants the formal report." in prompt
+    assert "Generate the final report artifacts in Markdown, HTML, and DOCX, then report the exact paths in the final reply." in prompt
+    assert "If one format generation step fails" in prompt
+    assert "The task is complete only after the report artifacts exist" in prompt
 
 
 def test_render_execution_prompt_uses_lightweight_skill_fallback_when_no_explicit_refs():
@@ -1360,6 +1385,10 @@ def test_codex_executor_execute_delegates_to_kernel_runner(monkeypatch, tmp_path
                 assistant_summary="vendored summary",
                 memory_candidates=["persist this"],
                 commands_run=["codex exec --ephemeral"],
+                changed_files=["report.md"],
+                artifacts_out=["report.md", "report.html", "report.docx"],
+                verification_results=["checked report files exist"],
+                follow_up_tasks=[],
                 debug={"returncode": 0, "structured_output": {"assistant_summary": "vendored summary"}},
             )
 
@@ -1386,6 +1415,10 @@ def test_codex_executor_execute_delegates_to_kernel_runner(monkeypatch, tmp_path
     assert result.summary == "vendored summary"
     assert result.memory_candidates == ["persist this"]
     assert result.commands_run == ["codex exec --ephemeral"]
+    assert result.changed_files == ["report.md"]
+    assert result.artifacts_out == ["report.md", "report.html", "report.docx"]
+    assert result.verification_results == ["checked report files exist"]
+    assert result.follow_up_tasks == []
     assert result.metadata["returncode"] == 0
 
 

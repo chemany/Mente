@@ -464,6 +464,10 @@ class CodexExecutor(CodexKernelAdapter):
                 )
             ),
             commands_run=list(result.commands_run),
+            changed_files=list(result.changed_files),
+            artifacts_out=list(result.artifacts_out),
+            verification_results=list(result.verification_results),
+            follow_up_tasks=list(result.follow_up_tasks),
             memory_candidates=list(result.memory_candidates),
             failure_reason=result.backend_failure,
             metadata=dict(result.debug),

@@ -32,6 +32,7 @@ from contextvars import copy_context
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Optional, Any, List
+from urllib.parse import urlparse
 
 from agent.account_usage import fetch_account_usage, render_account_usage_lines
 
@@ -466,6 +467,7 @@ def _run_mente_gateway_turn(
         "messages": [],
         "api_calls": 0,
         "failed": failed,
+        "failure_reason": result.failure_reason,
         "compression_exhausted": False,
         "tools": [],
         "history_offset": len(history),
@@ -535,6 +537,7 @@ def _build_mente_gateway_timeout_result(
         "messages": [],
         "api_calls": 0,
         "failed": True,
+        "failure_reason": "gateway_timeout",
         "compression_exhausted": False,
         "tools": [],
         "history_offset": history_length,
@@ -588,6 +591,7 @@ def _attempt_mente_gateway_timeout_recovery(
                     "messages": [],
                     "api_calls": 0,
                     "failed": True,
+                    "failure_reason": str(recovery.get("reason") or ""),
                     "compression_exhausted": False,
                     "tools": [],
                     "history_offset": history_length,
@@ -611,6 +615,7 @@ def _attempt_mente_gateway_timeout_recovery(
         "messages": [],
         "api_calls": 0,
         "failed": False,
+        "failure_reason": None,
         "compression_exhausted": False,
         "tools": [],
         "history_offset": history_length,
@@ -1232,6 +1237,148 @@ def _summarize_mente_gateway_exec_tokens(tokens: list[str]) -> tuple[str, str] |
     return "💻", head
 
 
+def _truncate_mente_gateway_progress_text(value: str, limit: int = 44) -> str:
+    text = " ".join(str(value or "").split()).strip().strip("\"'")
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _summarize_mente_gateway_path_token(token: str) -> str | None:
+    value = str(token or "").strip().strip("\"'")
+    if not value or value in {"-", ".", "..", "/", "~"}:
+        return None
+    if "/" not in value and not value.startswith("~") and "." not in value:
+        return None
+    if "://" in value:
+        return None
+    if any(char in value for char in {"*", "?", "[", "]", "{", "}"}):
+        return None
+    return Path(value).name or value
+
+
+def _find_mente_gateway_token_after_options(tokens: list[str]) -> str | None:
+    for token in tokens:
+        value = str(token or "").strip()
+        if not value or value.startswith("-"):
+            continue
+        return value
+    return None
+
+
+def _summarize_mente_gateway_exec_detail(
+    tokens: list[str],
+    *,
+    raw_command: str | None = None,
+) -> str | None:
+    if not tokens:
+        return None
+
+    head = Path(tokens[0]).name.strip().lower()
+    args = [str(token or "").strip() for token in tokens[1:]]
+
+    if head.startswith("python") or head == "py":
+        if raw_command and ("<<'" in raw_command or '<<"' in raw_command or "\n" in raw_command or " -c " in raw_command):
+            return "Python 脚本（内联）"
+        script_token = next(
+            (
+                _summarize_mente_gateway_path_token(token)
+                for token in args
+                if _summarize_mente_gateway_path_token(token)
+            ),
+            None,
+        )
+        return f"Python 脚本 {script_token}" if script_token else "Python 脚本"
+
+    if head == "node":
+        script_token = next(
+            (
+                _summarize_mente_gateway_path_token(token)
+                for token in args
+                if _summarize_mente_gateway_path_token(token)
+            ),
+            None,
+        )
+        return f"Node 脚本 {script_token}" if script_token else "Node 脚本"
+
+    if head == "sed":
+        target = next(
+            (
+                _summarize_mente_gateway_path_token(token)
+                for token in args
+                if _summarize_mente_gateway_path_token(token)
+            ),
+            None,
+        )
+        return f"sed {target}" if target else "sed"
+
+    if head == "rg":
+        pattern = _find_mente_gateway_token_after_options(args)
+        if pattern and pattern.startswith("~"):
+            pattern = None
+        path_token = next(
+            (
+                _summarize_mente_gateway_path_token(token)
+                for token in args
+                if _summarize_mente_gateway_path_token(token)
+            ),
+            None,
+        )
+        detail_parts = ["rg"]
+        if pattern:
+            detail_parts.append(_truncate_mente_gateway_progress_text(pattern, limit=24))
+        if path_token:
+            detail_parts.append(path_token)
+        return " ".join(detail_parts)
+
+    if head in {"curl", "wget"}:
+        url = next((token for token in args if "://" in token), "")
+        if url:
+            parsed = urlparse(url)
+            host = parsed.netloc or parsed.path
+            if host:
+                return f"{head} {host}"
+        return head
+
+    if head == "ls":
+        target = next(
+            (
+                _summarize_mente_gateway_path_token(token)
+                for token in args
+                if _summarize_mente_gateway_path_token(token)
+            ),
+            None,
+        )
+        return f"ls {target}" if target else "ls"
+
+    if head == "find":
+        root = next((token for token in args if token and not token.startswith("-")), "")
+        summarized_root = _summarize_mente_gateway_path_token(root) or root.strip()
+        if summarized_root:
+            return f"find {_truncate_mente_gateway_progress_text(summarized_root, limit=20)}"
+        return "find"
+
+    if head == "printf":
+        preview = next((token for token in args if token and not token.startswith("%")), "")
+        if preview:
+            return f"printf {_truncate_mente_gateway_progress_text(preview, limit=24)}"
+        return "printf"
+
+    target = next(
+        (
+            _summarize_mente_gateway_path_token(token)
+            for token in args
+            if _summarize_mente_gateway_path_token(token)
+        ),
+        None,
+    )
+    if target:
+        return f"{head} {target}"
+    return head
+
+
 def _summarize_mente_gateway_command(command: str) -> tuple[str, str] | None:
     text = str(command or "").strip()
     if not text:
@@ -1259,10 +1406,19 @@ def _summarize_mente_gateway_command(command: str) -> tuple[str, str] | None:
             summarized = _summarize_mente_gateway_exec_tokens(inner_tokens)
             if summarized is not None:
                 icon, detail = summarized
-                return icon, f"{shell_label} · {detail}"
+                rich_detail = _summarize_mente_gateway_exec_detail(
+                    inner_tokens,
+                    raw_command=inner_command,
+                )
+                return icon, f"{shell_label} · {rich_detail or detail}"
         return "💻", f"{shell_label} 命令"
 
-    return _summarize_mente_gateway_exec_tokens(tokens)
+    summarized = _summarize_mente_gateway_exec_tokens(tokens)
+    if summarized is None:
+        return None
+    icon, detail = summarized
+    rich_detail = _summarize_mente_gateway_exec_detail(tokens, raw_command=text)
+    return icon, rich_detail or detail
 
 
 def _resolve_mente_gateway_progress_detail(
@@ -1307,9 +1463,83 @@ def _resolve_mente_gateway_progress_detail(
     return None
 
 
+def _resolve_mente_gateway_progress_summary_item(
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> str | None:
+    """Return one compact checkpoint label suitable for cancel/failure summaries."""
+    payload = payload or {}
+    normalized_type = str(event_type or "")
+    if normalized_type == "kernel.codex.command.started":
+        command = str(payload.get("command") or "").strip()
+        if command:
+            summarized = _summarize_mente_gateway_command(command)
+            if summarized is not None:
+                _icon, detail = summarized
+                return detail
+    if normalized_type == "kernel.codex.mcp_tool.started":
+        tool_name = str(payload.get("tool") or "").strip()
+        if tool_name:
+            summarized_tool = _summarize_mente_gateway_tool_name(tool_name)
+            if summarized_tool:
+                return f"工具：{summarized_tool}"
+    return None
+
+
 def _render_mente_gateway_progress(details: list[str]) -> str:
     """Render only runtime action details for the editable gateway message."""
     return "\n".join(detail for detail in details if str(detail or "").strip())
+
+
+def _record_mente_gateway_progress_summary(
+    items: list[str],
+    summary_item: str | None,
+    *,
+    limit: int = 4,
+) -> None:
+    """Maintain a short recency-ordered list of high-signal progress checkpoints."""
+    value = str(summary_item or "").strip()
+    if not value:
+        return
+    if value in items:
+        items.remove(value)
+    items.append(value)
+    if len(items) > limit:
+        del items[:-limit]
+
+
+def _append_mente_gateway_interrupted_summary(
+    final_response: str,
+    progress_items: list[str],
+) -> str:
+    """Attach a compact 'last reached steps' summary to interrupted runs."""
+    base = str(final_response or "").strip() or "⚠️ 任务已取消。"
+    if not progress_items or "已执行到：" in base:
+        return base
+    summary = "；".join(str(item).strip() for item in progress_items if str(item).strip())
+    summary = _truncate_mente_gateway_progress_text(summary, limit=180)
+    if not summary:
+        return base
+    return f"{base}\n\n已执行到：{summary}"
+
+
+def _format_mente_gateway_phase_update(
+    progress_items: list[str],
+    *,
+    elapsed_seconds: float,
+) -> str:
+    """Render one periodic phase update for long-running Mente tasks."""
+    elapsed_display = (
+        f"{max(1, int(elapsed_seconds // 60))} min"
+        if elapsed_seconds >= 60
+        else f"{max(1, int(elapsed_seconds))}s"
+    )
+    if progress_items:
+        summary = "；".join(str(item).strip() for item in progress_items if str(item).strip())
+        summary = _truncate_mente_gateway_progress_text(summary, limit=180)
+        if summary:
+            return f"⏳ 阶段进展（{elapsed_display}）：已执行到 {summary}。仍在继续整理结论。"
+    return f"⏳ 阶段进展（{elapsed_display}）：仍在继续执行与整理中。"
 
 
 async def _send_mente_gateway_progress_messages(
@@ -10758,8 +10988,12 @@ class GatewayRunner:
             progress_task = None
             mente_progress_last = [None]
             mente_progress_active = [True]
+            mente_progress_summary_items: list[str] = []
             cancel_event = threading.Event()
             mente_run_handle = _MenteGatewayRunHandle(cancel_event, session_id=session_id)
+            _MENTE_NOTIFY_INTERVAL_RAW = float(os.getenv("HERMES_AGENT_NOTIFY_INTERVAL", 180))
+            _MENTE_NOTIFY_INTERVAL = _MENTE_NOTIFY_INTERVAL_RAW if _MENTE_NOTIFY_INTERVAL_RAW > 0 else None
+            _mente_notify_start = time.time()
             gateway_timeout_seconds = _resolve_mente_gateway_host_timeout_seconds(
                 message=message,
                 channel_prompt=channel_prompt,
@@ -10786,6 +11020,12 @@ class GatewayRunner:
                 detail = _resolve_mente_gateway_progress_detail(event_type, payload)
                 if detail:
                     progress_queue.put(("detail", detail))
+                summary_item = _resolve_mente_gateway_progress_summary_item(event_type, payload)
+                if summary_item:
+                    _record_mente_gateway_progress_summary(
+                        mente_progress_summary_items,
+                        summary_item,
+                    )
 
             if progress_queue is not None:
                 progress_task = asyncio.create_task(
@@ -10797,6 +11037,30 @@ class GatewayRunner:
                         is_current=_run_still_current,
                     )
                 )
+
+            async def _notify_mente_long_running() -> None:
+                if _MENTE_NOTIFY_INTERVAL is None:
+                    return
+                _notify_adapter = self.adapters.get(source.platform)
+                if not _notify_adapter:
+                    return
+                while True:
+                    await asyncio.sleep(_MENTE_NOTIFY_INTERVAL)
+                    if not mente_progress_active[0] or not _run_still_current():
+                        return
+                    try:
+                        await _notify_adapter.send(
+                            source.chat_id,
+                            _format_mente_gateway_phase_update(
+                                list(mente_progress_summary_items),
+                                elapsed_seconds=time.time() - _mente_notify_start,
+                            ),
+                            metadata=_progress_metadata,
+                        )
+                    except Exception as _ne:
+                        logger.debug("Mente long-running phase update error: %s", _ne)
+
+            mente_notify_task = asyncio.create_task(_notify_mente_long_running())
 
             if session_key:
                 if run_generation is None or self._is_session_run_current(session_key, run_generation):
@@ -10876,6 +11140,15 @@ class GatewayRunner:
                     )
                 if progress_queue is not None and not result.get("failed", False):
                     progress_queue.put(("step", _MENTE_GATEWAY_PROGRESS_PROTOCOL["__gateway.completed__"]))
+                if (
+                    result.get("failed", False)
+                    and str(result.get("failure_reason") or "").strip().lower() == "interrupted_by_user"
+                    and mente_progress_summary_items
+                ):
+                    result["final_response"] = _append_mente_gateway_interrupted_summary(
+                        str(result.get("final_response") or ""),
+                        mente_progress_summary_items,
+                    )
             finally:
                 mente_progress_active[0] = False
                 if progress_queue is not None:
@@ -10889,6 +11162,12 @@ class GatewayRunner:
                             await progress_task
                         except asyncio.CancelledError:
                             pass
+                if mente_notify_task is not None:
+                    mente_notify_task.cancel()
+                    try:
+                        await mente_notify_task
+                    except asyncio.CancelledError:
+                        pass
                 if session_key:
                     self._release_running_agent_state(
                         session_key,

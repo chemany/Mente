@@ -181,6 +181,60 @@ def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_worksp
     )
 
 
+def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
+    monkeypatch, tmp_path
+):
+    mente_home = tmp_path / "mente-home"
+    mente_home.mkdir()
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="调用深度研究技能，深度研究一下采用菜籽油制备十三碳二酸的可行性，并输出完整报告",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+    )
+
+    assert task.skill_refs == ["research/deep-research-pro"]
+    assert task.metadata["task_profile"] == "deep_research"
+    assert any(
+        fact.startswith("Deep research workflow brief:")
+        for fact in task.memory_facts
+    )
+    output_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Deep research output plan:")
+    )
+    assert str(mente_home / "deep-research") in output_fact
+    assert "Markdown (.md), HTML (.html), DOCX (.docx)" in output_fact
+    assert any(
+        "do not stop after intermediate findings" in constraint.lower()
+        for constraint in task.constraints
+    )
+    assert any(
+        "do not ask whether the user wants a formal report" in constraint.lower()
+        for constraint in task.constraints
+    )
+    assert any(
+        "markdown, html, and docx formats" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+    assert any(
+        "list the generated report artifact paths" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+
+
 def test_resolve_gateway_task_host_timeout_seconds_detects_content_publishing():
     assert (
         resolve_gateway_task_host_timeout_seconds(

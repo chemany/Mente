@@ -383,6 +383,11 @@ class KernelRunner:
         structured_output = parse_structured_output(response.raw_output)
         memory_candidates: list[str] = []
         assistant_summary = response.raw_output
+        completion_status = "success"
+        changed_files: list[str] = []
+        artifacts_out: list[str] = []
+        verification_results: list[str] = []
+        follow_up_tasks: list[str] = []
         structured_payload = None
         thread_id = _extract_thread_id_from_jsonl(response.stdout or "")
         if structured_output is not None:
@@ -393,11 +398,18 @@ class KernelRunner:
                 for candidate in structured_output.memory_candidates
                 if candidate.strip()
             ]
+            completion_status = structured_output.completion_status
+            changed_files = [item.strip() for item in structured_output.changed_files if item.strip()]
+            artifacts_out = [item.strip() for item in structured_output.artifacts_out if item.strip()]
+            verification_results = [
+                item.strip() for item in structured_output.verification_results if item.strip()
+            ]
+            follow_up_tasks = [item.strip() for item in structured_output.follow_up_tasks if item.strip()]
 
         if not assistant_summary:
             assistant_summary = (response.stdout or response.stderr or response.backend_failure or "").strip()
 
-        status = "success"
+        status = completion_status
         backend_failure = response.backend_failure
         if backend_failure:
             status = "failed"
@@ -419,6 +431,10 @@ class KernelRunner:
             assistant_summary=assistant_summary,
             memory_candidates=memory_candidates,
             commands_run=[shlex.join(response.command)] if response.command else [],
+            changed_files=changed_files,
+            artifacts_out=artifacts_out,
+            verification_results=verification_results,
+            follow_up_tasks=follow_up_tasks,
             debug=debug,
             backend_failure=backend_failure,
         )

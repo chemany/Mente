@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,11 @@ class KernelStructuredOutput(BaseModel):
 
     assistant_summary: str
     memory_candidates: list[str] = Field(default_factory=list)
+    completion_status: Literal["success", "blocked"] = "success"
+    changed_files: list[str] = Field(default_factory=list)
+    artifacts_out: list[str] = Field(default_factory=list)
+    verification_results: list[str] = Field(default_factory=list)
+    follow_up_tasks: list[str] = Field(default_factory=list)
 
 
 def build_structured_output_schema() -> dict[str, object]:
@@ -34,8 +39,28 @@ def build_structured_output_schema() -> dict[str, object]:
                 "type": "array",
                 "items": {"type": "string"},
             },
+            "completion_status": {
+                "type": "string",
+                "enum": ["success", "blocked"],
+            },
+            "changed_files": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "artifacts_out": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "verification_results": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "follow_up_tasks": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
         },
-        "required": ["assistant_summary", "memory_candidates"],
+        "required": ["assistant_summary", "memory_candidates", "completion_status"],
     }
 
 
@@ -56,4 +81,3 @@ def parse_structured_output(raw_output: str) -> KernelStructuredOutput | None:
         return KernelStructuredOutput.model_validate(parsed)
     except Exception:
         return None
-

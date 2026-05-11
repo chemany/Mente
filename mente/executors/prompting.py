@@ -110,6 +110,7 @@ _MENTE_WECHAT_PUBLISH_MCP_TOOL = model_visible_mcp_tool_name(
     "mente",
     "mente_wechat_publish_draft",
 )
+_DEEP_RESEARCH_SKILL_REF = "research/deep-research-pro"
 
 
 def render_execution_prompt(request: ExecutionRequest) -> str:
@@ -142,6 +143,9 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
         lines.append(
             "- If the skill workflow is blocked by a real gap or failure, diagnose the concrete blocker, fix the concrete blocker, and then continue the skill workflow."
         )
+        lines.append(
+            "- Before finalizing, self-check the referenced skill requirements for required deliverables, files, publish steps, or report formats; do not stop at an intermediate result if the skill clearly expects a completed artifact."
+        )
     else:
         lines.append(
             "- If no skill refs are provided and a clearly relevant bundled skill likely exists, do at most one narrow skill check before falling back to general exploration."
@@ -149,31 +153,34 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
         lines.append(
             "- Do not scan the full skills tree unless the user explicitly asks for skill discovery."
         )
+    workflow_policy_lines: list[str] = []
     if _is_content_publishing_request(request):
+        workflow_policy_lines.extend(
+            [
+                "- Use the provided publishing skill and bridge tool path directly.",
+                "- Do not read large numbers of repository files, skill files, examples, or scripts unless a concrete blocker requires one targeted read.",
+                f"- Draft the requested article and assets in the workspace, then call {_MENTE_WECHAT_PUBLISH_MCP_TOOL} to publish.",
+                f"- For Mente-managed WeChat publishing tasks, {_MENTE_WECHAT_PUBLISH_MCP_TOOL} is the primary publish entrypoint even if the skill also contains create-article.js or publish.js.",
+                "- Treat create-article.js or publish.js as optional reference helpers only; do not keep reading them repeatedly to decide the main flow.",
+                "- If one targeted skill read or one targeted script help check is enough to execute, stop exploring and execute the managed flow immediately.",
+                "- If key editorial details are unspecified, make reasonable defaults and continue instead of exploring broadly.",
+                "- The publish bridge tool is exposed to the model as "
+                f"{_MENTE_WECHAT_PUBLISH_MCP_TOOL} (server mente / tool mente_wechat_publish_draft).",
+            ]
+        )
+    if _is_deep_research_request(request):
+        workflow_policy_lines.extend(
+            [
+                "- Use the provided deep-research skill directly and complete the full report workflow in this turn.",
+                "- Do not stop at intermediate findings or end by asking whether the user wants the formal report.",
+                "- Generate the final report artifacts in Markdown, HTML, and DOCX, then report the exact paths in the final reply.",
+                "- If one format generation step fails, fix the concrete blocker when possible and still produce the remaining artifacts instead of stopping early.",
+                "- The task is complete only after the report artifacts exist and the final reply includes both the conclusion and the artifact paths.",
+            ]
+        )
+    if workflow_policy_lines:
         lines.append("Workflow Policy:")
-        lines.append("- Use the provided publishing skill and bridge tool path directly.")
-        lines.append(
-            "- Do not read large numbers of repository files, skill files, examples, or scripts unless a concrete blocker requires one targeted read."
-        )
-        lines.append(
-            f"- Draft the requested article and assets in the workspace, then call {_MENTE_WECHAT_PUBLISH_MCP_TOOL} to publish."
-        )
-        lines.append(
-            f"- For Mente-managed WeChat publishing tasks, {_MENTE_WECHAT_PUBLISH_MCP_TOOL} is the primary publish entrypoint even if the skill also contains create-article.js or publish.js."
-        )
-        lines.append(
-            "- Treat create-article.js or publish.js as optional reference helpers only; do not keep reading them repeatedly to decide the main flow."
-        )
-        lines.append(
-            "- If one targeted skill read or one targeted script help check is enough to execute, stop exploring and execute the managed flow immediately."
-        )
-        lines.append(
-            "- If key editorial details are unspecified, make reasonable defaults and continue instead of exploring broadly."
-        )
-        lines.append(
-            "- The publish bridge tool is exposed to the model as "
-            f"{_MENTE_WECHAT_PUBLISH_MCP_TOOL} (server mente / tool mente_wechat_publish_draft)."
-        )
+        lines.extend(workflow_policy_lines)
     recommended_superpowers = _recommended_mente_superpowers(request, explicit_skill_refs)
     if recommended_superpowers:
         lines.append(f"Mente Superpowers: {', '.join(recommended_superpowers)}")
@@ -188,6 +195,8 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
         [
             "Output:",
             "- Return JSON matching the required schema.",
+            '- Use `artifacts_out` for generated files or published outputs, `changed_files` for touched local files, and `verification_results` for checks you actually ran.',
+            '- If the requested workflow could not be fully completed, set `completion_status` to `blocked` and explain the concrete blocker in `assistant_summary` and `follow_up_tasks` instead of pretending the task is done.',
         ]
     )
     lines.append(f"User Request: {request.user_request}")
@@ -255,6 +264,13 @@ def _is_content_publishing_request(request: ExecutionRequest) -> bool:
         return True
     skill_refs = set(_normalized_skill_refs(request.skill_refs))
     return "media/wechat-publisher" in skill_refs
+
+
+def _is_deep_research_request(request: ExecutionRequest) -> bool:
+    if _task_profile(request) == "deep_research":
+        return True
+    skill_refs = set(_normalized_skill_refs(request.skill_refs))
+    return _DEEP_RESEARCH_SKILL_REF in skill_refs
 
 
 def _looks_like_chinese_identity_or_greeting_request(user_request: str | None) -> bool:

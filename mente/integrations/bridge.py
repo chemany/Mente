@@ -10,7 +10,7 @@ import uuid
 from typing import Any
 
 from pydantic import ValidationError
-from hermes_constants import get_skills_dir
+from hermes_constants import get_mente_home, get_skills_dir
 
 from mente.execution_events import ExecutionEventCallback
 from mente.context_builder.builder import ContextBuilder
@@ -44,7 +44,9 @@ from mente.task_core.repository import SQLiteTaskRepository
 
 _WECHAT_PUBLISHER_SKILL_REF = "media/wechat-publisher"
 _IMAGEGEN_SKILL_REF = "imagegen"
+_DEEP_RESEARCH_SKILL_REF = "research/deep-research-pro"
 _CONTENT_PUBLISHING_TASK_PROFILE = "content_publishing"
+_DEEP_RESEARCH_TASK_PROFILE = "deep_research"
 _CONTENT_PUBLISHING_HOST_TIMEOUT_SECONDS = 420.0
 _WECHAT_PUBLISH_HINTS: tuple[str, ...] = (
     "wechat",
@@ -61,6 +63,12 @@ _IMAGEGEN_HINTS: tuple[str, ...] = (
     "海报",
     "图片",
     "image",
+)
+_DEEP_RESEARCH_HINTS: tuple[str, ...] = (
+    "深度研究",
+    "深度调研",
+    "deep research",
+    "deep-research",
 )
 _WECHAT_PUBLISH_BRIDGE_TOOL = "mente_wechat_publish_draft"
 _WECHAT_PUBLISH_VISIBLE_TOOL = model_visible_mcp_tool_name("mente", _WECHAT_PUBLISH_BRIDGE_TOOL)
@@ -81,6 +89,20 @@ def _build_content_publishing_workflow_brief() -> str:
     )
 
 
+def _build_deep_research_workflow_brief() -> str:
+    """Return a compact workflow brief for gateway-authored deep-research tasks."""
+
+    return "\n".join(
+        [
+            "Deep research workflow brief:",
+            "1. Use the provided deep-research skill directly instead of treating this as an open-ended chat turn.",
+            "2. Complete the full research-report workflow in this turn rather than stopping at intermediate findings.",
+            "3. Do not end with 'if you want, I can continue' when the user already asked for deep research.",
+            "4. The task is not complete until the report artifacts are generated and their paths are reported back.",
+        ]
+    )
+
+
 def _build_content_publishing_output_plan(*, workspace: str, session_id: str) -> str:
     """Return a deterministic draft output path for publishing workflows."""
 
@@ -92,6 +114,21 @@ def _build_content_publishing_output_plan(*, workspace: str, session_id: str) ->
             f"- Draft directory: {draft_dir}",
             f"- Draft article path: {article_path}",
             f"- Use the planned draft article path when calling {_WECHAT_PUBLISH_VISIBLE_TOOL}.",
+        ]
+    )
+
+
+def _build_deep_research_output_plan() -> str:
+    """Return the default artifact contract for deep-research workflows."""
+
+    report_root = get_mente_home() / "deep-research"
+    return "\n".join(
+        [
+            "Deep research output plan:",
+            f"- Output root: {report_root}",
+            "- Required artifact formats: Markdown (.md), HTML (.html), DOCX (.docx)",
+            "- Final reply requirement: include a concise conclusion plus the generated artifact paths.",
+            "- If one format fails, continue producing the remaining artifacts and explain the concrete blocker.",
         ]
     )
 
@@ -201,6 +238,8 @@ def _infer_gateway_skill_refs(*, message: str, channel_prompt: str | None = None
         inferred.append(_WECHAT_PUBLISHER_SKILL_REF)
     if any(hint in haystack for hint in _IMAGEGEN_HINTS):
         inferred.append(_IMAGEGEN_SKILL_REF)
+    if any(hint in haystack for hint in _DEEP_RESEARCH_HINTS):
+        inferred.append(_DEEP_RESEARCH_SKILL_REF)
     return inferred
 
 
@@ -209,6 +248,8 @@ def _resolve_gateway_task_profile(skill_refs: list[str]) -> str | None:
 
     if _WECHAT_PUBLISHER_SKILL_REF in skill_refs:
         return _CONTENT_PUBLISHING_TASK_PROFILE
+    if _DEEP_RESEARCH_SKILL_REF in skill_refs:
+        return _DEEP_RESEARCH_TASK_PROFILE
     return None
 
 
@@ -641,6 +682,24 @@ def build_gateway_task(
         )
         acceptance_criteria.append(
             "Prefer producing the requested article and assets immediately; inspect only a small number of directly relevant files when necessary."
+        )
+    if _DEEP_RESEARCH_SKILL_REF in inferred_skill_refs:
+        memory_facts.append(_build_deep_research_workflow_brief())
+        memory_facts.append(_build_deep_research_output_plan())
+        constraints.append(
+            "Do not stop after intermediate findings; complete the full deep-research report workflow in this turn."
+        )
+        constraints.append(
+            "Do not ask whether the user wants a formal report when the request already asked for deep research."
+        )
+        acceptance_criteria.append(
+            "Generate the final deep-research report artifacts in Markdown, HTML, and DOCX formats under the MENTE_HOME deep-research output root."
+        )
+        acceptance_criteria.append(
+            "Final reply must summarize the conclusion and list the generated report artifact paths."
+        )
+        acceptance_criteria.append(
+            "Treat the task as incomplete until the report artifacts exist, unless a concrete blocker prevents generation."
         )
 
     return Task(

@@ -1062,10 +1062,149 @@ async def test_run_agent_mente_emits_compact_progress_without_raw_command_detail
     assert "📨 Mente runtime 已返回" not in all_progress_text
     assert "🛠️ 工具：mente_memory_query" in all_progress_text
     assert "✅ 工具完成：mente_memory_query" in all_progress_text
-    assert "💻 Bash · sed" in all_progress_text
-    assert "✅ Bash · sed 完成" in all_progress_text
+    assert "💻 Bash · sed README.zh.md" in all_progress_text
+    assert "✅ Bash · sed README.zh.md 完成" in all_progress_text
     assert command not in all_progress_text
     assert tool_name not in all_progress_text
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_interrupted_failure_includes_recent_progress_summary(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _direct_to_thread)
+
+    command = "/bin/bash -lc 'rg -n \"十三碳二酸|菜籽油\" ~/.mente/logs/agent.log ~/.mente/logs/gateway.log'"
+    tool_name = "mcp__mente__mente_memory_query"
+    python_command = "/bin/bash -lc \"python3 - <<'PY'\nprint('paper fetch')\nPY\""
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
+        event_callback("kernel.codex.command.started", {"command": command})
+        event_callback("kernel.codex.command.started", {"command": python_command})
+        return {
+            "final_response": "⚠️ 任务已取消。",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+            "failed": True,
+            "failure_reason": "interrupted_by_user",
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="深度研究一下采用菜籽油制备十三碳二酸的可行性",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=11,
+    )
+
+    assert result["failed"] is True
+    assert "⚠️ 任务已取消。" in result["final_response"]
+    assert "已执行到：" in result["final_response"]
+    assert "工具：mente_memory_query" in result["final_response"]
+    assert "Bash · rg 十三碳二酸|菜籽油 agent.log" in result["final_response"]
+    assert "Bash · Python 脚本（内联）" in result["final_response"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_long_running_emits_phase_update(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setenv("HERMES_AGENT_NOTIFY_INTERVAL", "0.01")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _delayed_to_thread(func, *args, **kwargs):
+        await asyncio.sleep(0.03)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _delayed_to_thread)
+
+    command = "/bin/bash -lc 'rg -n \"十三碳二酸|菜籽油\" ~/.mente/logs/agent.log ~/.mente/logs/gateway.log'"
+    tool_name = "mcp__mente__mente_memory_query"
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
+        event_callback("kernel.codex.command.started", {"command": command})
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+            "failed": False,
+            "failure_reason": None,
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="深度研究一下采用菜籽油制备十三碳二酸的可行性",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=12,
+    )
+
+    assert result["failed"] is False
+    phase_updates = [entry["content"] for entry in adapter.sent if "阶段进展" in entry["content"]]
+    assert phase_updates
+    assert any("工具：mente_memory_query" in entry for entry in phase_updates)
+    assert any("Bash · rg 十三碳二酸|菜籽油 agent.log" in entry for entry in phase_updates)
 
 
 def test_resolve_mente_gateway_progress_detail_summarizes_python_commands():
@@ -1081,8 +1220,33 @@ def test_resolve_mente_gateway_progress_detail_summarizes_python_commands():
         },
     )
 
-    assert started == "🐍 Bash · Python 脚本"
-    assert completed == "✅ Bash · Python 脚本 完成"
+    assert started == "🐍 Bash · Python 脚本（内联）"
+    assert completed == "✅ Bash · Python 脚本（内联） 完成"
+
+
+def test_resolve_mente_gateway_progress_detail_summarizes_rg_queries():
+    started = gateway_run._resolve_mente_gateway_progress_detail(
+        "kernel.codex.command.started",
+        {
+            "command": (
+                "/bin/bash -lc "
+                "\"rg -n '十三碳二酸|菜籽油' ~/.mente/logs/agent.log ~/.mente/logs/gateway.log\""
+            )
+        },
+    )
+    completed = gateway_run._resolve_mente_gateway_progress_detail(
+        "kernel.codex.command.completed",
+        {
+            "command": (
+                "/bin/bash -lc "
+                "\"rg -n '十三碳二酸|菜籽油' ~/.mente/logs/agent.log ~/.mente/logs/gateway.log\""
+            ),
+            "exit_code": 0,
+        },
+    )
+
+    assert started == "💻 Bash · rg 十三碳二酸|菜籽油 agent.log"
+    assert completed == "✅ Bash · rg 十三碳二酸|菜籽油 agent.log 完成"
 
 
 @pytest.mark.asyncio
