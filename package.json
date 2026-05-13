@@ -1,6 +1,6 @@
 {
   "name": "mente-agent",
-  "version": "0.11.9",
+  "version": "0.11.10",
   "description": "Thin npm bootstrapper for Mente Agent. Installs and launches the full Mente runtime with a single global command.",
   "scripts": {
     "prepack": "python3 scripts/build_npm_source_bundle.py",
