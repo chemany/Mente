@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 const CARD_STYLE: React.CSSProperties = {
   clipPath: "var(--component-card-clip-path)",
   borderImage: "var(--component-card-border-image)",
+  borderRadius: "var(--component-card-border-radius)",
   background: "var(--component-card-background)",
   boxShadow: "var(--component-card-box-shadow)",
 };
@@ -26,7 +27,8 @@ export function Card({ className, style, ...props }: React.HTMLAttributes<HTMLDi
   return (
     <div
       className={cn(
-        "border border-border bg-card/80 text-card-foreground w-full",
+        "w-full rounded-[var(--theme-radius)] border border-border/75 bg-card/88 text-card-foreground",
+        "shadow-[0_20px_50px_-32px_rgba(17,24,39,0.28)] backdrop-blur-[2px] overflow-hidden",
         className,
       )}
       style={{ ...CARD_STYLE, ...style }}
@@ -36,7 +38,7 @@ export function Card({ className, style, ...props }: React.HTMLAttributes<HTMLDi
 }
 
 export function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex flex-col gap-1.5 p-4 border-b border-border", className)} {...props} />;
+  return <div className={cn("flex flex-col gap-1.5 border-b border-border/70 p-4", className)} {...props} />;
 }
 
 export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {

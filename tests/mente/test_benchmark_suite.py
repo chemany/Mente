@@ -17,7 +17,7 @@ def test_load_benchmark_suite_parses_policy_variants_and_cases():
     assert suite.suite_id == "memory_policy_smoke"
     assert set(suite.policy_variants) == {"tight_gateway", "balanced_gateway"}
     assert suite.cases[0].case_id == "gateway_pref_concise"
-    assert suite.cases[0].expectations["tight_gateway"].memory_fact_count == 1
+    assert suite.cases[0].expectations["tight_gateway"].memory_fact_count == 0
 
 
 def test_run_benchmark_suite_scores_cases():

@@ -14,6 +14,7 @@ concurrently under distinct configurations).
 import hashlib
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -30,11 +31,21 @@ else:
 _GATEWAY_KIND = "mente-gateway"
 _LEGACY_GATEWAY_KINDS = {"hermes-gateway"}
 _RUNTIME_STATUS_FILE = "gateway_state.json"
+_LIVE_GATEWAY_STATES = frozenset({"starting", "running", "draining"})
 _LOCKS_DIRNAME = "gateway-locks"
 _IS_WINDOWS = sys.platform == "win32"
 _UNSET = object()
 _GATEWAY_LOCK_FILENAME = "gateway.lock"
 _gateway_lock_handle = None
+_GATEWAY_CMDLINE_PATTERNS = (
+    "hermes_cli.main gateway",
+    "hermes_cli/main.py gateway",
+    "mente gateway",
+    "hermes gateway",
+    "mente-gateway",
+    "hermes-gateway",
+    "gateway/run.py",
+)
 
 
 def _get_pid_path() -> Path:
@@ -121,6 +132,14 @@ def get_process_start_time(pid: int) -> Optional[int]:
 
 def _read_process_cmdline(pid: int) -> Optional[str]:
     """Return the process command line as a space-separated string."""
+    argv = _read_process_argv(pid)
+    if not argv:
+        return None
+    return " ".join(argv).strip()
+
+
+def _read_process_argv(pid: int) -> Optional[list[str]]:
+    """Return the process command line as argv-style tokens."""
     cmdline_path = Path(f"/proc/{pid}/cmdline")
     try:
         raw = cmdline_path.read_bytes()
@@ -129,25 +148,135 @@ def _read_process_cmdline(pid: int) -> Optional[str]:
 
     if not raw:
         return None
-    return raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip()
+    argv = [
+        part.decode("utf-8", errors="ignore")
+        for part in raw.split(b"\x00")
+        if part
+    ]
+    return argv or None
+
+
+def _read_process_cwd(pid: int) -> Optional[str]:
+    """Return the current working directory for a process when available."""
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+
+
+def _read_systemd_unit_directive(name: str) -> Optional[str]:
+    """Read a directive from the current gateway systemd unit, if present."""
+    if not sys.platform.startswith("linux"):
+        return None
+
+    try:
+        from hermes_cli.gateway import get_systemd_unit_path
+    except Exception:
+        return None
+
+    for system in (False, True):
+        unit_path = get_systemd_unit_path(system=system)
+        try:
+            if not unit_path.exists():
+                continue
+            for line in unit_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith(("#", ";")):
+                    continue
+                key, sep, value = stripped.partition("=")
+                if sep and key == name:
+                    parsed = value.strip()
+                    return parsed or None
+        except (OSError, PermissionError):
+            continue
+    return None
+
+
+def _read_systemd_execstart_argv() -> Optional[list[str]]:
+    """Return ExecStart as argv tokens when the systemd unit exists."""
+    execstart = _read_systemd_unit_directive("ExecStart")
+    if not execstart:
+        return None
+    try:
+        argv = shlex.split(execstart)
+    except ValueError:
+        return None
+    return argv or None
+
+
+def _read_systemd_working_directory() -> Optional[str]:
+    """Return the systemd WorkingDirectory for the current gateway unit."""
+    return _read_systemd_unit_directive("WorkingDirectory")
+
+
+def _argv_looks_like_gateway(argv: Optional[list[str]]) -> bool:
+    """Return True when argv tokens appear to invoke the gateway."""
+    if not argv:
+        return False
+    cmdline = " ".join(str(part) for part in argv)
+    return any(pattern in cmdline for pattern in _GATEWAY_CMDLINE_PATTERNS)
+
+
+def _resolve_live_gateway_identity(pid: int) -> Optional[dict[str, Any]]:
+    """Resolve canonical argv/cwd for a live gateway process."""
+    proc_argv = _read_process_argv(pid)
+    if _argv_looks_like_gateway(proc_argv):
+        proc_cwd = _read_process_cwd(pid)
+        return {
+            "argv": proc_argv,
+            "argv_source": "proc_cmdline",
+            "cwd": proc_cwd or os.getcwd(),
+            "cwd_source": "proc_cwd" if proc_cwd else "os_cwd",
+        }
+
+    systemd_argv = _read_systemd_execstart_argv()
+    if _argv_looks_like_gateway(systemd_argv):
+        systemd_cwd = _read_systemd_working_directory()
+        return {
+            "argv": systemd_argv,
+            "argv_source": "systemd_execstart",
+            "cwd": systemd_cwd or os.getcwd(),
+            "cwd_source": "systemd_working_directory" if systemd_cwd else "os_cwd",
+        }
+
+    return None
+
+
+def _resolve_current_process_identity() -> dict[str, Any]:
+    """Resolve launch identity for the current process with safe fallbacks."""
+    return _resolve_live_gateway_identity(os.getpid()) or {
+        "argv": list(sys.argv),
+        "argv_source": "sys_argv",
+        "cwd": os.getcwd(),
+        "cwd_source": "os_cwd",
+    }
+
+
+def _record_matches_live_process(record: dict[str, Any]) -> bool:
+    """Return True when a runtime record still refers to a live process."""
+    pid = _pid_from_record(record)
+    if pid is None:
+        return False
+
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+    recorded_start = record.get("start_time")
+    current_start = _get_process_start_time(pid)
+    if recorded_start is not None and current_start is not None and recorded_start != current_start:
+        return False
+    return True
 
 
 def _looks_like_gateway_process(pid: int) -> bool:
     """Return True when the live PID still looks like the gateway runtime."""
+    argv = _read_process_argv(pid)
+    if argv:
+        return _argv_looks_like_gateway(argv)
     cmdline = _read_process_cmdline(pid)
-    if not cmdline:
-        return False
-
-    patterns = (
-        "hermes_cli.main gateway",
-        "hermes_cli/main.py gateway",
-        "mente gateway",
-        "hermes gateway",
-        "mente-gateway",
-        "hermes-gateway",
-        "gateway/run.py",
-    )
-    return any(pattern in cmdline for pattern in patterns)
+    return bool(cmdline and any(pattern in cmdline for pattern in _GATEWAY_CMDLINE_PATTERNS))
 
 
 def _record_looks_like_gateway(record: dict[str, Any]) -> bool:
@@ -156,27 +285,17 @@ def _record_looks_like_gateway(record: dict[str, Any]) -> bool:
         return False
 
     argv = record.get("argv")
-    if not isinstance(argv, list) or not argv:
-        return False
-
-    cmdline = " ".join(str(part) for part in argv)
-    patterns = (
-        "hermes_cli.main gateway",
-        "hermes_cli/main.py gateway",
-        "mente gateway",
-        "hermes gateway",
-        "gateway/run.py",
-    )
-    return any(pattern in cmdline for pattern in patterns)
+    return isinstance(argv, list) and _argv_looks_like_gateway(argv)
 
 
 def _build_pid_record() -> dict:
-    return {
+    payload = {
         "pid": os.getpid(),
         "kind": _GATEWAY_KIND,
-        "argv": list(sys.argv),
         "start_time": _get_process_start_time(os.getpid()),
     }
+    payload.update(_resolve_current_process_identity())
+    return payload
 
 
 def _build_runtime_status_record() -> dict[str, Any]:
@@ -270,6 +389,27 @@ def _cleanup_invalid_pid_path(pid_path: Path, *, cleanup_stale: bool) -> None:
         _get_gateway_lock_path(pid_path).unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def _mark_runtime_status_stale(
+    status_path: Optional[Path] = None,
+    *,
+    reason: str = "Gateway process is not running",
+) -> None:
+    """Downgrade stale live-state runtime metadata after liveness checks fail."""
+    resolved_status_path = status_path or _get_runtime_status_path()
+    payload = _read_json_file(resolved_status_path)
+    if not payload:
+        return
+    if payload.get("gateway_state") not in _LIVE_GATEWAY_STATES:
+        return
+
+    payload["gateway_state"] = "stopped"
+    if not payload.get("exit_reason"):
+        payload["exit_reason"] = reason
+    payload["stale"] = True
+    payload["stale_detected_at"] = _utc_now_iso()
+    _write_json_file(resolved_status_path, payload)
 
 
 def _write_gateway_lock_record(handle) -> None:
@@ -408,10 +548,10 @@ def write_runtime_status(
     path = _get_runtime_status_path()
     payload = _read_json_file(path) or _build_runtime_status_record()
     payload.setdefault("platforms", {})
-    payload.setdefault("kind", _GATEWAY_KIND)
-    payload["pid"] = os.getpid()
-    payload["start_time"] = _get_process_start_time(os.getpid())
+    payload.update(_build_pid_record())
     payload["updated_at"] = _utc_now_iso()
+    payload.pop("stale", None)
+    payload.pop("stale_detected_at", None)
 
     if gateway_state is not _UNSET:
         payload["gateway_state"] = gateway_state
@@ -438,7 +578,21 @@ def write_runtime_status(
 
 def read_runtime_status() -> Optional[dict[str, Any]]:
     """Read the persisted gateway runtime health/status information."""
-    return _read_json_file(_get_runtime_status_path())
+    path = _get_runtime_status_path()
+    payload = _read_json_file(path)
+    if not payload:
+        return None
+
+    if _record_matches_live_process(payload):
+        live_identity = _resolve_live_gateway_identity(int(payload["pid"]))
+        if live_identity:
+            normalized = {**payload, **live_identity}
+            normalized["kind"] = _GATEWAY_KIND
+            if normalized != payload:
+                _write_json_file(path, normalized)
+            payload = normalized
+
+    return payload
 
 
 def remove_pid_file() -> None:
@@ -755,9 +909,11 @@ def get_running_pid(
     """
     resolved_pid_path = pid_path or _get_pid_path()
     resolved_lock_path = _get_gateway_lock_path(resolved_pid_path)
+    resolved_status_path = resolved_pid_path.with_name(_RUNTIME_STATUS_FILE)
     lock_active = is_gateway_runtime_lock_active(resolved_lock_path)
     if not lock_active:
         _cleanup_invalid_pid_path(resolved_pid_path, cleanup_stale=cleanup_stale)
+        _mark_runtime_status_stale(resolved_status_path)
         return None
 
     primary_record = _read_pid_record(resolved_pid_path)
@@ -793,6 +949,7 @@ def get_running_pid(
             return pid
 
     _cleanup_invalid_pid_path(resolved_pid_path, cleanup_stale=cleanup_stale)
+    _mark_runtime_status_stale(resolved_status_path)
     return None
 
 

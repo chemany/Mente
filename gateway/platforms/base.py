@@ -1099,14 +1099,16 @@ class BasePlatformAdapter(ABC):
         self._fatal_error_retryable = True
         self._fatal_error_handler: Optional[Callable[["BasePlatformAdapter"], Awaitable[None] | None]] = None
         
-        # Track active message handlers per session for interrupt support.
-        # _active_sessions stores the per-session interrupt Event; _session_tasks
-        # maps session → the specific Task currently processing it so that
-        # session-terminating commands (/stop, /new, /reset) can cancel the
-        # right task and release the adapter-level guard deterministically.
-        # Without the owner-task map, an old task's finally block could delete
-        # a newer task's guard, leaving stale busy state.
-        self._active_sessions: Dict[str, asyncio.Event] = {}
+        # Track interactive coordinator turns per session for interrupt support.
+        # Background worker jobs must live in gateway runtime registries, not in
+        # this adapter-level guard; otherwise one long-running worker locks the
+        # whole session and blocks status / clarification / control follow-ups.
+        #
+        # ``_active_sessions`` remains as a backward-compatible alias because
+        # existing gateway code and tests still reference that name directly.
+        # The canonical meaning is now "interactive session guard".
+        self._interactive_sessions: Dict[str, asyncio.Event] = {}
+        self._active_sessions = self._interactive_sessions
         self._pending_messages: Dict[str, MessageEvent] = {}
         self._session_tasks: Dict[str, asyncio.Task] = {}
         # Background message-processing tasks spawned by handle_message().

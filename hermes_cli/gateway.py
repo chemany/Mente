@@ -29,7 +29,6 @@ from hermes_cli.config import (
     read_raw_config,
     save_env_value,
 )
-from hermes_cli.runtime_override import resolve_source_checkout_runtime_override
 # display_hermes_home is imported lazily at call sites to avoid ImportError
 # when hermes_constants is cached from a pre-update version during `hermes update`.
 from hermes_cli.setup import (
@@ -76,7 +75,13 @@ def _get_service_pids() -> set:
             for service_glob in _SYSTEMD_SERVICE_DISCOVERY_GLOBS:
                 try:
                     result = subprocess.run(
-                        scope_args + [service_glob, "--plain", "--no-legend", "--no-pager"],
+                        scope_args + [
+                            "list-units",
+                            service_glob,
+                            "--plain",
+                            "--no-legend",
+                            "--no-pager",
+                        ],
                         capture_output=True, text=True, timeout=5,
                     )
                     for line in result.stdout.strip().splitlines():
@@ -255,9 +260,27 @@ def _scan_gateway_pids(exclude_pids: set[int], all_profiles: bool = False) -> li
         "mente gateway",
         "gateway/run.py",
     ]
+    non_daemon_markers = (
+        " gateway status",
+        " gateway start",
+        " gateway stop",
+        " gateway restart",
+        " gateway install",
+        " gateway uninstall",
+        " gateway setup",
+        " gateway migrate-legacy",
+    )
     current_home = str(get_hermes_home().resolve())
     current_profile_arg = _profile_arg(current_home)
     current_profile_name = current_profile_arg.split()[-1] if current_profile_arg else ""
+
+    def _looks_like_gateway_command(command: str) -> bool:
+        if not any(pattern in command for pattern in patterns):
+            return False
+        padded_command = f" {command} "
+        if any(marker in padded_command for marker in non_daemon_markers):
+            return False
+        return True
 
     def _matches_current_profile(command: str) -> bool:
         if current_profile_name:
@@ -331,7 +354,7 @@ def _scan_gateway_pids(exclude_pids: set[int], all_profiles: bool = False) -> li
 
                 if pid is None:
                     continue
-                if any(pattern in command for pattern in patterns) and (
+                if _looks_like_gateway_command(command) and (
                     all_profiles or _matches_current_profile(command)
                 ):
                     _append_unique_pid(pids, pid, exclude_pids)
@@ -1019,11 +1042,11 @@ def has_conflicting_systemd_units() -> bool:
     return len(get_installed_systemd_scopes()) > 1
 
 
-# Legacy service names from older Hermes installs that predate the
-# mente-gateway rename. Kept as an explicit allowlist (NOT a glob) so
-# profile units (mente-gateway-*.service / hermes-gateway-*.service) and
-# unrelated third-party "hermes" units are never matched.
-_LEGACY_SERVICE_NAMES: tuple[str, ...] = ("hermes.service", "hermes-gateway.service")
+# Legacy service names from older Hermes installs. Kept as an explicit
+# allowlist (NOT a glob) so profile units (mente-gateway-*.service /
+# hermes-gateway-*.service), the superseded hermes-gateway.service default
+# unit, and unrelated third-party "hermes" units are never matched.
+_LEGACY_SERVICE_NAMES: tuple[str, ...] = ("hermes.service",)
 
 # ExecStart content markers that identify a unit as running our gateway.
 # A legacy unit is only flagged when its file contains one of these.
@@ -1054,7 +1077,7 @@ def _find_legacy_hermes_units() -> list[tuple[str, Path, bool]]:
     """Return ``[(unit_name, unit_path, is_system)]`` for legacy Hermes gateway units.
 
     Detects unit files installed by older Hermes versions that used a
-    different service name (e.g. ``hermes.service`` before the rename to
+    different service name (``hermes.service`` before the rename to
     ``mente-gateway.service``). When both a legacy unit and the current
     ``mente-gateway.service`` are active, they fight over the same bot
     token — the PR #5646 signal-recovery change turns this into a 30-second
@@ -1538,8 +1561,6 @@ def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) 
     # (#8202). 30s of headroom covers the worst case we've observed.
     _drain_timeout = int(_get_restart_drain_timeout() or 0)
     restart_timeout = max(60, _drain_timeout) + 30
-    runtime_override = resolve_source_checkout_runtime_override(PROJECT_ROOT)
-
     if system:
         username, group_name, home_dir = _system_service_identity(run_as_user)
         hermes_home = _hermes_home_for_target_user(home_dir)
@@ -1553,16 +1574,9 @@ def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) 
         venv_bin = _remap_path_for_user(venv_bin, home_dir)
         node_bin = _remap_path_for_user(node_bin, home_dir)
         path_entries = [_remap_path_for_user(p, home_dir) for p in path_entries]
-        if runtime_override:
-            runtime_override = _remap_path_for_user(runtime_override, home_dir)
         path_entries.extend(_build_user_local_paths(Path(home_dir), path_entries))
         path_entries.extend(common_bin_paths)
         sane_path = ":".join(path_entries)
-        runtime_override_env = (
-            f'Environment="MENTE_CODEX_RUNTIME_BIN={runtime_override}"\n'
-            if runtime_override
-            else ""
-        )
         return f"""[Unit]
 Description={SERVICE_DESCRIPTION}
 After=network-online.target
@@ -1583,12 +1597,7 @@ Environment="PATH={sane_path}"
 Environment="VIRTUAL_ENV={venv_dir}"
 Environment="MENTE_HOME={hermes_home}"
 Environment="HERMES_HOME={hermes_home}"
-Environment="HERMES_GATEWAY_EXECUTOR=mente"
-Environment="HERMES_API_SERVER_EXECUTOR=mente"
-Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"
-Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"
-Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway,tui,oneshot"
-{runtime_override_env}Restart=on-failure
+Restart=on-failure
 RestartSec=30
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}
 KillMode=mixed
@@ -1607,11 +1616,6 @@ WantedBy=multi-user.target
     path_entries.extend(_build_user_local_paths(Path.home(), path_entries))
     path_entries.extend(common_bin_paths)
     sane_path = ":".join(path_entries)
-    runtime_override_env = (
-        f'Environment="MENTE_CODEX_RUNTIME_BIN={runtime_override}"\n'
-        if runtime_override
-        else ""
-    )
     return f"""[Unit]
 Description={SERVICE_DESCRIPTION}
 After=network.target
@@ -1626,12 +1630,7 @@ Environment="PATH={sane_path}"
 Environment="VIRTUAL_ENV={venv_dir}"
 Environment="MENTE_HOME={hermes_home}"
 Environment="HERMES_HOME={hermes_home}"
-Environment="HERMES_GATEWAY_EXECUTOR=mente"
-Environment="HERMES_API_SERVER_EXECUTOR=mente"
-Environment="MENTE_SESSIONFUL_EXECUTION_ENABLED=1"
-Environment="MENTE_GATEWAY_CONTINUITY_ENABLED=1"
-Environment="MENTE_SESSIONFUL_EXECUTION_SOURCES=api_server,gateway,tui,oneshot"
-{runtime_override_env}Restart=on-failure
+Restart=on-failure
 RestartSec=30
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}
 KillMode=mixed
@@ -2111,10 +2110,6 @@ def generate_launchd_plist() -> str:
         <string>{hermes_home}</string>
         <key>HERMES_HOME</key>
         <string>{hermes_home}</string>
-        <key>HERMES_GATEWAY_EXECUTOR</key>
-        <string>mente</string>
-        <key>HERMES_API_SERVER_EXECUTOR</key>
-        <string>mente</string>
     </dict>
     
     <key>RunAtLoad</key>

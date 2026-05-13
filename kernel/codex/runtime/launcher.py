@@ -45,11 +45,12 @@ def build_exec_command(
     for override in runtime_config.to_codex_overrides():
         command.extend(["-c", override])
     command.extend(_build_execution_mode_args(sandbox=sandbox, approval_policy=approval_policy))
+    if runtime_config.skip_git_repo_check is not False:
+        command.append("--skip-git-repo-check")
     command.extend(
         [
-            "--skip-git-repo-check",
             "--color",
-            "never",
+            _resolve_color(runtime_config),
             "--cd",
             workdir or payload.workspace,
         ]
@@ -175,3 +176,10 @@ def _has_explicit_workspace_network_override(config: dict[str, object]) -> bool:
     if not isinstance(sandbox_workspace_write, dict):
         return False
     return "network_access" in sandbox_workspace_write
+
+
+def _resolve_color(runtime_config: RuntimeConfig) -> str:
+    configured = runtime_config.color
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    return "never"

@@ -147,6 +147,15 @@ def resolve_memory_context(
 def _has_on_demand_memory_query_tool(task: Task | ExecutionRequest) -> bool:
     if getattr(task, "task_type", None) != "conversation":
         return False
+    metadata = getattr(task, "metadata", None)
+    if isinstance(metadata, Mapping):
+        workflow_contract = metadata.get("workflow_contract")
+        if isinstance(workflow_contract, Mapping):
+            memory_read = workflow_contract.get("memory_read")
+            if isinstance(memory_read, Mapping):
+                mode = str(memory_read.get("mode") or "").strip().lower()
+                if bool(memory_read.get("enabled")) and mode == "runtime_on_demand_query":
+                    return True
     tool_policy_attr = getattr(task, "tool_policy", None)
     if isinstance(tool_policy_attr, Mapping):
         bridge_tools = tool_policy_attr.get("bridge_tools")
@@ -157,7 +166,6 @@ def _has_on_demand_memory_query_tool(task: Task | ExecutionRequest) -> bool:
                 if str(item).strip()
             }:
                 return True
-    metadata = getattr(task, "metadata", None)
     if not isinstance(metadata, Mapping):
         return False
     tool_policy = metadata.get("tool_policy")

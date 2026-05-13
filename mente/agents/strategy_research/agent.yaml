@@ -1,0 +1,6 @@
+id: strategy_research
+display_name: Strategy Research
+lanes:
+  - research
+task_profiles:
+  - deep_research

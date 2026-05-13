@@ -75,6 +75,31 @@ def test_build_stateless_command_respects_explicit_workspace_network_override():
     assert 'sandbox_workspace_write.network_access=true' not in command
 
 
+def test_build_stateless_command_respects_runtime_launch_flags():
+    payload = KernelExecutionPayload(
+        prompt="Inspect repository",
+        workspace="/workspace/repo",
+        tool_policy=None,
+    )
+    runtime_config = RuntimeConfig(
+        runtime_home=Path("/private/codex-home"),
+        skip_git_repo_check=False,
+        color="always",
+    )
+
+    command = build_stateless_command(
+        codex_binary="codex",
+        payload=payload,
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        sandbox="workspace-write",
+        approval_policy="never",
+        runtime_config=runtime_config,
+    )
+
+    assert "--skip-git-repo-check" not in command
+    assert command[command.index("--color") + 1] == "always"
+
+
 def test_build_private_runtime_env_sets_private_home_and_preserves_safe_vars(monkeypatch):
     monkeypatch.setenv("PATH", "/usr/local/bin")
     monkeypatch.setenv("LANG", "C.UTF-8")

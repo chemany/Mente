@@ -8,6 +8,7 @@ from typing import Any
 
 from mente.context_builder.builder import ContextBuilder
 from mente.executors import resolve_tool_exposure_policy
+from mente.feature_flags import build_api_server_conversation_workflow_contract, build_conversation_workflow_contract
 from mente.executors.base import Executor
 from mente.executors.prompting import build_prompt_metrics
 from mente.memory.policy import MemoryPolicy, MemoryPolicyResolver
@@ -26,7 +27,28 @@ def load_replay_fixture(path: str | Path) -> dict[str, Any]:
 
 def build_task_from_fixture(fixture: dict[str, Any]) -> Task:
     """Construct a normalized task from a replay fixture."""
-    return Task.model_validate(fixture["task"])
+    task = Task.model_validate(fixture["task"])
+    if task.task_type != "conversation":
+        return task
+
+    metadata = dict(task.metadata)
+    source = str(metadata.get("source") or "").strip()
+    if not source:
+        task.metadata = metadata
+        return task
+
+    lane = str(metadata.get("lane") or "").strip().lower() or "director"
+    metadata.setdefault("lane", lane)
+    if "workflow_contract" not in metadata:
+        if source == "api_server":
+            metadata["workflow_contract"] = build_api_server_conversation_workflow_contract()
+        else:
+            metadata["workflow_contract"] = build_conversation_workflow_contract(
+                source=source,
+                lane=lane,
+            )
+    task.metadata = metadata
+    return task
 
 
 def replay_task(fixture: dict[str, Any], orchestrator: Orchestrator) -> ExecutionResult:

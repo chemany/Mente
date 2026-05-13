@@ -34,6 +34,63 @@ def test_resolve_gateway_runtime_continuity_plan_disabled_flag_stays_stateless(m
     assert plan["replay_history_in_memory_facts"] is True
 
 
+def test_resolve_gateway_runtime_continuity_lane_routes_simple_chat_to_director():
+    lane = gateway_run._resolve_gateway_runtime_continuity_lane(
+        message="你好，你是谁？",
+        channel_prompt=None,
+        recent_task_snapshot=None,
+    )
+
+    assert lane == "director"
+
+
+def test_resolve_gateway_runtime_continuity_lane_routes_obvious_coding_turn_to_engineering():
+    lane = gateway_run._resolve_gateway_runtime_continuity_lane(
+        message="帮我修复 tests/gateway/test_session.py 的失败并跑 pytest",
+        channel_prompt=None,
+        recent_task_snapshot=None,
+    )
+
+    assert lane == "engineering"
+
+
+def test_resolve_gateway_runtime_continuity_lane_prefers_active_lane_for_continue_turn():
+    lane = gateway_run._resolve_gateway_runtime_continuity_lane(
+        message="继续刚才的任务",
+        channel_prompt=None,
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "metadata": {
+                "lane": "engineering",
+            },
+        },
+        active_lane="engineering",
+    )
+
+    assert lane == "director"
+
+
+def test_resolve_gateway_runtime_continuity_lane_routes_status_follow_up_to_director():
+    lane = gateway_run._resolve_gateway_runtime_continuity_lane(
+        message="做到哪了？",
+        channel_prompt=None,
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "follow_up_tasks": ["继续修复并跑测试"],
+            "metadata": {
+                "lane": "engineering",
+            },
+        },
+        active_lane="engineering",
+    )
+
+    assert lane == "director"
+
+
 def test_disabled_gateway_continuity_invalidates_active_codex_binding(monkeypatch):
     monkeypatch.delenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", raising=False)
     monkeypatch.delenv("MENTE_GATEWAY_CONTINUITY_ENABLED", raising=False)
@@ -51,6 +108,7 @@ def test_disabled_gateway_continuity_invalidates_active_codex_binding(monkeypatc
 
     session_store.invalidate_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="director",
         reason="continuity_disabled",
     )
     assert payload["status"] == "invalidated"
@@ -108,6 +166,59 @@ def test_resolve_gateway_runtime_continuity_plan_with_active_continuity_uses_res
     assert plan["replay_history_in_memory_facts"] is False
 
 
+def test_resolve_gateway_runtime_continuity_plan_recent_artifact_delivery_starts_fresh():
+    plan = gateway_run._resolve_gateway_runtime_continuity_plan(
+        session_entry=MagicMock(session_id="sess-1"),
+        history=_history(),
+        continuity_payload={
+            "runtime": "codex",
+            "continuity_id": "thread-123",
+            "status": "active",
+        },
+        recent_task_snapshot={
+            "status": "needs_follow_up",
+            "metadata": {
+                "artifacts_out": [
+                    "/home/jason/.mente/deep-research/report.md",
+                    "/home/jason/.mente/deep-research/report.html",
+                    "/home/jason/.mente/deep-research/report.docx",
+                ]
+            },
+        },
+        message="把刚才那三个报告上传到飞书云文档里",
+        channel_prompt=None,
+    )
+
+    assert plan["execution_mode"] is ExecutionMode.SESSIONFUL
+    assert plan["execution_session"] == ExecutionSession(mode=SessionMode.START)
+    assert plan["fallback_history_fact"] is None
+    assert plan["replay_history_in_memory_facts"] is False
+
+
+def test_resolve_gateway_runtime_continuity_plan_status_follow_up_skips_history_replay():
+    plan = gateway_run._resolve_gateway_runtime_continuity_plan(
+        session_entry=MagicMock(session_id="sess-1"),
+        history=_history(),
+        continuity_payload=None,
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "follow_up_tasks": ["继续修复并跑测试"],
+            "metadata": {
+                "lane": "engineering",
+            },
+        },
+        message="当前进度？",
+        channel_prompt=None,
+    )
+
+    assert plan["execution_mode"] is ExecutionMode.SESSIONFUL
+    assert plan["execution_session"] == ExecutionSession(mode=SessionMode.START)
+    assert plan["fallback_history_fact"] is None
+    assert plan["replay_history_in_memory_facts"] is False
+
+
 def test_idle_expired_gateway_continuity_is_invalidated_and_restarts(monkeypatch):
     monkeypatch.setenv("MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS", "3600")
     session_store = MagicMock()
@@ -126,6 +237,7 @@ def test_idle_expired_gateway_continuity_is_invalidated_and_restarts(monkeypatch
 
     session_store.invalidate_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="director",
         reason="idle_ttl_expired",
     )
     assert payload["status"] == "invalidated"
@@ -232,6 +344,7 @@ def test_record_gateway_runtime_continuity_result_binds_active_continuity():
     gateway_run._record_gateway_runtime_continuity_result(
         session_store=session_store,
         session_id="sess-1",
+        lane="engineering",
         task_id="task-1",
         previous_continuity_payload=None,
         execution_session_payload={
@@ -244,6 +357,7 @@ def test_record_gateway_runtime_continuity_result_binds_active_continuity():
 
     session_store.bind_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="engineering",
         runtime="codex",
         continuity_id="thread-123",
         status="active",
@@ -260,6 +374,7 @@ def test_record_gateway_runtime_continuity_result_invalidates_deep_research_thre
     gateway_run._record_gateway_runtime_continuity_result(
         session_store=session_store,
         session_id="sess-1",
+        lane="research",
         task_id="task-1",
         previous_continuity_payload=None,
         execution_session_payload={
@@ -273,6 +388,7 @@ def test_record_gateway_runtime_continuity_result_invalidates_deep_research_thre
 
     session_store.bind_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="research",
         runtime="codex",
         continuity_id="thread-123",
         status="active",
@@ -282,6 +398,7 @@ def test_record_gateway_runtime_continuity_result_invalidates_deep_research_thre
     )
     session_store.invalidate_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="research",
         reason="deep_research_completed",
     )
 
@@ -292,6 +409,7 @@ def test_record_gateway_runtime_continuity_result_invalidates_previous_resume_on
     gateway_run._record_gateway_runtime_continuity_result(
         session_store=session_store,
         session_id="sess-1",
+        lane="engineering",
         task_id="task-1",
         previous_continuity_payload={
             "runtime": "codex",
@@ -309,6 +427,7 @@ def test_record_gateway_runtime_continuity_result_invalidates_previous_resume_on
 
     session_store.invalidate_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="engineering",
         reason="thread_not_found",
     )
     session_store.bind_runtime_continuity.assert_not_called()

@@ -11,6 +11,7 @@ from gateway.config import (
     SessionResetPolicy,
     _apply_env_overrides,
     load_gateway_config,
+    resolve_explicit_env_override,
 )
 
 
@@ -196,6 +197,107 @@ class TestGatewayConfigRoundtrip:
 
 
 class TestLoadGatewayConfig:
+    def test_bridges_mente_runtime_controls_from_config_yaml(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "gateway:\n"
+            "  executor: mente\n"
+            "  api_server_executor: mente\n"
+            "  sessionful_execution:\n"
+            "    enabled: true\n"
+            "    sources:\n"
+            "      - gateway\n"
+            "      - api_server\n"
+            "  runtime_continuity:\n"
+            "    enabled: true\n"
+            "    idle_ttl_seconds: 7200\n"
+            "codex:\n"
+            "  runtime:\n"
+            "    binary: /opt/codex/bin/codex\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("HERMES_GATEWAY_EXECUTOR", raising=False)
+        monkeypatch.delenv("HERMES_API_SERVER_EXECUTOR", raising=False)
+        monkeypatch.delenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", raising=False)
+        monkeypatch.delenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", raising=False)
+        monkeypatch.delenv("MENTE_GATEWAY_CONTINUITY_ENABLED", raising=False)
+        monkeypatch.delenv("MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS", raising=False)
+        monkeypatch.delenv("MENTE_CODEX_RUNTIME_BIN", raising=False)
+
+        load_gateway_config()
+
+        assert os.environ["HERMES_GATEWAY_EXECUTOR"] == "mente"
+        assert os.environ["HERMES_API_SERVER_EXECUTOR"] == "mente"
+        assert os.environ["MENTE_SESSIONFUL_EXECUTION_ENABLED"] == "true"
+        assert os.environ["MENTE_SESSIONFUL_EXECUTION_SOURCES"] == "gateway,api_server"
+        assert os.environ["MENTE_GATEWAY_CONTINUITY_ENABLED"] == "true"
+        assert os.environ["MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS"] == "7200"
+        assert os.environ["MENTE_CODEX_RUNTIME_BIN"] == "/opt/codex/bin/codex"
+
+    def test_mente_runtime_control_env_takes_precedence_over_config_yaml(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "gateway:\n"
+            "  executor: mente\n"
+            "  api_server_executor: mente\n"
+            "  sessionful_execution:\n"
+            "    enabled: true\n"
+            "    sources:\n"
+            "      - gateway\n"
+            "  runtime_continuity:\n"
+            "    enabled: true\n"
+            "    idle_ttl_seconds: 7200\n"
+            "codex:\n"
+            "  runtime:\n"
+            "    binary: /opt/codex/bin/codex\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "legacy")
+        monkeypatch.setenv("HERMES_API_SERVER_EXECUTOR", "legacy-api")
+        monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "0")
+        monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "cli")
+        monkeypatch.setenv("MENTE_GATEWAY_CONTINUITY_ENABLED", "0")
+        monkeypatch.setenv("MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS", "1800")
+        monkeypatch.setenv("MENTE_CODEX_RUNTIME_BIN", "/env/codex")
+
+        load_gateway_config()
+
+        assert os.environ["HERMES_GATEWAY_EXECUTOR"] == "legacy"
+        assert os.environ["HERMES_API_SERVER_EXECUTOR"] == "legacy-api"
+        assert os.environ["MENTE_SESSIONFUL_EXECUTION_ENABLED"] == "0"
+        assert os.environ["MENTE_SESSIONFUL_EXECUTION_SOURCES"] == "cli"
+        assert os.environ["MENTE_GATEWAY_CONTINUITY_ENABLED"] == "0"
+        assert os.environ["MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS"] == "1800"
+        assert os.environ["MENTE_CODEX_RUNTIME_BIN"] == "/env/codex"
+
+    def test_shadowed_managed_gateway_executor_stays_classified_as_config_managed(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text("gateway:\n  executor: mente\n", encoding="utf-8")
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("HERMES_GATEWAY_EXECUTOR", raising=False)
+
+        load_gateway_config()
+        assert os.environ["HERMES_GATEWAY_EXECUTOR"] == "mente"
+
+        monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "legacy")
+        config_path.write_text("agent:\n  service_tier: fast\n", encoding="utf-8")
+
+        load_gateway_config()
+        os.environ["HERMES_GATEWAY_EXECUTOR"] = "mente"
+
+        assert resolve_explicit_env_override("HERMES_GATEWAY_EXECUTOR") is None
+
     def test_bridges_quick_commands_from_config_yaml(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()

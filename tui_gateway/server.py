@@ -2,6 +2,7 @@ import atexit
 import concurrent.futures
 import contextvars
 import copy
+import dataclasses
 import json
 import logging
 import os
@@ -13,11 +14,27 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, Callable
 
 from hermes_constants import bootstrap_mente_home, get_hermes_home
 from hermes_cli.env_loader import load_hermes_dotenv
-from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
+from mente.execution_events import (
+    build_lane_terminal_event,
+    merge_live_and_persisted_lane_job,
+    normalize_lane_progress_event,
+    persist_lane_event,
+    persist_session_job_state,
+    read_persisted_lane_job,
+    render_lane_progress_text,
+)
+from mente.task_core.models import (
+    DispatchMode,
+    ExecutionMode,
+    ExecutionResult,
+    ExecutionSession,
+    SessionMode,
+)
+from mente.task_core.repository import SQLiteTaskRepository
 from tui_gateway.transport import (
     StdioTransport,
     Transport,
@@ -126,6 +143,7 @@ _sessions: dict[str, dict] = {}
 _methods: dict[str, callable] = {}
 _pending: dict[str, tuple[str, threading.Event]] = {}
 _answers: dict[str, str] = {}
+_background_worker_registry: dict[str, dict[str, "_TuiBackgroundWorkerJob"]] = {}
 _db = None
 _db_error: str | None = None
 _stdout_lock = threading.Lock()
@@ -173,6 +191,20 @@ sys.stdout = sys.stderr
 # contextvar or session. Stream resolved through a lambda so runtime monkey-
 # patches of `_real_stdout` (used extensively in tests) still land correctly.
 _stdio_transport = StdioTransport(lambda: _real_stdout, _stdout_lock)
+
+
+@dataclasses.dataclass
+class _TuiBackgroundWorkerJob:
+    session_id: str
+    lane: str
+    job_id: str
+    task_id: str
+    status: str = "running"
+    summary: str = ""
+    metadata: dict[str, Any] = dataclasses.field(default_factory=dict)
+    cancel_event: threading.Event | None = None
+    created_at: float = dataclasses.field(default_factory=time.time)
+    updated_at: float = dataclasses.field(default_factory=time.time)
 
 
 class _SlashWorker:
@@ -482,6 +514,976 @@ def _sess(params, rid):
     return (None, err) if err else (s, _wait_agent(s, rid))
 
 
+def _emit_frontdesk_completion(sid: str, session: dict, user_text: str, assistant_text: str) -> None:
+    _emit("message.start", sid)
+    with session["history_lock"]:
+        session.setdefault("history", []).extend(
+            [
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": assistant_text},
+            ]
+        )
+        session["history_version"] = int(session.get("history_version", 0)) + 1
+    payload = {"text": assistant_text, "usage": {}, "status": "complete"}
+    rendered = render_message(assistant_text, session.get("cols", 80))
+    if rendered:
+        payload["rendered"] = rendered
+    _emit("message.complete", sid, payload)
+
+
+def _normalize_background_worker_lane(value: str | None) -> str:
+    lane = str(value or "").strip().lower()
+    return lane or "director"
+
+
+def _background_worker_job_payload(job: _TuiBackgroundWorkerJob | None) -> dict[str, Any] | None:
+    if job is None:
+        return None
+    return {
+        "session_id": job.session_id,
+        "lane": job.lane,
+        "job_id": job.job_id,
+        "task_id": job.task_id,
+        "status": job.status,
+        "summary": job.summary,
+        "metadata": dict(job.metadata),
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+def _load_persisted_background_worker_job(
+    *,
+    session_id: str,
+    lane: str,
+    job_id: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any] | None:
+    try:
+        repo = SQLiteTaskRepository()
+    except Exception:
+        logger.debug("failed to open task repository for TUI worker progress", exc_info=True)
+        return None
+    try:
+        return read_persisted_lane_job(
+            repo,
+            session_id=session_id,
+            lane=lane,
+            job_id=job_id,
+            task_id=task_id,
+        )
+    except Exception:
+        logger.debug(
+            "failed to read persisted TUI worker progress for session %s lane %s",
+            session_id,
+            lane,
+            exc_info=True,
+        )
+        return None
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
+
+
+def register_background_worker_job(
+    session_id: str,
+    *,
+    lane: str,
+    job_id: str,
+    task_id: str,
+    summary: str = "",
+    status: str = "running",
+    metadata: dict[str, Any] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
+    normalized_lane = _normalize_background_worker_lane(lane)
+    registry = _background_worker_registry.setdefault(session_id, {})
+    now = time.time()
+    existing = registry.get(normalized_lane)
+    job = _TuiBackgroundWorkerJob(
+        session_id=session_id,
+        lane=normalized_lane,
+        job_id=str(job_id).strip(),
+        task_id=str(task_id).strip(),
+        status=str(status or "running").strip().lower() or "running",
+        summary=str(summary or "").strip(),
+        metadata=dict(metadata or {}),
+        cancel_event=cancel_event or (existing.cancel_event if existing else None),
+        created_at=existing.created_at if existing else now,
+        updated_at=now,
+    )
+    registry[normalized_lane] = job
+    payload = _background_worker_job_payload(job) or {}
+    try:
+        repo = SQLiteTaskRepository()
+    except Exception:
+        repo = None
+    if repo is not None:
+        try:
+            persist_session_job_state(
+                repo,
+                session_id=session_id,
+                lane=normalized_lane,
+                job_id=job.job_id,
+                task_id=job.task_id,
+                status=job.status,
+                summary=job.summary,
+                skill_refs=list(job.metadata.get("skill_refs") or []),
+                metadata=dict(job.metadata),
+            )
+        except Exception:
+            logger.debug(
+                "failed to mirror TUI worker job state for session %s lane %s",
+                session_id,
+                normalized_lane,
+                exc_info=True,
+            )
+        finally:
+            try:
+                repo.close()
+            except Exception:
+                pass
+    persisted_payload = _load_persisted_background_worker_job(
+        session_id=session_id,
+        lane=normalized_lane,
+        job_id=job.job_id,
+        task_id=job.task_id,
+    )
+    return merge_live_and_persisted_lane_job(payload, persisted_payload) or payload
+
+
+def get_background_worker_job(
+    session_id: str,
+    *,
+    lane: str | None = None,
+    active_only: bool = False,
+) -> dict[str, Any] | None:
+    registry = _background_worker_registry.get(session_id) or {}
+    if lane is not None:
+        job = registry.get(_normalize_background_worker_lane(lane))
+        if job is not None and active_only and not _background_worker_status_is_active(job.status):
+            return None
+        payload = _background_worker_job_payload(job)
+        if payload is None:
+            return None
+        persisted_payload = _load_persisted_background_worker_job(
+            session_id=session_id,
+            lane=str(payload.get("lane") or ""),
+            job_id=str(payload.get("job_id") or "") or None,
+            task_id=str(payload.get("task_id") or "") or None,
+        )
+        return merge_live_and_persisted_lane_job(payload, persisted_payload)
+    jobs = sorted(registry.values(), key=lambda item: item.updated_at, reverse=True)
+    if active_only:
+        jobs = [job for job in jobs if _background_worker_status_is_active(job.status)]
+    if not jobs:
+        return None
+    payload = _background_worker_job_payload(jobs[0])
+    if payload is None:
+        return None
+    persisted_payload = _load_persisted_background_worker_job(
+        session_id=session_id,
+        lane=str(payload.get("lane") or ""),
+        job_id=str(payload.get("job_id") or "") or None,
+        task_id=str(payload.get("task_id") or "") or None,
+    )
+    return merge_live_and_persisted_lane_job(payload, persisted_payload)
+
+
+def list_background_worker_jobs(session_id: str) -> list[dict[str, Any]]:
+    registry = _background_worker_registry.get(session_id) or {}
+    jobs = sorted(registry.values(), key=lambda item: item.updated_at, reverse=True)
+    payloads: list[dict[str, Any]] = []
+    for job in jobs:
+        payload = _background_worker_job_payload(job)
+        if payload is None:
+            continue
+        persisted_payload = _load_persisted_background_worker_job(
+            session_id=session_id,
+            lane=str(payload.get("lane") or ""),
+            job_id=str(payload.get("job_id") or "") or None,
+            task_id=str(payload.get("task_id") or "") or None,
+        )
+        payloads.append(merge_live_and_persisted_lane_job(payload, persisted_payload) or payload)
+    return payloads
+
+
+def clear_background_worker_job(
+    session_id: str,
+    *,
+    lane: str,
+) -> bool:
+    registry = _background_worker_registry.get(session_id)
+    if not registry:
+        return False
+    removed = registry.pop(_normalize_background_worker_lane(lane), None)
+    if not registry:
+        _background_worker_registry.pop(session_id, None)
+    return removed is not None
+
+
+def _looks_like_background_worker_status_request(message: str | None) -> bool:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "status",
+        "progress",
+        "update",
+        "做到哪",
+        "到哪了",
+        "当前进度",
+        "现在进度",
+        "进度",
+        "状态",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _looks_like_background_worker_result_request(message: str | None) -> bool:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "结果",
+        "结论",
+        "产物",
+        "附件",
+        "完成了吗",
+        "done",
+        "finished",
+        "result",
+        "summary",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _looks_like_background_worker_blocker_request(message: str | None) -> bool:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "卡在哪",
+        "卡住",
+        "阻塞",
+        "block",
+        "blocked",
+        "为什么卡",
+        "why stuck",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _looks_like_background_worker_reply_request(
+    message: str | None,
+    *,
+    status: str | None = None,
+) -> bool:
+    if _looks_like_background_worker_status_request(message):
+        return True
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "completed":
+        return _looks_like_background_worker_result_request(message)
+    if normalized_status == "blocked":
+        return _looks_like_background_worker_blocker_request(message)
+    if normalized_status in {"running", "queued", "paused", "cancelling"}:
+        return _looks_like_background_worker_result_request(message)
+    return (
+        _looks_like_background_worker_result_request(message)
+        or _looks_like_background_worker_blocker_request(message)
+    )
+
+
+def _resolve_background_worker_control_action(message: str | None) -> str | None:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return None
+    if any(token in normalized for token in ("pause", "暂停", "先停", "hold")):
+        return "pause"
+    if any(token in normalized for token in ("cancel", "stop", "取消", "停止")):
+        return "cancel"
+    return None
+
+
+def _looks_like_background_worker_resume_request(message: str | None) -> bool:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "continue",
+        "resume",
+        "继续跑",
+        "继续任务",
+        "继续刚才",
+        "继续上一个",
+        "接着跑",
+        "接着做",
+    )
+    return normalized in {"继续", "继续跑", "resume", "continue"} or any(
+        phrase in normalized for phrase in phrases
+    )
+
+
+def _extract_background_worker_revision(message: str | None) -> str | None:
+    raw_message = str(message or "").strip()
+    if not raw_message:
+        return None
+    normalized = " ".join(raw_message.lower().split())
+    revision_prefixes = (
+        "改成",
+        "改为",
+        "改一下",
+        "改下",
+        "换成",
+        "调整为",
+        "调整成",
+        "instead",
+        "change to",
+    )
+    if any(prefix in normalized for prefix in revision_prefixes):
+        return raw_message
+    return None
+
+
+def _resolve_background_worker_control_request(message: str | None) -> dict[str, Any] | None:
+    action = _resolve_background_worker_control_action(message)
+    if action is not None:
+        return {"action": action}
+    if _looks_like_background_worker_resume_request(message):
+        return {"action": "resume"}
+    revision = _extract_background_worker_revision(message)
+    if revision:
+        return {
+            "action": "reprioritize",
+            "user_revision": revision,
+        }
+    return None
+
+
+def _resolve_background_worker_dispatch_lane(decision: Any) -> str:
+    return _normalize_background_worker_lane(
+        getattr(decision, "target_job_lane", None)
+        or getattr(decision, "worker_lane", None)
+        or getattr(decision, "lane", None)
+    )
+
+
+def _background_worker_status_is_active(status: str | None) -> bool:
+    normalized = str(status or "").strip().lower()
+    return normalized in {"running", "paused", "queued", "cancelling"}
+
+
+def _background_worker_default_next_step(job: Mapping[str, Any]) -> str:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    task_profile = str(metadata.get("task_profile") or "").strip().lower()
+    lane = _normalize_background_worker_lane(job.get("lane"))
+    if task_profile == "deep_research" or lane == "research":
+        return "继续收集资料并形成结论。"
+    if lane == "engineering":
+        return "继续定位相关代码并验证修复。"
+    if lane == "writing":
+        return "继续整理稿件并输出产物。"
+    if lane == "config_admin":
+        return "继续核对配置并应用变更。"
+    return "继续执行当前任务。"
+
+
+def _background_worker_suggested_next_action(job: Mapping[str, Any]) -> str:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    explicit = str(
+        metadata.get("suggested_next_action")
+        or metadata.get("next_action")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+    blocker = str(job.get("blocked_reason") or "").strip().lower()
+    if any(token in blocker for token in ("api key", "apikey", "token", "credential", "凭证", "密钥")):
+        return "补充凭证，或确认是否改用公开资料继续。"
+    if any(token in blocker for token in ("permission", "access", "权限")):
+        return "补充访问权限，或提供可替代输入。"
+    return "确认是否调整范围，或补充缺失输入后继续。"
+
+
+def _background_worker_summary_text(job: Mapping[str, Any]) -> str:
+    summary_items = job.get("summary_items") if isinstance(job.get("summary_items"), list) else []
+    if summary_items:
+        normalized_items = [str(item).strip() for item in summary_items if str(item).strip()]
+        if normalized_items:
+            return normalized_items[-1]
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    final_checkpoint = (
+        metadata.get("final_checkpoint")
+        if isinstance(metadata.get("final_checkpoint"), dict)
+        else {}
+    )
+    checkpoint_detail = str(final_checkpoint.get("detail") or "").strip()
+    if checkpoint_detail:
+        return checkpoint_detail
+    summary = str(job.get("summary") or "").strip()
+    if summary == "Background worker is still running.":
+        return ""
+    if summary:
+        return summary
+    return ""
+
+
+def _background_worker_artifact_names(job: Mapping[str, Any]) -> list[str]:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    latest_event_payload = (
+        metadata.get("latest_event_payload")
+        if isinstance(metadata.get("latest_event_payload"), dict)
+        else {}
+    )
+    artifact_values = latest_event_payload.get("artifacts")
+    if not isinstance(artifact_values, list):
+        artifact_values = metadata.get("artifacts_out")
+    if not isinstance(artifact_values, list):
+        return []
+    names: list[str] = []
+    for artifact in artifact_values:
+        artifact_text = str(artifact).strip()
+        if not artifact_text:
+            continue
+        names.append(Path(artifact_text).name or artifact_text)
+    return names[:5]
+
+
+def _background_worker_explicit_summary(job: Mapping[str, Any]) -> str:
+    summary = str(job.get("summary") or "").strip()
+    if summary == "Background worker is still running.":
+        return ""
+    return summary
+
+
+def _render_background_worker_status_message(
+    job: Mapping[str, Any],
+    *,
+    reply_kind: str | None = None,
+    fallback_renderer: Callable[[Mapping[str, Any], str], str] | None = None,
+) -> str:
+    normalized_status = str(
+        reply_kind
+        or job.get("latest_job_state")
+        or job.get("status")
+        or "running"
+    ).strip().lower()
+    lane = _normalize_background_worker_lane(job.get("lane"))
+    job_id = str(job.get("job_id") or "").strip()
+    summary = _background_worker_summary_text(job)
+    if normalized_status == "accepted":
+        next_step = _background_worker_default_next_step(job)
+        accepted_summary = summary or f"正在{next_step.rstrip('。')}"
+        reply = f"已转给 {lane} worker"
+        if job_id:
+            reply = f"{reply}（job {job_id}）"
+        return f"{reply}，{accepted_summary} 下一步：{next_step}"
+    if normalized_status in {"running", "queued", "paused", "cancelling"}:
+        running_summary = _background_worker_explicit_summary(job) or summary or "正在处理当前任务。"
+        prefix = f"{lane} worker"
+        if job_id:
+            prefix = f"{prefix}（job {job_id}）"
+        return f"{prefix} 当前进度：{running_summary}"
+    if normalized_status == "blocked":
+        blocked_reason = str(job.get("blocked_reason") or "").strip() or "等待补充条件。"
+        blocked_summary = _background_worker_explicit_summary(job) or summary or "当前任务已阻塞。"
+        next_action = _background_worker_suggested_next_action(job)
+        prefix = f"{lane} worker"
+        if job_id:
+            prefix = f"{prefix}（job {job_id}）"
+        return (
+            f"{prefix} 当前卡点：{blocked_summary} 阻塞原因：{blocked_reason} "
+            f"建议下一步：{next_action}"
+        )
+    if normalized_status == "completed":
+        completed_summary = _background_worker_explicit_summary(job) or summary or "任务已完成。"
+        artifact_names = _background_worker_artifact_names(job)
+        prefix = f"{lane} worker"
+        if job_id:
+            prefix = f"{prefix}（job {job_id}）"
+        artifact_part = f" 产物：{', '.join(artifact_names)}。" if artifact_names else ""
+        return f"{prefix} 已完成。{completed_summary}{artifact_part}"
+    if normalized_status == "failed":
+        failure_reason = str(job.get("failure_reason") or "").strip() or "执行失败。"
+        prefix = f"{lane} worker"
+        if job_id:
+            prefix = f"{prefix}（job {job_id}）"
+        return f"{prefix} 执行失败：{failure_reason}"
+    if callable(fallback_renderer):
+        return str(fallback_renderer(job, normalized_status))
+    return summary or f"{lane} worker 状态：{normalized_status or 'unknown'}。"
+
+
+def _get_background_worker_session(session_id: str) -> dict[str, Any] | None:
+    session = _sessions.get(session_id)
+    return session if isinstance(session, dict) else None
+
+
+def _get_background_worker_agent(session_id: str) -> Any | None:
+    session = _get_background_worker_session(session_id)
+    if not isinstance(session, dict):
+        return None
+    return session.get("agent")
+
+
+def _persist_background_worker_control_event(
+    *,
+    session_id: str,
+    job: dict[str, Any],
+    event_type: str,
+    status: str,
+    headline: str,
+    detail: str,
+    metadata: dict[str, Any] | None = None,
+    failure_reason: str | None = None,
+    checkpoint: bool = False,
+) -> dict[str, Any] | None:
+    try:
+        repo = SQLiteTaskRepository()
+    except Exception:
+        logger.debug("failed to open task repository for TUI worker control", exc_info=True)
+        return None
+    try:
+        return persist_lane_event(
+            repo,
+            session_id=session_id,
+            lane=str(job.get("lane") or ""),
+            task_id=str(job.get("task_id") or ""),
+            job_id=str(job.get("job_id") or ""),
+            event_type=event_type,
+            payload={
+                "lane": str(job.get("lane") or ""),
+                "task_id": str(job.get("task_id") or ""),
+                "status": status,
+                "headline": headline,
+                "detail": detail,
+                "failure_reason": failure_reason,
+                "checkpoint": checkpoint,
+                "timestamp": datetime.now().isoformat(),
+            },
+            skill_refs=list((job.get("metadata") or {}).get("skill_refs") or []),
+            metadata=metadata,
+        )
+    except Exception:
+        logger.debug(
+            "failed to persist TUI worker control event for session %s lane %s",
+            session_id,
+            job.get("lane"),
+            exc_info=True,
+        )
+        return None
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
+
+
+def _update_background_worker_task_metadata(
+    *,
+    task_id: str,
+    mutate,
+) -> None:
+    try:
+        repo = SQLiteTaskRepository()
+    except Exception:
+        logger.debug("failed to open task repository for TUI worker metadata update", exc_info=True)
+        return
+    try:
+        task = repo.get(task_id)
+        if task is None:
+            return
+        task.metadata = dict(task.metadata or {})
+        mutate(task.metadata)
+        repo.save(task)
+    except Exception:
+        logger.debug(
+            "failed to update TUI worker task metadata for %s",
+            task_id,
+            exc_info=True,
+        )
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
+
+
+def _get_recent_task_snapshot(session_id: str, lane: str) -> dict[str, Any] | None:
+    agent = _get_background_worker_agent(session_id)
+    snapshots = getattr(agent, "_recent_task_snapshots", None)
+    if not isinstance(snapshots, dict):
+        return None
+    snapshot = snapshots.get(_normalize_background_worker_lane(lane))
+    return dict(snapshot) if isinstance(snapshot, dict) else None
+
+
+def _bind_recent_task_snapshot(
+    session_id: str,
+    *,
+    lane: str,
+    snapshot: dict[str, Any],
+) -> None:
+    agent = _get_background_worker_agent(session_id)
+    snapshots = getattr(agent, "_recent_task_snapshots", None)
+    if not isinstance(snapshots, dict):
+        return
+    snapshots[_normalize_background_worker_lane(lane)] = snapshot
+
+
+def _stage_background_worker_supersede(
+    session_id: str,
+    *,
+    job: dict[str, Any],
+    user_revision: str,
+) -> dict[str, Any]:
+    request_id = uuid.uuid4().hex
+    queued_job_id = f"mente_tui_job_{request_id}"
+    queued_task_id = f"mente_tui_{request_id}"
+    supersedes = {
+        "job_id": str(job.get("job_id") or ""),
+        "task_id": str(job.get("task_id") or ""),
+    }
+    control_contract = {
+        "action": "reprioritize",
+        "mode": "supersede_worker",
+        "runtime_mutation_supported": False,
+    }
+    replacement_metadata = {
+        **dict(job.get("metadata") or {}),
+        "job_id": queued_job_id,
+        "task_id": queued_task_id,
+        "job_state": "queued",
+        "failure_reason": None,
+        "blocked_reason": None,
+        "latest_event_type": None,
+        "latest_event_payload": None,
+        "latest_event_timestamp": None,
+        "final_checkpoint": None,
+        "control_contract": control_contract,
+        "supersedes": supersedes,
+        "supersedes_job_id": supersedes["job_id"],
+        "supersedes_task_id": supersedes["task_id"],
+        "previous_job_id": supersedes["job_id"],
+        "previous_task_id": supersedes["task_id"],
+        "user_revision": user_revision,
+        "supersede_reason": "user_revision",
+    }
+    registry = _background_worker_registry.get(session_id) or {}
+    raw_job = registry.get(_normalize_background_worker_lane(str(job.get("lane") or "")))
+    if raw_job is not None and raw_job.cancel_event is not None:
+        raw_job.cancel_event.set()
+    superseded_by = {
+        "job_id": queued_job_id,
+        "task_id": queued_task_id,
+    }
+    _persist_background_worker_control_event(
+        session_id=session_id,
+        job=job,
+        event_type="lane.superseded",
+        status="cancelled",
+        headline="任务已替换",
+        detail="已按最新修订排队新的后台任务。",
+        metadata={
+            "control_contract": control_contract,
+            "superseded_by": superseded_by,
+            "superseded_by_job_id": queued_job_id,
+            "superseded_by_task_id": queued_task_id,
+            "user_revision": user_revision,
+            "supersede_reason": "user_revision",
+        },
+        failure_reason="superseded_by_user_revision",
+        checkpoint=True,
+    )
+    _update_background_worker_task_metadata(
+        task_id=str(job.get("task_id") or ""),
+        mutate=lambda metadata: metadata.update(
+            {
+                "superseded_by": superseded_by,
+                "superseded_by_job_id": queued_job_id,
+                "superseded_by_task_id": queued_task_id,
+                "user_revision": user_revision,
+                "supersede_reason": "user_revision",
+            }
+        ),
+    )
+    previous_snapshot = _get_recent_task_snapshot(
+        session_id,
+        _normalize_background_worker_lane(str(job.get("lane") or "")),
+    )
+    snapshot_metadata = (
+        dict(previous_snapshot.get("metadata") or {})
+        if isinstance(previous_snapshot, dict)
+        else {}
+    )
+    snapshot_metadata.update(
+        {
+            "lane": str(job.get("lane") or ""),
+            "task_profile": (job.get("metadata") or {}).get("task_profile"),
+            "skill_refs": list(
+                (job.get("metadata") or {}).get("skill_refs")
+                or snapshot_metadata.get("skill_refs")
+                or []
+            ),
+            "pending_worker_control": {
+                "action": "reprioritize",
+                "mode": "supersede_worker",
+                "runtime_mutation_supported": False,
+                "lane": str(job.get("lane") or ""),
+                "request_id": request_id,
+                "job_id": queued_job_id,
+                "task_id": queued_task_id,
+                "supersedes": supersedes,
+                "supersedes_job_id": supersedes["job_id"],
+                "supersedes_task_id": supersedes["task_id"],
+                "previous_job_id": supersedes["job_id"],
+                "previous_task_id": supersedes["task_id"],
+                "task_profile": (job.get("metadata") or {}).get("task_profile"),
+                "skill_refs": list((job.get("metadata") or {}).get("skill_refs") or []),
+                "user_revision": user_revision,
+                "reason": "user_revision",
+            },
+        }
+    )
+    _bind_recent_task_snapshot(
+        session_id,
+        lane=str(job.get("lane") or ""),
+        snapshot={
+            "user_request": (
+                str(previous_snapshot.get("user_request") or "").strip()
+                if isinstance(previous_snapshot, dict)
+                else user_revision
+            )
+            or user_revision,
+            "status": "needs_follow_up",
+            "assistant_summary": (
+                str(previous_snapshot.get("assistant_summary") or "").strip()
+                if isinstance(previous_snapshot, dict)
+                else str(job.get("summary") or "")
+            )
+            or str(job.get("summary") or ""),
+            "follow_up_tasks": [user_revision],
+            "metadata": snapshot_metadata,
+            "updated_at": datetime.now().isoformat(),
+        },
+    )
+    return register_background_worker_job(
+        session_id,
+        lane=str(job.get("lane") or ""),
+        job_id=queued_job_id,
+        task_id=queued_task_id,
+        summary="Queued a superseding worker with the revised brief.",
+        status="queued",
+        metadata=replacement_metadata,
+        cancel_event=None,
+    )
+
+
+def _control_background_worker_job(
+    session_id: str,
+    *,
+    request: Mapping[str, Any],
+    lane: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_action = str(request.get("action") or "").strip().lower()
+    active_only = normalized_action in {"pause", "cancel"}
+    target = get_background_worker_job(session_id, lane=lane, active_only=active_only)
+    if target is None and not active_only:
+        target = get_background_worker_job(session_id, lane=lane, active_only=False)
+    if target is None:
+        return None
+    registry = _background_worker_registry.get(session_id) or {}
+    raw_job = registry.get(_normalize_background_worker_lane(str(target.get("lane") or "")))
+    if normalized_action == "pause":
+        controlled = register_background_worker_job(
+            session_id,
+            lane=str(target.get("lane") or ""),
+            job_id=str(target.get("job_id") or ""),
+            task_id=str(target.get("task_id") or ""),
+            summary=str(target.get("summary") or ""),
+            status="paused",
+            metadata={
+                **dict(target.get("metadata") or {}),
+                "control_contract": {
+                    "action": "pause",
+                    "mode": "soft_pause",
+                    "runtime_mutation_supported": False,
+                },
+            },
+            cancel_event=raw_job.cancel_event if raw_job is not None else None,
+        )
+        return {
+            "job": controlled,
+            "response": f"Paused the active {controlled['lane']} worker. Runtime pause is soft only.",
+        }
+    if normalized_action == "cancel":
+        if raw_job is not None and raw_job.cancel_event is not None:
+            raw_job.cancel_event.set()
+        cancelled_metadata = {
+            **dict(target.get("metadata") or {}),
+            "control_contract": {
+                "action": "cancel",
+                "mode": "cancel_event",
+                "runtime_mutation_supported": True,
+            },
+        }
+        _persist_background_worker_control_event(
+            session_id=session_id,
+            job=target,
+            event_type="lane.cancelled",
+            status="cancelled",
+            headline="任务已取消",
+            detail="已向后台 worker 发送取消信号。",
+            metadata=cancelled_metadata,
+            failure_reason="interrupted_by_user",
+            checkpoint=True,
+        )
+        controlled = register_background_worker_job(
+            session_id,
+            lane=str(target.get("lane") or ""),
+            job_id=str(target.get("job_id") or ""),
+            task_id=str(target.get("task_id") or ""),
+            summary=str(target.get("summary") or ""),
+            status="cancelled",
+            metadata=cancelled_metadata,
+            cancel_event=raw_job.cancel_event if raw_job is not None else None,
+        )
+        return {
+            "job": controlled,
+            "response": f"Cancelled the active {controlled['lane']} worker.",
+        }
+    if normalized_action == "resume":
+        if str(target.get("status") or "").strip().lower() == "running":
+            return {
+                "job": target,
+                "response": f"The {target['lane']} worker is already running.",
+            }
+        if str(target.get("status") or "").strip().lower() == "queued":
+            return {
+                "job": target,
+                "response": (
+                    f"The {target['lane']} worker is queued, not live-paused. "
+                    "Submit the revised brief again to launch it."
+                ),
+            }
+        if str(target.get("status") or "").strip().lower() != "paused":
+            return {
+                "job": target,
+                "response": (
+                    f"I can't resume the {target['lane']} worker in place because that run is no longer live."
+                ),
+            }
+        session = _get_background_worker_session(session_id)
+        if not isinstance(session, dict) or not bool(session.get("running")):
+            return {
+                "job": target,
+                "response": (
+                    f"I can't resume the paused {target['lane']} worker in place because the runtime is gone."
+                ),
+            }
+        controlled = register_background_worker_job(
+            session_id,
+            lane=str(target.get("lane") or ""),
+            job_id=str(target.get("job_id") or ""),
+            task_id=str(target.get("task_id") or ""),
+            summary=str(target.get("summary") or ""),
+            status="running",
+            metadata={
+                **dict(target.get("metadata") or {}),
+                "control_contract": {
+                    "action": "resume",
+                    "mode": "soft_resume",
+                    "runtime_mutation_supported": False,
+                },
+            },
+            cancel_event=raw_job.cancel_event if raw_job is not None else None,
+        )
+        return {
+            "job": controlled,
+            "response": (
+                f"Continued the paused {controlled['lane']} worker. Runtime pause is soft only, so work may already still be in flight."
+            ),
+        }
+    if normalized_action == "reprioritize":
+        user_revision = str(request.get("user_revision") or "").strip()
+        if not user_revision:
+            return None
+        controlled = _stage_background_worker_supersede(
+            session_id,
+            job=target,
+            user_revision=user_revision,
+        )
+        return {
+            "job": controlled,
+            "response": (
+                f"Live edits aren't supported for the active {target['lane']} worker. "
+                "I cancelled that run and queued a superseding worker with your revision."
+            ),
+        }
+    return None
+
+
+def _same_lane_background_worker_confirmation_needed(
+    session_id: str,
+    text: str,
+) -> bool:
+    current = get_background_worker_job(session_id)
+    if current is None:
+        return False
+    lane = str(current.get("lane") or "").strip().lower()
+    if not lane:
+        return False
+    try:
+        from mente.integrations.bridge import resolve_dispatch_decision
+    except Exception:
+        return False
+    try:
+        decision = resolve_dispatch_decision(
+            message=text,
+            recent_task_snapshot={"metadata": {"lane": lane}},
+            active_lane=lane,
+        )
+    except Exception:
+        return False
+    return (
+        getattr(decision, "dispatch_mode", None) is DispatchMode.DELEGATE_BACKGROUND
+        and _resolve_background_worker_dispatch_lane(decision) == lane
+    )
+
+
+def _maybe_handle_background_worker_frontdesk_prompt(
+    session_id: str,
+    text: str,
+) -> str | None:
+    current = get_background_worker_job(session_id)
+    if current is None:
+        return None
+    request = _resolve_background_worker_control_request(text)
+    if request is not None:
+        controlled = _control_background_worker_job(
+            session_id,
+            request=request,
+            lane=str(current.get("lane") or ""),
+        )
+        if controlled is None:
+            return None
+        return str(controlled.get("response") or "").strip() or None
+    if _looks_like_background_worker_reply_request(
+        text,
+        status=str(current.get("status") or ""),
+    ):
+        return _render_background_worker_status_message(current)
+    if _background_worker_status_is_active(str(current.get("status") or "")) and _same_lane_background_worker_confirmation_needed(session_id, text):
+        lane = str(current.get("lane") or "worker")
+        return (
+            f"A {lane} worker is already running for this session. "
+            f"Pause or cancel it first if you want to replace that job."
+        )
+    return None
+
+
 def _normalize_completion_path(path_part: str) -> str:
     expanded = os.path.expanduser(path_part)
     if os.name != "nt":
@@ -668,6 +1670,15 @@ def _resolve_startup_runtime() -> tuple[str, str | None]:
     return model, None
 
 
+def _resolve_mente_tui_runtime():
+    """Resolve the Mente-owned runtime config for TUI session bootstrap."""
+
+    from mente.executors.runtime_config import resolve_runtime_config
+
+    workspace = os.environ.get("TERMINAL_CWD") or os.getcwd()
+    return resolve_runtime_config(workspace)
+
+
 def _write_config_key(key_path: str, value):
     cfg = _load_cfg()
     current = cfg
@@ -790,7 +1801,6 @@ def _persist_model_switch(result) -> None:
 
 def _apply_model_switch(sid: str, session: dict, raw_input: str) -> dict:
     from hermes_cli.model_switch import parse_model_flags, switch_model
-    from hermes_cli.runtime_provider import resolve_runtime_provider
 
     model_input, explicit_provider, persist_global = parse_model_flags(raw_input)
     if not model_input:
@@ -803,11 +1813,12 @@ def _apply_model_switch(sid: str, session: dict, raw_input: str) -> dict:
         current_base_url = getattr(agent, "base_url", "") or ""
         current_api_key = getattr(agent, "api_key", "") or ""
     else:
-        runtime = resolve_runtime_provider(requested=None)
-        current_provider = str(runtime.get("provider", "") or "")
-        current_model = _resolve_model()
-        current_base_url = str(runtime.get("base_url", "") or "")
-        current_api_key = str(runtime.get("api_key", "") or "")
+        runtime_config = _resolve_mente_tui_runtime()
+        model_runtime = runtime_config.model_runtime
+        current_provider = str(model_runtime.provider or "")
+        current_model = str(model_runtime.model or _resolve_model() or "")
+        current_base_url = str(model_runtime.base_url or "")
+        current_api_key = str(runtime_config.subprocess_env.get("MENTE_CODEX_API_KEY") or "")
 
     # Load user-defined providers so switch_model can resolve named custom
     # endpoints (e.g. "ollama-launch") and validate against saved model lists.
@@ -1494,6 +2505,9 @@ def _log_mente_tui_continuity_diagnostic(
     )
 
 
+_MENTE_TUI_DEFAULT_CONTINUITY_LANE = "director"
+
+
 class MenteTuiAgent:
     """TUI-facing wrapper that preserves session shell compatibility while routing turns through Mente."""
 
@@ -1502,7 +2516,8 @@ class MenteTuiAgent:
         "_sid",
         "_session_key",
         "_active_turn_controller",
-        "_continuity_payload",
+        "_continuity_payloads",
+        "_recent_task_snapshots",
         "_last_reasoning",
     }
 
@@ -1511,7 +2526,8 @@ class MenteTuiAgent:
         object.__setattr__(self, "_sid", sid)
         object.__setattr__(self, "_session_key", session_key)
         object.__setattr__(self, "_active_turn_controller", None)
-        object.__setattr__(self, "_continuity_payload", None)
+        object.__setattr__(self, "_continuity_payloads", {})
+        object.__setattr__(self, "_recent_task_snapshots", {})
         object.__setattr__(self, "_last_reasoning", None)
 
     def __getattr__(self, name: str):
@@ -1545,7 +2561,10 @@ class MenteTuiAgent:
             sessionful_execution_sources,
         )
         from mente.integrations.bridge import (
+            build_tui_task,
             extract_execution_session_handoff,
+            looks_like_gateway_status_follow_up_request,
+            resolve_dispatch_decision,
             run_tui_task,
         )
 
@@ -1555,11 +2574,29 @@ class MenteTuiAgent:
         controller = _MenteTuiTurnController()
         self._active_turn_controller = controller
         self._last_reasoning = None
+        active_lane = self._resolve_active_continuity_lane()
+        recent_task_snapshot = self._recent_task_snapshots.get(active_lane) if active_lane else None
+        dispatch_decision = resolve_dispatch_decision(
+            message=prompt,
+            recent_task_snapshot=recent_task_snapshot,
+            active_lane=active_lane,
+            workspace=os.getenv("TERMINAL_CWD") or os.getcwd(),
+        )
+        lane = str(getattr(dispatch_decision, "lane", "") or "").strip().lower() or _MENTE_TUI_DEFAULT_CONTINUITY_LANE
+        decision_reason = str(getattr(dispatch_decision, "reason", "") or "")
+        if decision_reason.startswith("continue_active_job:"):
+            lane = _resolve_background_worker_dispatch_lane(dispatch_decision)
+        status_follow_up = looks_like_gateway_status_follow_up_request(
+            message=prompt,
+            recent_task_snapshot=recent_task_snapshot,
+            active_lane=active_lane,
+        )
 
         sessionful_enabled = is_sessionful_execution_enabled() and "tui" in sessionful_execution_sources()
         continuity_id = ""
-        if isinstance(self._continuity_payload, dict):
-            continuity_id = str(self._continuity_payload.get("continuity_id") or "").strip()
+        continuity_payload = self._continuity_payloads.get(lane)
+        if isinstance(continuity_payload, dict):
+            continuity_id = str(continuity_payload.get("continuity_id") or "").strip()
 
         if sessionful_enabled and continuity_id:
             execution_mode = ExecutionMode.SESSIONFUL
@@ -1572,13 +2609,14 @@ class MenteTuiAgent:
         elif sessionful_enabled:
             execution_mode = ExecutionMode.SESSIONFUL
             execution_session = ExecutionSession(mode=SessionMode.START)
-            fallback_history_fact = _build_tui_fallback_history_fact(history)
+            fallback_history_fact = None if status_follow_up and recent_task_snapshot else _build_tui_fallback_history_fact(history)
             replay_history_in_memory_facts = False
         else:
             execution_mode = ExecutionMode.STATELESS
             execution_session = None
             fallback_history_fact = None
             replay_history_in_memory_facts = True
+        request_id = uuid.uuid4().hex
 
         def _event_callback(event_type: str, payload: dict[str, Any]) -> None:
             _log_mente_tui_execution_diagnostic(
@@ -1587,7 +2625,12 @@ class MenteTuiAgent:
                 payload=payload,
             )
             self._apply_usage_event(event_type, payload)
-            self._emit_progress_event(event_type, payload)
+            self._emit_progress_event(
+                event_type,
+                payload,
+                lane=lane,
+                task_id=str(payload.get("task_id") or "").strip() or None,
+            )
             if event_type == "kernel.codex.reasoning.completed":
                 text = str(payload.get("text") or "").strip()
                 if text:
@@ -1596,6 +2639,53 @@ class MenteTuiAgent:
                 text = str(payload.get("text") or "")
                 if text.strip():
                     stream_callback(text)
+
+        live_worker_job: dict[str, Any] | None = None
+        try:
+            inspected_task = build_tui_task(
+                user_message=prompt,
+                conversation_history=history,
+                session_id=str(getattr(self._inner_agent, "session_id", "") or self._session_key),
+                workspace=os.getenv("TERMINAL_CWD") or os.getcwd(),
+                execution_mode=execution_mode,
+                execution_session=execution_session,
+                fallback_history_fact=fallback_history_fact,
+                replay_history_in_memory_facts=replay_history_in_memory_facts,
+                recent_task_snapshot=recent_task_snapshot,
+                active_lane=active_lane,
+                request_id=request_id,
+            )
+        except Exception:
+            inspected_task = None
+        if (
+            inspected_task is not None
+            and getattr(inspected_task, "dispatch_mode", None) is DispatchMode.DELEGATE_BACKGROUND
+        ):
+            worker_lane = _normalize_background_worker_lane(
+                getattr(inspected_task, "worker_lane", None)
+                or dict(getattr(inspected_task, "metadata", {}) or {}).get("lane")
+            )
+            task_metadata = dict(getattr(inspected_task, "metadata", {}) or {})
+            live_worker_job = register_background_worker_job(
+                self._sid,
+                lane=worker_lane,
+                job_id=str(task_metadata.get("job_id") or f"mente_tui_job_{uuid.uuid4().hex}"),
+                task_id=str(getattr(inspected_task, "task_id", "") or f"mente_tui_{uuid.uuid4().hex}"),
+                summary="Background worker is still running.",
+                status="running",
+                metadata=task_metadata,
+                cancel_event=controller.cancel_event,
+            )
+            _emit(
+                "thinking.delta",
+                self._sid,
+                {
+                    "text": _render_background_worker_status_message(
+                        live_worker_job,
+                        reply_kind="accepted",
+                    )
+                },
+            )
 
         try:
             result = run_tui_task(
@@ -1607,14 +2697,52 @@ class MenteTuiAgent:
                 execution_session=execution_session,
                 fallback_history_fact=fallback_history_fact,
                 replay_history_in_memory_facts=replay_history_in_memory_facts,
+                recent_task_snapshot=recent_task_snapshot,
+                active_lane=active_lane,
                 event_callback=_event_callback,
                 cancel_event=controller.cancel_event,
+                request_id=request_id,
             )
         finally:
             self._active_turn_controller = None
 
+        if live_worker_job is not None:
+            final_status = "completed"
+            if controller.cancel_event.is_set():
+                final_status = "cancelled"
+            elif result.status != "success":
+                final_status = "failed"
+            live_worker_job = register_background_worker_job(
+                self._sid,
+                lane=str((result.metadata or {}).get("worker_lane") or live_worker_job.get("lane") or ""),
+                job_id=str((result.metadata or {}).get("job_id") or live_worker_job.get("job_id") or ""),
+                task_id=str((result.metadata or {}).get("task_id") or live_worker_job.get("task_id") or ""),
+                summary=result.summary or str(live_worker_job.get("summary") or ""),
+                status=final_status,
+                metadata={
+                    **dict(live_worker_job.get("metadata") or {}),
+                    **dict(result.metadata or {}),
+                    "worker_status": result.status,
+                },
+                cancel_event=controller.cancel_event,
+            )
+
         handoff = extract_execution_session_handoff(result)
-        self._update_continuity_state(handoff)
+        self._update_continuity_state(handoff, lane=lane)
+        self._update_recent_task_snapshot(
+            result=result,
+            message=prompt,
+            lane=lane,
+        )
+        terminal_event_type, terminal_payload = build_lane_terminal_event(
+            result,
+            lane=lane,
+            task_id=None,
+        )
+        _emit(terminal_event_type, self._sid, terminal_payload)
+        terminal_text = render_lane_progress_text(terminal_event_type, terminal_payload)
+        if terminal_text:
+            _emit("thinking.delta", self._sid, {"text": terminal_text})
 
         interrupted = result.failure_reason == "interrupted_by_user"
         final_response = "" if interrupted else (result.summary or "")
@@ -1660,9 +2788,72 @@ class MenteTuiAgent:
             return "\n\n".join(parts).strip()
         return str(user_message)
 
-    def _update_continuity_state(self, handoff: dict[str, Any] | None) -> None:
+    def _resolve_continuity_lane(
+        self,
+        *,
+        prompt: str,
+        history: list[dict[str, Any]],
+        route_resolver=None,
+    ) -> str:
+        del history
+        if callable(route_resolver):
+            route = route_resolver(
+                message=prompt,
+                recent_task_snapshot=self._recent_task_snapshots.get(
+                    self._resolve_active_continuity_lane()
+                ),
+                active_lane=self._resolve_active_continuity_lane(),
+            )
+            lane = str(getattr(route, "lane", "") or "").strip().lower()
+            if lane:
+                return lane
+        return _MENTE_TUI_DEFAULT_CONTINUITY_LANE
+
+    def _resolve_active_continuity_lane(self) -> str | None:
+        latest_snapshot_lane = self._resolve_active_snapshot_lane()
+        if latest_snapshot_lane:
+            return latest_snapshot_lane
+        latest_lane = None
+        latest_sort_key = ""
+        latest_non_director_lane = None
+        latest_non_director_sort_key = ""
+        for lane, payload in self._continuity_payloads.items():
+            if not isinstance(payload, dict):
+                continue
+            status = str(payload.get("status") or "").strip().lower()
+            if status != "active":
+                continue
+            sort_key = str(payload.get("updated_at") or "")
+            if latest_lane is None or sort_key >= latest_sort_key:
+                latest_lane = lane
+                latest_sort_key = sort_key
+            if lane != _MENTE_TUI_DEFAULT_CONTINUITY_LANE and (
+                latest_non_director_lane is None or sort_key >= latest_non_director_sort_key
+            ):
+                latest_non_director_lane = lane
+                latest_non_director_sort_key = sort_key
+        return latest_non_director_lane or latest_lane
+
+    def _resolve_active_snapshot_lane(self) -> str | None:
+        latest_lane = None
+        latest_sort_key = ""
+        for lane, payload in self._recent_task_snapshots.items():
+            if not isinstance(payload, dict):
+                continue
+            sort_key = str(payload.get("updated_at") or "")
+            if latest_lane is None or sort_key >= latest_sort_key:
+                latest_lane = lane
+                latest_sort_key = sort_key
+        return latest_lane
+
+    def _update_continuity_state(
+        self,
+        handoff: dict[str, Any] | None,
+        *,
+        lane: str = _MENTE_TUI_DEFAULT_CONTINUITY_LANE,
+    ) -> None:
         if not isinstance(handoff, dict):
-            self._continuity_payload = None
+            self._continuity_payloads.pop(lane, None)
             return
         _log_mente_tui_continuity_diagnostic(
             session_id=str(getattr(self._inner_agent, "session_id", "") or self._session_key),
@@ -1671,14 +2862,84 @@ class MenteTuiAgent:
         continuity_id = str(handoff.get("continuity_id") or "").strip()
         continuity_status = str(handoff.get("continuity_status") or "").strip().lower()
         if continuity_status in {"started", "resumed"} and continuity_id:
-            self._continuity_payload = {
+            self._continuity_payloads[lane] = {
+                "lane": lane,
                 "runtime": "mente_codex_executor",
                 "status": "active",
                 "continuity_id": continuity_id,
+                "updated_at": datetime.now().isoformat(),
             }
             return
         if continuity_status == "fallback_stateless":
-            self._continuity_payload = None
+            self._continuity_payloads.pop(lane, None)
+
+    def _update_recent_task_snapshot(
+        self,
+        *,
+        result: ExecutionResult,
+        message: str,
+        lane: str,
+    ) -> None:
+        follow_up_tasks = [
+            str(item).strip()
+            for item in result.follow_up_tasks
+            if str(item).strip()
+        ]
+        if result.status == "success" and not follow_up_tasks:
+            self._recent_task_snapshots.pop(lane, None)
+            return
+
+        existing = self._recent_task_snapshots.get(lane) or {}
+        snapshot_request = str(message or "").strip()
+        existing_metadata = (
+            dict(existing.get("metadata") or {})
+            if isinstance(existing, dict)
+            else {}
+        )
+        metadata = dict(result.metadata or {})
+        if not snapshot_request and isinstance(existing, dict):
+            snapshot_request = str(existing.get("user_request") or "").strip()
+        pending_worker_control = (
+            dict(existing_metadata.get("pending_worker_control") or {})
+            if isinstance(existing_metadata.get("pending_worker_control"), dict)
+            else None
+        )
+        pending_job_id = (
+            str(pending_worker_control.get("job_id") or "").strip()
+            if isinstance(pending_worker_control, dict)
+            else ""
+        )
+        pending_task_id = (
+            str(pending_worker_control.get("task_id") or "").strip()
+            if isinstance(pending_worker_control, dict)
+            else ""
+        )
+        current_job_id = str(metadata.get("job_id") or "").strip()
+        current_task_id = str(metadata.get("task_id") or "").strip()
+        preserve_pending_control = bool(pending_worker_control) and not (
+            (pending_job_id and pending_job_id == current_job_id)
+            or (pending_task_id and pending_task_id == current_task_id)
+        )
+        snapshot_metadata = {
+            "lane": str(metadata.get("lane") or lane).strip().lower() or lane,
+            "task_profile": metadata.get("task_profile") or existing_metadata.get("task_profile"),
+            "skill_refs": list(metadata.get("skill_refs") or existing_metadata.get("skill_refs") or []),
+            "artifacts_out": [
+                str(item).strip()
+                for item in result.artifacts_out
+                if str(item).strip()
+            ],
+        }
+        if preserve_pending_control and pending_worker_control is not None:
+            snapshot_metadata["pending_worker_control"] = pending_worker_control
+        self._recent_task_snapshots[lane] = {
+            "user_request": snapshot_request,
+            "status": "needs_follow_up" if result.status == "success" else (result.failure_reason or result.status),
+            "assistant_summary": str(result.summary or "").strip(),
+            "follow_up_tasks": follow_up_tasks,
+            "metadata": snapshot_metadata,
+            "updated_at": datetime.now().isoformat(),
+        }
 
     def _apply_usage_event(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type != "kernel.codex.turn.completed":
@@ -1723,7 +2984,27 @@ class MenteTuiAgent:
             int(getattr(inner, "session_api_calls", 0) or 0) + 1,
         )
 
-    def _emit_progress_event(self, event_type: str, payload: dict[str, Any]) -> None:
+    def _emit_progress_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        lane: str,
+        task_id: str | None,
+    ) -> None:
+        lane_event = normalize_lane_progress_event(
+            event_type,
+            payload,
+            lane=lane,
+            task_id=task_id,
+        )
+        if lane_event is not None:
+            lane_event_type, lane_payload = lane_event
+            _emit(lane_event_type, self._sid, lane_payload)
+            detail = render_lane_progress_text(lane_event_type, lane_payload)
+            if detail:
+                _emit("thinking.delta", self._sid, {"text": detail})
+
         item_id = str(payload.get("item_id") or payload.get("tool_id") or "").strip() or None
         if event_type == "kernel.codex.command.started":
             _emit(
@@ -1825,24 +3106,19 @@ class MenteTuiAgent:
 
 def _make_agent(sid: str, key: str, session_id: str | None = None):
     from run_agent import AIAgent
-    from hermes_cli.runtime_provider import resolve_runtime_provider
 
     cfg = _load_cfg()
     system_prompt = ((cfg.get("agent") or {}).get("system_prompt", "") or "").strip()
-    model, requested_provider = _resolve_startup_runtime()
-    runtime = resolve_runtime_provider(
-        requested=requested_provider,
-        target_model=model or None,
-    )
+    runtime_config = _resolve_mente_tui_runtime()
+    model_runtime = runtime_config.model_runtime
+    model = str(model_runtime.model or _resolve_model() or "")
+    api_key = str(runtime_config.subprocess_env.get("MENTE_CODEX_API_KEY") or "")
     inner_agent = AIAgent(
         model=model,
-        provider=runtime.get("provider"),
-        base_url=runtime.get("base_url"),
-        api_key=runtime.get("api_key"),
-        api_mode=runtime.get("api_mode"),
-        acp_command=runtime.get("command"),
-        acp_args=runtime.get("args"),
-        credential_pool=runtime.get("credential_pool"),
+        provider=model_runtime.provider,
+        base_url=model_runtime.base_url,
+        api_key=api_key,
+        api_mode=model_runtime.api_mode,
         quiet_mode=True,
         verbose_logging=_load_tool_progress_mode() == "verbose",
         reasoning_config=_load_reasoning_config(),
@@ -2438,6 +3714,7 @@ def _(rid, params: dict) -> dict:
     session = _sessions.pop(sid, None)
     if not session:
         return _ok(rid, {"closed": False})
+    _background_worker_registry.pop(sid, None)
     _finalize_session(session)
     try:
         from tools.approval import unregister_gateway_notify
@@ -2452,6 +3729,52 @@ def _(rid, params: dict) -> dict:
     except Exception:
         pass
     return _ok(rid, {"closed": True})
+
+
+@method("worker.status")
+def _(rid, params: dict) -> dict:
+    session_id = params.get("session_id", "")
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    del session
+    return _ok(
+        rid,
+        {
+            "jobs": list_background_worker_jobs(session_id),
+            "active": get_background_worker_job(session_id),
+        },
+    )
+
+
+@method("worker.control")
+def _(rid, params: dict) -> dict:
+    session_id = params.get("session_id", "")
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    del session
+    action = str(params.get("action") or "").strip().lower()
+    if action not in {"pause", "cancel", "resume"}:
+        return _err(rid, 4002, "action must be pause, cancel, or resume")
+    controlled = _control_background_worker_job(
+        session_id,
+        request={"action": action},
+        lane=params.get("lane"),
+    )
+    if controlled is None:
+        return _err(rid, 4009, "no active background worker job")
+    job = controlled.get("job") if isinstance(controlled, dict) else None
+    if not isinstance(job, dict):
+        return _err(rid, 5000, "worker control failed")
+    return _ok(
+        rid,
+        {
+            "status": str(job.get("status") or "").strip().lower() or action,
+            "job": job,
+            "message": str(controlled.get("response") or "").strip(),
+        },
+    )
 
 
 @method("session.branch")
@@ -2796,6 +4119,10 @@ def _(rid, params: dict) -> dict:
     session, err = _sess(params, rid)
     if err:
         return err
+    frontdesk_response = _maybe_handle_background_worker_frontdesk_prompt(sid, text)
+    if frontdesk_response is not None:
+        _emit_frontdesk_completion(sid, session, text, frontdesk_response)
+        return _ok(rid, {"status": "complete"})
     with session["history_lock"]:
         if session.get("running"):
             return _err(rid, 4009, "session busy")

@@ -38,6 +38,7 @@ import {
   Sparkles,
   Star,
   Terminal,
+  Users,
   Wrench,
   X,
   Zap,
@@ -45,6 +46,7 @@ import {
 import { SelectionSwitcher, Typography } from "@nous-research/ui";
 import { cn } from "@/lib/utils";
 import { Backdrop } from "@/components/Backdrop";
+import { RouteCrashBoundary } from "@/components/RouteCrashBoundary";
 import { SidebarFooter } from "@/components/SidebarFooter";
 import { SidebarStatusStrip } from "@/components/SidebarStatusStrip";
 import { PageHeaderProvider } from "@/contexts/PageHeaderProvider";
@@ -53,6 +55,7 @@ import type { SystemAction } from "@/contexts/system-actions-context";
 import ConfigPage from "@/pages/ConfigPage";
 import DocsPage from "@/pages/DocsPage";
 import EnvPage from "@/pages/EnvPage";
+import AgentsPage from "@/pages/AgentsPage";
 import SessionsPage from "@/pages/SessionsPage";
 import LogsPage from "@/pages/LogsPage";
 import AnalyticsPage from "@/pages/AnalyticsPage";
@@ -83,6 +86,7 @@ const CHAT_NAV_ITEM: NavItem = {
 /** Built-in routes except /chat (only with `hermes dashboard --tui`). */
 const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/": RootRedirect,
+  "/agents": AgentsPage,
   "/sessions": SessionsPage,
   "/analytics": AnalyticsPage,
   "/logs": LogsPage,
@@ -96,6 +100,12 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
 };
 
 const BUILTIN_NAV_REST: NavItem[] = [
+  {
+    path: "/agents",
+    labelKey: "agents",
+    label: "Agents",
+    icon: Users,
+  },
   {
     path: "/sessions",
     labelKey: "sessions",
@@ -213,10 +223,22 @@ function buildRoutes(
       routes.push({
         key: `override:${om.name}`,
         path,
-        element: <PluginPage name={om.name} />,
+        element: (
+          <RouteCrashBoundary routeLabel={path}>
+            <PluginPage name={om.name} />
+          </RouteCrashBoundary>
+        ),
       });
     } else {
-      routes.push({ key: `builtin:${path}`, path, element: <Component /> });
+      routes.push({
+        key: `builtin:${path}`,
+        path,
+        element: (
+          <RouteCrashBoundary routeLabel={path}>
+            <Component />
+          </RouteCrashBoundary>
+        ),
+      });
     }
   }
 
@@ -226,7 +248,11 @@ function buildRoutes(
     routes.push({
       key: `plugin:${m.name}`,
       path: m.tab.path,
-      element: <PluginPage name={m.name} />,
+      element: (
+        <RouteCrashBoundary routeLabel={m.tab.path}>
+          <PluginPage name={m.name} />
+        </RouteCrashBoundary>
+      ),
     });
   }
 
@@ -236,7 +262,11 @@ function buildRoutes(
     routes.push({
       key: `plugin:hidden:${m.name}`,
       path: m.tab.path,
-      element: <PluginPage name={m.name} />,
+      element: (
+        <RouteCrashBoundary routeLabel={m.tab.path}>
+          <PluginPage name={m.name} />
+        </RouteCrashBoundary>
+      ),
     });
   }
 
@@ -316,7 +346,7 @@ export default function App() {
   return (
     <div
       data-layout-variant={layoutVariant}
-      className="font-mondwest flex h-dvh max-h-dvh min-h-0 flex-col overflow-hidden bg-black uppercase text-midground antialiased"
+      className="font-sans flex h-dvh max-h-dvh min-h-0 flex-col isolate overflow-hidden bg-background-base text-foreground antialiased"
     >
       <SelectionSwitcher />
       <Backdrop />
@@ -343,7 +373,7 @@ export default function App() {
           aria-controls="app-sidebar"
           className={cn(
             "inline-flex h-8 w-8 items-center justify-center",
-            "text-midground/70 hover:text-midground transition-colors cursor-pointer",
+            "text-midground/82 hover:text-midground transition-colors cursor-pointer",
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
           )}
         >
@@ -351,8 +381,7 @@ export default function App() {
         </button>
 
         <Typography
-          className="font-bold text-[0.95rem] leading-[0.95] tracking-[0.05em] text-midground"
-          style={{ mixBlendMode: "plus-lighter" }}
+          className="blend-lighter font-bold text-[0.95rem] leading-[0.95] tracking-[0.05em] text-midground"
         >
           {t.app.brand}
         </Typography>
@@ -379,8 +408,8 @@ export default function App() {
             aria-label={t.app.navigation}
             className={cn(
               "fixed top-0 left-0 z-50 flex h-dvh max-h-dvh w-64 min-h-0 flex-col",
-              "border-r border-current/20",
-              "bg-background-base/95 backdrop-blur-sm",
+              "rounded-r-[calc(var(--theme-radius)+0.9rem)] border-r border-border/65",
+              "bg-background-base/92 shadow-[0_28px_80px_-52px_rgba(17,24,39,0.4)] backdrop-blur-md",
               "transition-transform duration-200 ease-out",
               mobileOpen ? "translate-x-0" : "-translate-x-full",
               "lg:sticky lg:top-0 lg:translate-x-0 lg:shrink-0",
@@ -389,6 +418,8 @@ export default function App() {
               background: "var(--component-sidebar-background)",
               clipPath: "var(--component-sidebar-clip-path)",
               borderImage: "var(--component-sidebar-border-image)",
+              borderRadius: "var(--component-sidebar-border-radius)",
+              boxShadow: "var(--component-sidebar-box-shadow)",
             }}
           >
             <div
@@ -398,12 +429,9 @@ export default function App() {
               )}
             >
               <Typography
-                className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
-                style={{ mixBlendMode: "plus-lighter" }}
+                className="blend-lighter font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
               >
-                Hermes
-                <br />
-                Agent
+                {t.app.brand}
               </Typography>
 
               <button
@@ -412,7 +440,7 @@ export default function App() {
                 aria-label={t.app.closeNavigation}
                 className={cn(
                   "lg:hidden inline-flex h-7 w-7 items-center justify-center",
-                  "text-midground/70 hover:text-midground transition-colors cursor-pointer",
+                  "text-midground/82 hover:text-midground transition-colors cursor-pointer",
                   "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
                 )}
               >
@@ -446,7 +474,7 @@ export default function App() {
                             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
                             isActive
                               ? "text-midground"
-                              : "opacity-60 hover:opacity-100",
+                              : "opacity-75 hover:opacity-100",
                           )
                         }
                         style={{
@@ -466,8 +494,7 @@ export default function App() {
                             {isActive && (
                               <span
                                 aria-hidden
-                                className="absolute left-0 top-0 bottom-0 w-px bg-midground"
-                                style={{ mixBlendMode: "plus-lighter" }}
+                                className="absolute left-0 top-0 bottom-0 w-px bg-midground blend-lighter"
                               />
                             )}
                           </>
@@ -498,37 +525,46 @@ export default function App() {
             <SidebarFooter />
           </aside>
 
-          <PageHeaderProvider pluginTabs={pluginTabMeta}>
-            <div
-              className={cn(
-                "relative z-2 flex min-w-0 min-h-0 flex-1 flex-col",
-                "px-3 sm:px-6",
-                isChatRoute
-                  ? "pb-3 pt-1 sm:pb-4 sm:pt-2 lg:pt-4"
-                  : "pt-2 sm:pt-4 lg:pt-6 pb-4 sm:pb-8",
-                isDocsRoute && "min-h-0 flex-1",
-              )}
-            >
-              <PluginSlot name="pre-main" />
+          <div
+            className={cn(
+              "min-h-0 min-w-0 w-full flex flex-1 flex-col overflow-hidden",
+              "rounded-[calc(var(--theme-radius)+0.9rem)] border border-border/70",
+              "bg-[linear-gradient(180deg,rgba(255,255,255,0.72)_0%,rgba(247,250,248,0.9)_100%)]",
+              "shadow-[0_36px_120px_-72px_rgba(17,24,39,0.38)] backdrop-blur-sm",
+              "lg:my-4",
+            )}
+          >
+            <PageHeaderProvider pluginTabs={pluginTabMeta}>
               <div
                 className={cn(
-                  "w-full min-w-0",
-                  (isDocsRoute || isChatRoute) && "min-h-0 flex flex-1 flex-col",
+                  "relative z-10 flex min-w-0 min-h-0 flex-1 flex-col",
+                  "px-3 sm:px-6",
+                  isChatRoute
+                    ? "pb-3 pt-1 sm:pb-4 sm:pt-2 lg:pt-4"
+                    : "pt-2 sm:pt-4 lg:pt-6 pb-4 sm:pb-8",
+                  isDocsRoute && "min-h-0 flex-1",
                 )}
               >
-                <Routes>
-                  {routes.map(({ key, path, element }) => (
-                    <Route key={key} path={path} element={element} />
-                  ))}
-                  <Route
-                    path="*"
-                    element={<Navigate to="/sessions" replace />}
-                  />
-                </Routes>
+                <PluginSlot name="pre-main" />
+                <div
+                  className={cn(
+                    "w-full min-w-0 min-h-0 flex flex-1 flex-col",
+                  )}
+                >
+                  <Routes>
+                    {routes.map(({ key, path, element }) => (
+                      <Route key={key} path={path} element={element} />
+                    ))}
+                    <Route
+                      path="*"
+                      element={<Navigate to="/sessions" replace />}
+                    />
+                  </Routes>
+                </div>
+                <PluginSlot name="post-main" />
               </div>
-              <PluginSlot name="post-main" />
-            </div>
-          </PageHeaderProvider>
+            </PageHeaderProvider>
+          </div>
         </div>
       </div>
 
@@ -636,8 +672,7 @@ function SidebarSystemActions({ onNavigate }: { onNavigate: () => void }) {
                 {busy && (
                   <span
                     aria-hidden
-                    className="absolute left-0 top-0 bottom-0 w-px bg-midground"
-                    style={{ mixBlendMode: "plus-lighter" }}
+                    className="absolute left-0 top-0 bottom-0 w-px bg-midground blend-lighter"
                   />
                 )}
               </button>

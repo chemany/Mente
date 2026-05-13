@@ -21,6 +21,9 @@ from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
 
+_MENTE_SESSIONFUL_DEFAULT_SOURCES = ("api_server", "gateway", "tui", "oneshot")
+_CONFIG_MANAGED_ENV_DEFAULTS: dict[str, str] = {}
+
 
 def _coerce_bool(value: Any, default: bool = True) -> bool:
     """Coerce bool-ish config values, preserving a caller-provided default."""
@@ -43,6 +46,136 @@ def _normalize_unauthorized_dm_behavior(value: Any, default: str = "pair") -> st
         if normalized in {"pair", "ignore"}:
             return normalized
     return default
+
+
+def _normalize_optional_string(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _normalize_string_list(value: Any, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    if isinstance(value, (list, tuple)):
+        normalized = tuple(str(item).strip() for item in value if str(item).strip())
+        return normalized or default
+    if isinstance(value, str):
+        normalized = tuple(item.strip() for item in value.split(",") if item.strip())
+        return normalized or default
+    return default
+
+
+def _set_env_default(name: str, value: Any) -> None:
+    """Bridge config-backed env defaults without leaking across later reloads.
+
+    Config-derived defaults should behave like a managed overlay:
+    - explicit ambient env vars keep highest precedence
+    - config-backed values can be updated or removed on later reloads
+    - test runs should not be polluted by prior config loads
+    """
+
+    managed_value = _CONFIG_MANAGED_ENV_DEFAULTS.get(name)
+    current_value = os.environ.get(name)
+
+    if value is None:
+        if managed_value is None:
+            return
+        if current_value is None or current_value == managed_value:
+            os.environ.pop(name, None)
+            _CONFIG_MANAGED_ENV_DEFAULTS.pop(name, None)
+        return
+
+    desired_value = str(value)
+
+    if current_value is not None and managed_value is None:
+        return
+
+    if current_value is not None and managed_value is not None and current_value != managed_value:
+        _CONFIG_MANAGED_ENV_DEFAULTS[name] = desired_value
+        return
+
+    os.environ[name] = desired_value
+    _CONFIG_MANAGED_ENV_DEFAULTS[name] = desired_value
+
+
+def resolve_explicit_env_override(name: str) -> Optional[str]:
+    """Return only explicit ambient env overrides, not config-managed defaults."""
+
+    current_value = os.environ.get(name)
+    if current_value is None:
+        return None
+    managed_value = _CONFIG_MANAGED_ENV_DEFAULTS.get(name)
+    if managed_value is not None and current_value == managed_value:
+        return None
+    normalized = current_value.strip()
+    return normalized or None
+
+
+def _bridge_mente_runtime_controls_from_config(yaml_cfg: dict[str, Any]) -> None:
+    """Bridge Mente runtime controls from config.yaml into env defaults.
+
+    These settings historically lived in service-manager environment blocks.
+    Read them from config first, but keep env vars as the highest-precedence
+    override so existing operator workflows continue to work.
+    """
+
+    gateway_cfg = yaml_cfg.get("gateway")
+    if not isinstance(gateway_cfg, dict):
+        gateway_cfg = {}
+
+    sessionful_cfg = gateway_cfg.get("sessionful_execution")
+    if not isinstance(sessionful_cfg, dict):
+        sessionful_cfg = {}
+
+    continuity_cfg = gateway_cfg.get("runtime_continuity")
+    if not isinstance(continuity_cfg, dict):
+        continuity_cfg = {}
+
+    codex_cfg = yaml_cfg.get("codex")
+    if not isinstance(codex_cfg, dict):
+        codex_cfg = {}
+    codex_runtime_cfg = codex_cfg.get("runtime")
+    if not isinstance(codex_runtime_cfg, dict):
+        codex_runtime_cfg = {}
+
+    gateway_executor = _normalize_optional_string(gateway_cfg.get("executor"))
+    _set_env_default("HERMES_GATEWAY_EXECUTOR", gateway_executor)
+
+    api_server_executor = _normalize_optional_string(gateway_cfg.get("api_server_executor"))
+    _set_env_default("HERMES_API_SERVER_EXECUTOR", api_server_executor)
+
+    _set_env_default(
+        "MENTE_SESSIONFUL_EXECUTION_ENABLED",
+        str(_coerce_bool(sessionful_cfg.get("enabled"), True)).lower()
+        if "enabled" in sessionful_cfg
+        else None,
+    )
+    _set_env_default(
+        "MENTE_SESSIONFUL_EXECUTION_SOURCES",
+        ",".join(
+            _normalize_string_list(
+                sessionful_cfg.get("sources"),
+                default=_MENTE_SESSIONFUL_DEFAULT_SOURCES,
+            )
+        )
+        if "sources" in sessionful_cfg
+        else None,
+    )
+    _set_env_default(
+        "MENTE_GATEWAY_CONTINUITY_ENABLED",
+        str(_coerce_bool(continuity_cfg.get("enabled"), True)).lower()
+        if "enabled" in continuity_cfg
+        else None,
+    )
+
+    idle_ttl_seconds = continuity_cfg.get("idle_ttl_seconds")
+    _set_env_default(
+        "MENTE_GATEWAY_CONTINUITY_IDLE_TTL_SECONDS",
+        idle_ttl_seconds if isinstance(idle_ttl_seconds, (int, float)) and idle_ttl_seconds > 0 else None,
+    )
+
+    runtime_binary = _normalize_optional_string(codex_runtime_cfg.get("binary"))
+    _set_env_default("MENTE_CODEX_RUNTIME_BIN", runtime_binary)
 
 
 class Platform(Enum):
@@ -484,6 +617,7 @@ def load_gateway_config() -> GatewayConfig:
     """
     _home = get_hermes_home()
     gw_data: dict = {}
+    yaml_cfg: dict[str, Any] = {}
 
     # Legacy fallback: gateway.json provides the base layer.
     # config.yaml keys always win when both specify the same setting.
@@ -790,6 +924,8 @@ def load_gateway_config() -> GatewayConfig:
             e,
         )
 
+    _bridge_mente_runtime_controls_from_config(yaml_cfg)
+
     config = GatewayConfig.from_dict(gw_data)
 
     # Override with environment variables
@@ -1078,9 +1214,12 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
     api_server_port = os.getenv("API_SERVER_PORT")
     api_server_host = os.getenv("API_SERVER_HOST")
     if api_server_enabled or api_server_key:
+        created_from_env = False
         if Platform.API_SERVER not in config.platforms:
             config.platforms[Platform.API_SERVER] = PlatformConfig()
-        config.platforms[Platform.API_SERVER].enabled = True
+            created_from_env = True
+        if api_server_enabled or created_from_env:
+            config.platforms[Platform.API_SERVER].enabled = True
         if api_server_key:
             config.platforms[Platform.API_SERVER].extra["key"] = api_server_key
         if api_server_cors_origins:

@@ -149,12 +149,27 @@ async def test_agents_command_reports_active_agents_and_processes(monkeypatch):
             ]
 
     monkeypatch.setattr("tools.process_registry.process_registry", _FakeRegistry())
+    monkeypatch.setattr(
+        "mente.agent_runtime_admin.list_agent_inventory",
+        lambda: [
+            SimpleNamespace(
+                agent=SimpleNamespace(agent_id="executive_office", display_name="Executive Office"),
+                lanes=["director"],
+                task_profiles=[],
+                soul_excerpt="Conversation agent soul.",
+                runtime=SimpleNamespace(session_count=2, state_files=["state.sqlite"], log_files=[]),
+            )
+        ],
+    )
 
     result = await runner._handle_message(_make_event("/agents"))
 
     assert "**Active agents:** 1" in result
     assert "**Running background processes:** 1" in result
     assert "proc-1" in result
+    assert "**Registered Mente agents:** 1" in result
+    assert "`executive_office`" in result
+    assert "Conversation agent soul." in result
     running_agent.interrupt.assert_not_called()
 
 
@@ -203,6 +218,26 @@ async def test_tasks_command_routes_to_dedicated_handler():
     assert result == "mente tasks"
     runner._handle_tasks_command.assert_awaited_once()
     runner._handle_agents_command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_command_routes_to_dedicated_handler():
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-1",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        total_tokens=0,
+    )
+    runner = _make_runner(session_entry)
+    runner._handle_agent_runtime_command = AsyncMock(return_value="agent runtime")
+
+    result = await runner._handle_message(_make_event("/agent-runtime sessions director"))
+
+    assert result == "agent runtime"
+    runner._handle_agent_runtime_command.assert_awaited_once()
 
 
 @pytest.mark.asyncio

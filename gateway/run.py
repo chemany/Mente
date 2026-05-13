@@ -27,11 +27,12 @@ import signal
 import tempfile
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from contextvars import copy_context
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Mapping, Callable
 from urllib.parse import urlparse
 
 from agent.account_usage import fetch_account_usage, render_account_usage_lines
@@ -98,6 +99,15 @@ from mente.feature_flags import (
     is_gateway_runtime_continuity_enabled,
     is_session_summary_retrieval_enabled,
 )
+from mente.execution_events import (
+    build_lane_terminal_event,
+    merge_live_and_persisted_lane_job,
+    normalize_lane_progress_event,
+    persist_lane_event,
+    persist_session_job_state,
+    read_persisted_lane_job,
+    render_lane_progress_text,
+)
 from mente.memory.repository import SQLiteMemoryRepository
 from mente.task_core.task_query import execute_task_query, parse_gateway_task_query
 from mente.task_core.repository import SQLiteTaskRepository
@@ -112,12 +122,416 @@ from hermes_cli.env_loader import load_hermes_dotenv
 _env_path = _hermes_home / '.env'
 load_hermes_dotenv(hermes_home=_hermes_home, project_env=Path(__file__).resolve().parents[1] / '.env')
 
-from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
+from mente.task_core.models import (
+    DispatchMode,
+    ExecutionMode,
+    ExecutionResult,
+    ExecutionSession,
+    SessionMode,
+)
 
 
 _GATEWAY_RUNTIME_CONTINUITY_RUNTIME = "codex"
+_GATEWAY_RUNTIME_CONTINUITY_DEFAULT_LANE = "director"
 _GATEWAY_RUNTIME_CONTINUITY_RESET_TASK_PROFILES = frozenset({"deep_research"})
 _MENTE_GATEWAY_CANCEL_GRACE_SECONDS = 5.0
+
+
+@dataclasses.dataclass
+class _GatewayBackgroundWorkerJob:
+    session_key: str
+    session_id: str
+    lane: str
+    job_id: str
+    task_id: str
+    status: str = "running"
+    summary: str = ""
+    metadata: dict[str, Any] = dataclasses.field(default_factory=dict)
+    cancel_event: threading.Event | None = None
+    created_at: float = dataclasses.field(default_factory=time.time)
+    updated_at: float = dataclasses.field(default_factory=time.time)
+
+
+def _normalize_background_worker_lane(value: str | None) -> str:
+    lane = str(value or "").strip().lower()
+    return lane or "director"
+
+
+def _looks_like_background_worker_status_request(message: str | None) -> bool:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "status",
+        "progress",
+        "update",
+        "做到哪",
+        "到哪了",
+        "当前进度",
+        "现在进度",
+        "进度",
+        "状态",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _looks_like_background_worker_result_request(message: str | None) -> bool:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "结果",
+        "结论",
+        "产物",
+        "附件",
+        "完成了吗",
+        "done",
+        "finished",
+        "result",
+        "summary",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _looks_like_background_worker_blocker_request(message: str | None) -> bool:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "卡在哪",
+        "卡住",
+        "阻塞",
+        "block",
+        "blocked",
+        "为什么卡",
+        "why stuck",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _looks_like_background_worker_reply_request(
+    message: str | None,
+    *,
+    status: str | None = None,
+) -> bool:
+    if _looks_like_background_worker_status_request(message):
+        return True
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "completed":
+        return _looks_like_background_worker_result_request(message)
+    if normalized_status == "blocked":
+        return _looks_like_background_worker_blocker_request(message)
+    if normalized_status in {"running", "queued", "paused", "cancelling"}:
+        return _looks_like_background_worker_result_request(message)
+    return (
+        _looks_like_background_worker_result_request(message)
+        or _looks_like_background_worker_blocker_request(message)
+    )
+
+
+def _resolve_background_worker_control_action(message: str | None) -> str | None:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return None
+    if any(token in normalized for token in ("pause", "暂停", "先停", "hold")):
+        return "pause"
+    if any(token in normalized for token in ("cancel", "stop", "取消", "停止")):
+        return "cancel"
+    return None
+
+
+def _looks_like_background_worker_resume_request(message: str | None) -> bool:
+    normalized = " ".join(str(message or "").strip().lower().split())
+    if not normalized:
+        return False
+    phrases = (
+        "continue",
+        "resume",
+        "继续跑",
+        "继续任务",
+        "继续刚才",
+        "继续上一个",
+        "接着跑",
+        "接着做",
+    )
+    return normalized in {"继续", "继续跑", "resume", "continue"} or any(
+        phrase in normalized for phrase in phrases
+    )
+
+
+def _extract_background_worker_revision(message: str | None) -> str | None:
+    raw_message = str(message or "").strip()
+    if not raw_message:
+        return None
+    normalized = " ".join(raw_message.lower().split())
+    revision_prefixes = (
+        "改成",
+        "改为",
+        "改一下",
+        "改下",
+        "换成",
+        "调整为",
+        "调整成",
+        "instead",
+        "change to",
+    )
+    if any(prefix in normalized for prefix in revision_prefixes):
+        return raw_message
+    return None
+
+
+def _resolve_background_worker_control_request(message: str | None) -> dict[str, Any] | None:
+    action = _resolve_background_worker_control_action(message)
+    if action is not None:
+        return {"action": action}
+    if _looks_like_background_worker_resume_request(message):
+        return {"action": "resume"}
+    revision = _extract_background_worker_revision(message)
+    if revision:
+        return {
+            "action": "reprioritize",
+            "user_revision": revision,
+        }
+    return None
+
+
+def _resolve_background_worker_dispatch_lane(decision: Any) -> str:
+    return _normalize_background_worker_lane(
+        getattr(decision, "target_job_lane", None)
+        or getattr(decision, "worker_lane", None)
+        or getattr(decision, "lane", None)
+    )
+
+
+def _background_worker_status_is_active(status: str | None) -> bool:
+    normalized = str(status or "").strip().lower()
+    return normalized in {"running", "paused", "queued", "cancelling"}
+
+
+def _background_worker_default_next_step(job: Mapping[str, Any]) -> str:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    task_profile = str(metadata.get("task_profile") or "").strip().lower()
+    lane = _normalize_background_worker_lane(job.get("lane"))
+    if task_profile == "deep_research" or lane == "research":
+        return "继续收集资料并形成结论。"
+    if lane == "engineering":
+        return "继续定位相关代码并验证修复。"
+    if lane == "writing":
+        return "继续整理稿件并输出产物。"
+    if lane == "config_admin":
+        return "继续核对配置并应用变更。"
+    return "继续执行当前任务。"
+
+
+def _background_worker_suggested_next_action(job: Mapping[str, Any]) -> str:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    explicit = str(
+        metadata.get("suggested_next_action")
+        or metadata.get("next_action")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+    blocker = str(job.get("blocked_reason") or "").strip().lower()
+    if any(token in blocker for token in ("api key", "apikey", "token", "credential", "凭证", "密钥")):
+        return "补充凭证，或确认是否改用公开资料继续。"
+    if any(token in blocker for token in ("permission", "access", "权限")):
+        return "补充访问权限，或提供可替代输入。"
+    return "确认是否调整范围，或补充缺失输入后继续。"
+
+
+def _background_worker_summary_text(job: Mapping[str, Any]) -> str:
+    summary_items = job.get("summary_items") if isinstance(job.get("summary_items"), list) else []
+    if summary_items:
+        normalized_items = [str(item).strip() for item in summary_items if str(item).strip()]
+        if normalized_items:
+            return normalized_items[-1]
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    final_checkpoint = (
+        metadata.get("final_checkpoint")
+        if isinstance(metadata.get("final_checkpoint"), dict)
+        else {}
+    )
+    checkpoint_detail = str(final_checkpoint.get("detail") or "").strip()
+    if checkpoint_detail:
+        return checkpoint_detail
+    summary = str(job.get("summary") or "").strip()
+    if summary == "Background worker is still running.":
+        return ""
+    if summary:
+        return summary
+    return ""
+
+
+def _background_worker_artifact_names(job: Mapping[str, Any]) -> list[str]:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    latest_event_payload = (
+        metadata.get("latest_event_payload")
+        if isinstance(metadata.get("latest_event_payload"), dict)
+        else {}
+    )
+    artifact_values = latest_event_payload.get("artifacts")
+    if not isinstance(artifact_values, list):
+        artifact_values = metadata.get("artifacts_out")
+    if not isinstance(artifact_values, list):
+        return []
+    names: list[str] = []
+    for artifact in artifact_values:
+        artifact_text = str(artifact).strip()
+        if not artifact_text:
+            continue
+        names.append(Path(artifact_text).name or artifact_text)
+    return names[:5]
+
+
+def _background_worker_explicit_summary(job: Mapping[str, Any]) -> str:
+    summary = str(job.get("summary") or "").strip()
+    if summary == "Background worker is still running.":
+        return ""
+    return summary
+
+
+def _render_background_worker_coordinator_reply(
+    job: Mapping[str, Any],
+    *,
+    reply_kind: str | None = None,
+    fallback_renderer: Callable[[Mapping[str, Any], str], str] | None = None,
+) -> str:
+    normalized_status = str(
+        reply_kind
+        or job.get("latest_job_state")
+        or job.get("status")
+        or "running"
+    ).strip().lower()
+    lane = _normalize_background_worker_lane(job.get("lane"))
+    job_id = str(job.get("job_id") or "").strip()
+    summary = _background_worker_summary_text(job)
+    if normalized_status == "accepted":
+        next_step = _background_worker_default_next_step(job)
+        accepted_summary = summary or f"正在{next_step.rstrip('。')}"
+        reply = f"已转给 {lane} worker"
+        if job_id:
+            reply = f"{reply}（job {job_id}）"
+        return f"{reply}，{accepted_summary} 下一步：{next_step}"
+    if normalized_status in {"running", "queued", "paused", "cancelling"}:
+        running_summary = _background_worker_explicit_summary(job) or summary or "正在处理当前任务。"
+        prefix = f"{lane} worker"
+        if job_id:
+            prefix = f"{prefix}（job {job_id}）"
+        return f"{prefix} 当前进度：{running_summary}"
+    if normalized_status == "blocked":
+        blocked_reason = str(job.get("blocked_reason") or "").strip() or "等待补充条件。"
+        blocked_summary = _background_worker_explicit_summary(job) or summary or "当前任务已阻塞。"
+        next_action = _background_worker_suggested_next_action(job)
+        prefix = f"{lane} worker"
+        if job_id:
+            prefix = f"{prefix}（job {job_id}）"
+        return (
+            f"{prefix} 当前卡点：{blocked_summary} 阻塞原因：{blocked_reason} "
+            f"建议下一步：{next_action}"
+        )
+    if normalized_status == "completed":
+        completed_summary = _background_worker_explicit_summary(job) or summary or "任务已完成。"
+        artifact_names = _background_worker_artifact_names(job)
+        prefix = f"{lane} worker"
+        if job_id:
+            prefix = f"{prefix}（job {job_id}）"
+        artifact_part = f" 产物：{', '.join(artifact_names)}。" if artifact_names else ""
+        return f"{prefix} 已完成。{completed_summary}{artifact_part}"
+    if normalized_status == "failed":
+        failure_reason = str(job.get("failure_reason") or "").strip() or "执行失败。"
+        prefix = f"{lane} worker"
+        if job_id:
+            prefix = f"{prefix}（job {job_id}）"
+        return f"{prefix} 执行失败：{failure_reason}"
+    if callable(fallback_renderer):
+        return str(fallback_renderer(job, normalized_status))
+    return summary or f"{lane} worker 状态：{normalized_status or 'unknown'}。"
+
+
+def _load_persisted_background_worker_job(
+    *,
+    session_id: str,
+    lane: str,
+    job_id: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any] | None:
+    try:
+        repo = SQLiteTaskRepository()
+    except Exception:
+        logger.debug("failed to open task repository for gateway worker progress", exc_info=True)
+        return None
+    try:
+        return read_persisted_lane_job(
+            repo,
+            session_id=session_id,
+            lane=lane,
+            job_id=job_id,
+            task_id=task_id,
+        )
+    except Exception:
+        logger.debug(
+            "failed to read persisted gateway worker progress for session %s lane %s",
+            session_id,
+            lane,
+            exc_info=True,
+        )
+        return None
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
+
+
+def _merge_gateway_background_worker_progress(
+    job: _GatewayBackgroundWorkerJob | None,
+) -> dict[str, Any] | None:
+    if job is None:
+        return None
+    live_job = {
+        "session_id": job.session_id,
+        "lane": job.lane,
+        "job_id": job.job_id,
+        "task_id": job.task_id,
+        "status": job.status,
+        "summary": job.summary,
+        "metadata": dict(job.metadata),
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+    persisted_job = _load_persisted_background_worker_job(
+        session_id=job.session_id,
+        lane=job.lane,
+        job_id=job.job_id,
+        task_id=job.task_id,
+    )
+    return merge_live_and_persisted_lane_job(live_job, persisted_job)
+
+
+def _resolve_background_worker_phase_progress_items(
+    *,
+    session_id: str,
+    job: _GatewayBackgroundWorkerJob | None,
+    live_items: list[str],
+) -> list[str]:
+    if job is None:
+        return list(live_items)
+    persisted_job = _load_persisted_background_worker_job(
+        session_id=session_id,
+        lane=job.lane,
+        job_id=job.job_id,
+        task_id=job.task_id,
+    )
+    if isinstance(persisted_job, dict):
+        summary_items = [
+            str(item).strip()
+            for item in persisted_job.get("summary_items") or []
+            if str(item).strip()
+        ]
+        if summary_items:
+            return summary_items
+    return list(live_items)
 
 
 def _build_gateway_fallback_history_fact(history: List[Dict[str, Any]]) -> str | None:
@@ -172,6 +586,7 @@ def _bind_gateway_recent_task_snapshot_start(
     session_store,
     session_id: str,
     message: str,
+    lane: str,
     previous_snapshot: Dict[str, Any] | None,
 ) -> None:
     """Persist one short-term running-task snapshot before execution begins."""
@@ -191,8 +606,10 @@ def _bind_gateway_recent_task_snapshot_start(
         ]
         if isinstance(previous_snapshot.get("metadata"), dict):
             snapshot_metadata = dict(previous_snapshot["metadata"])
+    snapshot_metadata["lane"] = lane
     session_store.bind_recent_task_snapshot(
         session_id,
+        lane=lane,
         user_request=snapshot_request,
         status="running",
         assistant_summary=snapshot_summary,
@@ -206,6 +623,7 @@ def _finalize_gateway_recent_task_snapshot(
     session_store,
     session_id: str,
     message: str,
+    lane: str,
     result: Dict[str, Any],
     previous_snapshot: Dict[str, Any] | None,
 ) -> None:
@@ -219,7 +637,7 @@ def _finalize_gateway_recent_task_snapshot(
     ]
     if not result.get("failed", False) and not follow_up_tasks:
         if hasattr(session_store, "clear_recent_task_snapshot"):
-            session_store.clear_recent_task_snapshot(session_id)
+            session_store.clear_recent_task_snapshot(session_id, lane=lane)
         return
 
     if not hasattr(session_store, "bind_recent_task_snapshot"):
@@ -240,6 +658,7 @@ def _finalize_gateway_recent_task_snapshot(
     ).strip()
     snapshot_metadata = {
         "task_id": result.get("mente_task_id"),
+        "lane": result.get("lane"),
         "task_profile": result.get("task_profile"),
         "artifacts_out": [
             str(item).strip()
@@ -254,6 +673,7 @@ def _finalize_gateway_recent_task_snapshot(
     }
     session_store.bind_recent_task_snapshot(
         session_id,
+        lane=str(result.get("lane") or lane or "").strip().lower() or lane,
         user_request=snapshot_request,
         status=snapshot_status,
         assistant_summary=assistant_summary,
@@ -266,9 +686,19 @@ def _resolve_gateway_runtime_continuity_plan(
     session_entry,
     history: List[Dict[str, Any]],
     continuity_payload: Dict[str, Any] | None,
+    lane: str = _GATEWAY_RUNTIME_CONTINUITY_DEFAULT_LANE,
     session_summary_available: bool = False,
+    recent_task_snapshot: Dict[str, Any] | None = None,
+    message: str | None = None,
+    channel_prompt: str | None = None,
 ) -> Dict[str, Any]:
     """Resolve whether one gateway turn should start or resume runtime continuity."""
+    from mente.integrations.bridge import (
+        looks_like_gateway_recent_artifact_delivery_request,
+        looks_like_gateway_status_follow_up_request,
+    )
+
+    del lane
     if not is_gateway_runtime_continuity_enabled():
         return {
             "execution_mode": ExecutionMode.STATELESS,
@@ -290,12 +720,34 @@ def _resolve_gateway_runtime_continuity_plan(
         and continuity_id
         and continuity_runtime == _GATEWAY_RUNTIME_CONTINUITY_RUNTIME
     ):
+        if looks_like_gateway_recent_artifact_delivery_request(
+            message=str(message or ""),
+            channel_prompt=channel_prompt,
+            recent_task_snapshot=recent_task_snapshot,
+        ):
+            return {
+                "execution_mode": ExecutionMode.SESSIONFUL,
+                "execution_session": ExecutionSession(mode=SessionMode.START),
+                "fallback_history_fact": None,
+                "replay_history_in_memory_facts": False,
+            }
         return {
             "execution_mode": ExecutionMode.SESSIONFUL,
             "execution_session": ExecutionSession(
                 mode=SessionMode.RESUME,
                 continuity_id=continuity_id,
             ),
+            "fallback_history_fact": None,
+            "replay_history_in_memory_facts": False,
+        }
+
+    if looks_like_gateway_status_follow_up_request(
+        message=str(message or ""),
+        recent_task_snapshot=recent_task_snapshot,
+    ):
+        return {
+            "execution_mode": ExecutionMode.SESSIONFUL,
+            "execution_session": ExecutionSession(mode=SessionMode.START),
             "fallback_history_fact": None,
             "replay_history_in_memory_facts": False,
         }
@@ -315,6 +767,37 @@ def _resolve_gateway_runtime_continuity_plan(
         "fallback_history_fact": fallback_history_fact,
         "replay_history_in_memory_facts": False,
     }
+
+
+def _resolve_gateway_runtime_continuity_lane(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+    recent_task_snapshot: Dict[str, Any] | None = None,
+    active_lane: str | None = None,
+) -> str:
+    """Resolve the deterministic lane used for gateway continuity lookup."""
+
+    from mente.integrations.bridge import resolve_conversation_route
+
+    return resolve_conversation_route(
+        message=message,
+        channel_prompt=channel_prompt,
+        recent_task_snapshot=recent_task_snapshot,
+        active_lane=active_lane,
+    ).lane
+
+
+def _resolve_gateway_recent_snapshot_active_lane(
+    recent_task_snapshot: Dict[str, Any] | None,
+) -> str | None:
+    if not isinstance(recent_task_snapshot, dict):
+        return None
+    metadata = recent_task_snapshot.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    lane = str(metadata.get("lane") or "").strip().lower()
+    return lane or None
 
 
 def _has_gateway_session_summary(
@@ -348,6 +831,7 @@ def _record_gateway_runtime_continuity_result(
     *,
     session_store,
     session_id: str,
+    lane: str = _GATEWAY_RUNTIME_CONTINUITY_DEFAULT_LANE,
     task_id: str | None,
     previous_continuity_payload: Dict[str, Any] | None,
     execution_session_payload: Dict[str, Any] | None,
@@ -376,6 +860,7 @@ def _record_gateway_runtime_continuity_result(
     if continuity_status in {"started", "resumed"} and continuity_id:
         session_store.bind_runtime_continuity(
             session_id,
+            lane=lane,
             runtime=_GATEWAY_RUNTIME_CONTINUITY_RUNTIME,
             continuity_id=continuity_id,
             status="active",
@@ -386,6 +871,7 @@ def _record_gateway_runtime_continuity_result(
         if normalized_task_profile in _GATEWAY_RUNTIME_CONTINUITY_RESET_TASK_PROFILES:
             session_store.invalidate_runtime_continuity(
                 session_id,
+                lane=lane,
                 reason=f"{normalized_task_profile}_completed",
             )
         return
@@ -399,6 +885,7 @@ def _record_gateway_runtime_continuity_result(
     ):
         session_store.invalidate_runtime_continuity(
             session_id,
+            lane=lane,
             reason=fallback_reason or "resume_failed",
         )
         return
@@ -415,6 +902,7 @@ def _maybe_invalidate_gateway_runtime_continuity_when_disabled(
     session_store,
     session_id: str | None,
     continuity_payload: Dict[str, Any] | None,
+    lane: str = _GATEWAY_RUNTIME_CONTINUITY_DEFAULT_LANE,
 ) -> Dict[str, Any] | None:
     """Retire one active Codex binding before stateless gateway fallback when continuity is disabled."""
     if is_gateway_runtime_continuity_enabled():
@@ -435,6 +923,7 @@ def _maybe_invalidate_gateway_runtime_continuity_when_disabled(
     _invalidate_gateway_runtime_continuity(
         session_store=session_store,
         session_id=session_id,
+        lane=lane,
         reason="continuity_disabled",
     )
     payload = dict(continuity_payload)
@@ -462,6 +951,7 @@ def _maybe_invalidate_gateway_runtime_continuity_when_idle_expired(
     session_store,
     session_id: str | None,
     continuity_payload: Dict[str, Any] | None,
+    lane: str = _GATEWAY_RUNTIME_CONTINUITY_DEFAULT_LANE,
 ) -> Dict[str, Any] | None:
     """Retire stale gateway continuity so long-idle chats start fresh."""
     if not isinstance(continuity_payload, dict):
@@ -492,6 +982,7 @@ def _maybe_invalidate_gateway_runtime_continuity_when_idle_expired(
     _invalidate_gateway_runtime_continuity(
         session_store=session_store,
         session_id=session_id,
+        lane=lane,
         reason="idle_ttl_expired",
     )
     logger.info(
@@ -511,13 +1002,14 @@ def _invalidate_gateway_runtime_continuity(
     *,
     session_store,
     session_id: str | None,
+    lane: str = _GATEWAY_RUNTIME_CONTINUITY_DEFAULT_LANE,
     reason: str,
 ) -> bool:
     """Best-effort invalidation for transcript rewrites on one gateway session."""
     if not session_id or session_store is None or not hasattr(session_store, "invalidate_runtime_continuity"):
         return False
     try:
-        return bool(session_store.invalidate_runtime_continuity(session_id, reason=reason))
+        return bool(session_store.invalidate_runtime_continuity(session_id, lane=lane, reason=reason))
     except Exception:
         logger.exception(
             "Failed to invalidate gateway runtime continuity for session %s",
@@ -540,11 +1032,54 @@ def _run_mente_gateway_turn(
     fallback_history_fact: str | None = None,
     replay_history_in_memory_facts: bool = True,
     recent_task_snapshot: Dict[str, Any] | None = None,
+    active_lane: str | None = None,
     event_callback=None,
     cancel_event=None,
+    background_worker_started=None,
+    background_worker_finished=None,
 ) -> Dict[str, Any]:
     """Run a gateway turn through the Mente task bridge."""
-    from mente.integrations.bridge import run_gateway_task
+    from mente.integrations.bridge import build_gateway_task_bundle, run_gateway_task
+
+    worker_job_payload: dict[str, Any] | None = None
+    request_id = uuid.uuid4().hex
+    try:
+        task_bundle = build_gateway_task_bundle(
+            message=message,
+            context_prompt=context_prompt,
+            history=history,
+            source=source,
+            session_id=session_id,
+            session_key=session_key,
+            channel_prompt=channel_prompt,
+            execution_mode=execution_mode,
+            execution_session=execution_session,
+            fallback_history_fact=fallback_history_fact,
+            replay_history_in_memory_facts=replay_history_in_memory_facts,
+            recent_task_snapshot=recent_task_snapshot,
+            active_lane=active_lane,
+            request_id=request_id,
+        )
+    except Exception:
+        task_bundle = None
+
+    if task_bundle is not None and getattr(task_bundle, "worker_task", None) is not None:
+        worker_task = task_bundle.worker_task
+        worker_lane = _normalize_background_worker_lane(
+            getattr(worker_task, "worker_lane", None)
+            or getattr(getattr(worker_task, "metadata", {}), "get", lambda *_: None)("lane")
+        )
+        worker_job_payload = {
+            "lane": worker_lane,
+            "job_id": str(getattr(task_bundle.coordinator_task, "job_id", "") or f"mente_gateway_job_{request_id}"),
+            "task_id": str(getattr(worker_task, "task_id", "") or f"mente_gateway_worker_{request_id}"),
+            "status": "running",
+            "summary": "Background worker is still running.",
+            "metadata": dict(getattr(worker_task, "metadata", {}) or {}),
+            "cancel_event": cancel_event,
+        }
+        if callable(background_worker_started):
+            background_worker_started(dict(worker_job_payload))
 
     run_kwargs = {
         "message": message,
@@ -563,6 +1098,8 @@ def _run_mente_gateway_turn(
         "fallback_history_fact": fallback_history_fact,
         "replay_history_in_memory_facts": replay_history_in_memory_facts,
         "recent_task_snapshot": recent_task_snapshot,
+        "active_lane": active_lane,
+        "request_id": request_id,
     }
     supported_params = inspect.signature(run_gateway_task).parameters
     accepts_var_kwargs = any(
@@ -576,6 +1113,28 @@ def _run_mente_gateway_turn(
     result = run_gateway_task(
         **run_kwargs,
     )
+
+    if worker_job_payload is not None and callable(background_worker_finished):
+        final_status = "completed"
+        if cancel_event is not None and cancel_event.is_set():
+            final_status = "cancelled"
+        elif result.status != "success":
+            final_status = "failed"
+        finished_payload = dict(worker_job_payload)
+        finished_payload.update(
+            {
+                "status": final_status,
+                "summary": result.summary or worker_job_payload.get("summary", ""),
+                "task_id": str(result.metadata.get("task_id") or worker_job_payload["task_id"]),
+                "job_id": str(result.metadata.get("job_id") or worker_job_payload["job_id"]),
+                "metadata": {
+                    **dict(worker_job_payload.get("metadata") or {}),
+                    **dict(result.metadata or {}),
+                    "worker_status": result.status,
+                },
+            }
+        )
+        background_worker_finished(finished_payload)
 
     if result.status == "success":
         final_response = result.summary or ""
@@ -605,7 +1164,12 @@ def _run_mente_gateway_turn(
         "response_previewed": False,
         "mente_task_id": result.metadata.get("task_id"),
         "execution_session": result.metadata.get("execution_session"),
+        "lane": result.metadata.get("lane"),
         "task_profile": result.metadata.get("task_profile"),
+        "job_id": result.metadata.get("job_id") or (worker_job_payload or {}).get("job_id"),
+        "worker_lane": result.metadata.get("worker_lane") or (worker_job_payload or {}).get("lane"),
+        "dispatch_mode": result.metadata.get("dispatch_mode"),
+        "worker_status": result.metadata.get("worker_status") or result.status,
         "assistant_summary": result.summary,
         "follow_up_tasks": list(result.follow_up_tasks),
         "artifacts_out": list(result.artifacts_out),
@@ -644,6 +1208,8 @@ def _resolve_mente_gateway_host_timeout_seconds(
     *,
     message: str,
     channel_prompt: str | None = None,
+    recent_task_snapshot: Dict[str, Any] | None = None,
+    content_publishing_timeout_seconds: float | int | None = None,
 ) -> float | None:
     """Resolve the host-side timeout for Mente-backed gateway turns."""
     from mente.integrations.bridge import resolve_gateway_task_host_timeout_seconds
@@ -651,6 +1217,8 @@ def _resolve_mente_gateway_host_timeout_seconds(
     return resolve_gateway_task_host_timeout_seconds(
         message=message,
         channel_prompt=channel_prompt,
+        recent_task_snapshot=recent_task_snapshot,
+        content_publishing_timeout_seconds=content_publishing_timeout_seconds,
     )
 
 
@@ -876,85 +1444,14 @@ def _register_mente_post_delivery_reviews(
     event_message_id: str | None,
     mente_task_id: str | None,
 ) -> None:
-    """Register one narrow post-delivery callback for persisted Mente reviews."""
-    if not mente_task_id or adapter is None or not session_key:
-        return
+    """Suppress operator review follow-ups in gateway chats.
 
-    try:
-        if not hasattr(adapter, "_post_delivery_callbacks"):
-            adapter._post_delivery_callbacks = {}
-
-        platform_value = (
-            source.platform.value
-            if hasattr(source.platform, "value")
-            else str(source.platform)
-        )
-        if platform_value == "slack":
-            thread_id = source.thread_id or event_message_id
-        else:
-            thread_id = source.thread_id
-        review_metadata = {"thread_id": thread_id} if thread_id else None
-
-        async def _deliver_compact_review_message(
-            *,
-            review_runner,
-            formatter,
-            review_label: str,
-        ) -> None:
-            try:
-                outcome = await asyncio.to_thread(
-                    review_runner,
-                    mente_task_id,
-                )
-                message = formatter(outcome)
-                if not message:
-                    return
-                await adapter.send(
-                    chat_id=source.chat_id,
-                    content=message,
-                    metadata=review_metadata,
-                )
-            except Exception:
-                logger.exception(
-                    "post-turn %s review failed for task %s",
-                    review_label,
-                    mente_task_id,
-                )
-
-        async def _deliver_reviews() -> None:
-            await _deliver_compact_review_message(
-                review_runner=_run_mente_post_turn_memory_review,
-                formatter=_format_mente_memory_review_outcome,
-                review_label="memory",
-            )
-            await _deliver_compact_review_message(
-                review_runner=_run_mente_post_turn_skill_review,
-                formatter=_format_mente_skill_review_outcome,
-                review_label="skill",
-            )
-
-        def _schedule_reviews() -> None:
-            try:
-                asyncio.create_task(_deliver_reviews())
-            except RuntimeError:
-                logger.debug(
-                    "event loop already closed before post-turn reviews for %s",
-                    mente_task_id,
-                )
-
-        if getattr(type(adapter), "register_post_delivery_callback", None) is not None:
-            adapter.register_post_delivery_callback(
-                session_key,
-                _schedule_reviews,
-                generation=run_generation,
-            )
-        else:
-            adapter._post_delivery_callbacks[session_key] = _schedule_reviews
-    except Exception:
-        logger.exception(
-            "failed to register post-turn review callback for task %s",
-            mente_task_id,
-        )
+    Post-turn review workers persist internal artifacts for operators, but
+    chat users should receive only the main assistant reply for one request.
+    Emitting compact review notices here creates duplicate-looking replies in
+    DM/group conversations.
+    """
+    return
 
 
 def _load_mente_task_history(session_id: str, limit: int = 6):
@@ -1580,6 +2077,8 @@ def _resolve_mente_gateway_progress_detail(
         "kernel.codex.agent_message.updated",
         "kernel.codex.agent_message.completed",
     }:
+        if str(payload.get("phase") or "").strip().lower() != "commentary":
+            return None
         text = str(payload.get("text") or "").strip()
         if text:
             return _truncate_mente_gateway_progress_text(text, limit=280)
@@ -1722,6 +2221,8 @@ def _resolve_mente_gateway_progress_summary_item(
         "kernel.codex.agent_message.updated",
         "kernel.codex.agent_message.completed",
     }:
+        if str(payload.get("phase") or "").strip().lower() != "commentary":
+            return None
         text = str(payload.get("text") or "").strip()
         if text:
             return _truncate_mente_gateway_progress_text(text, limit=96)
@@ -2204,6 +2705,7 @@ class GatewayRunner:
     _restart_detached: bool = False
     _restart_via_service: bool = False
     _stop_task: Optional[asyncio.Task] = None
+    _background_worker_registry: Dict[str, Dict[str, _GatewayBackgroundWorkerJob]] = {}
     _session_model_overrides: Dict[str, Dict[str, str]] = {}
     _session_reasoning_overrides: Dict[str, Dict[str, Any]] = {}
     
@@ -2248,6 +2750,7 @@ class GatewayRunner:
         # Key: session_key, Value: AIAgent instance
         self._running_agents: Dict[str, Any] = {}
         self._running_agents_ts: Dict[str, float] = {}  # start timestamp per session
+        self._background_worker_registry: Dict[str, Dict[str, _GatewayBackgroundWorkerJob]] = {}
         self._pending_messages: Dict[str, str] = {}  # Queued messages during interrupt
         # Overflow buffer for explicit /queue commands.  The adapter-level
         # _pending_messages dict is a single slot per session (designed for
@@ -3208,6 +3711,646 @@ class GatewayRunner:
             for session_key, agent in self._running_agents.items()
             if agent is not _AGENT_PENDING_SENTINEL
         }
+
+    def _register_background_worker_job(
+        self,
+        *,
+        session_key: str,
+        session_id: str,
+        lane: str,
+        job_id: str,
+        task_id: str,
+        summary: str = "",
+        status: str = "running",
+        metadata: Optional[Dict[str, Any]] = None,
+        cancel_event: threading.Event | None = None,
+    ) -> _GatewayBackgroundWorkerJob:
+        normalized_lane = _normalize_background_worker_lane(lane)
+        registry = self._background_worker_registry.setdefault(session_key, {})
+        now = time.time()
+        existing = registry.get(normalized_lane)
+        normalized_job_id = str(job_id).strip()
+        normalized_task_id = str(task_id).strip()
+        normalized_status = str(status or "running").strip().lower() or "running"
+        normalized_metadata = dict(metadata or {})
+        normalized_metadata["job_state"] = normalized_status
+        if (
+            existing is not None
+            and existing.job_id != normalized_job_id
+            and normalized_status in {"completed", "cancelled", "failed"}
+        ):
+            existing_supersedes = (
+                existing.metadata.get("supersedes")
+                if isinstance(existing.metadata.get("supersedes"), dict)
+                else {}
+            )
+            existing_supersedes_job_id = str(
+                existing.metadata.get("supersedes_job_id")
+                or existing_supersedes.get("job_id")
+                or ""
+            ).strip()
+            existing_supersedes_task_id = str(
+                existing.metadata.get("supersedes_task_id")
+                or existing_supersedes.get("task_id")
+                or ""
+            ).strip()
+            if (
+                existing_supersedes_job_id == normalized_job_id
+                or existing_supersedes_task_id == normalized_task_id
+            ):
+                return existing
+        effective_cancel_event = (
+            cancel_event
+            if cancel_event is not None
+            else existing.cancel_event
+            if existing is not None and existing.job_id == normalized_job_id
+            else None
+        )
+        job = _GatewayBackgroundWorkerJob(
+            session_key=session_key,
+            session_id=session_id,
+            lane=normalized_lane,
+            job_id=normalized_job_id,
+            task_id=normalized_task_id,
+            status=normalized_status,
+            summary=str(summary or "").strip(),
+            metadata=normalized_metadata,
+            cancel_event=effective_cancel_event,
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+        )
+        registry[normalized_lane] = job
+        if self.session_store is not None and hasattr(self.session_store, "bind_session_job"):
+            self.session_store.bind_session_job(
+                session_id,
+                lane=normalized_lane,
+                job_id=job.job_id,
+                task_id=job.task_id,
+                status=job.status,
+                summary=job.summary,
+                skill_refs=list(job.metadata.get("skill_refs") or []),
+                metadata=dict(job.metadata),
+            )
+        try:
+            repo = SQLiteTaskRepository()
+        except Exception:
+            repo = None
+        if repo is not None:
+            try:
+                persist_session_job_state(
+                    repo,
+                    session_id=session_id,
+                    lane=normalized_lane,
+                    job_id=job.job_id,
+                    task_id=job.task_id,
+                    status=job.status,
+                    summary=job.summary,
+                    skill_refs=list(job.metadata.get("skill_refs") or []),
+                    metadata=dict(job.metadata),
+                )
+            except Exception:
+                logger.debug(
+                    "failed to mirror gateway worker job state for session %s lane %s",
+                    session_id,
+                    normalized_lane,
+                    exc_info=True,
+                )
+            finally:
+                try:
+                    repo.close()
+                except Exception:
+                    pass
+        return job
+
+    def _background_worker_message_matches_staged_replacement(
+        self,
+        *,
+        job: _GatewayBackgroundWorkerJob,
+        message: str | None,
+    ) -> bool:
+        if str(job.status or "").strip().lower() not in {"queued", "running"}:
+            return False
+        contract = (
+            job.metadata.get("control_contract")
+            if isinstance(job.metadata.get("control_contract"), dict)
+            else {}
+        )
+        if str(contract.get("action") or "").strip().lower() != "reprioritize":
+            return False
+        return str(job.metadata.get("user_revision") or "").strip() == str(message or "").strip()
+
+    def _get_background_worker_job(
+        self,
+        session_key: str,
+        *,
+        lane: str | None = None,
+        active_only: bool = False,
+    ) -> _GatewayBackgroundWorkerJob | None:
+        registry = self._background_worker_registry.get(session_key) or {}
+        if lane is not None:
+            job = registry.get(_normalize_background_worker_lane(lane))
+            if active_only and job is not None and not _background_worker_status_is_active(job.status):
+                return None
+            return job
+        jobs = sorted(registry.values(), key=lambda job: job.updated_at, reverse=True)
+        if active_only:
+            jobs = [job for job in jobs if _background_worker_status_is_active(job.status)]
+        return jobs[0] if jobs else None
+
+    def _list_background_worker_jobs(
+        self,
+        session_key: str,
+    ) -> list[_GatewayBackgroundWorkerJob]:
+        registry = self._background_worker_registry.get(session_key) or {}
+        return sorted(registry.values(), key=lambda job: job.updated_at, reverse=True)
+
+    def _clear_background_worker_job(
+        self,
+        session_key: str,
+        *,
+        lane: str | None = None,
+        session_id: str | None = None,
+    ) -> bool:
+        registry = self._background_worker_registry.get(session_key)
+        if not registry:
+            return False
+        normalized_lane = _normalize_background_worker_lane(lane)
+        job = registry.pop(normalized_lane, None)
+        if not registry:
+            self._background_worker_registry.pop(session_key, None)
+        if job is None:
+            return False
+        resolved_session_id = str(session_id or job.session_id or "").strip()
+        if (
+            resolved_session_id
+            and self.session_store is not None
+            and hasattr(self.session_store, "clear_session_job")
+        ):
+            self.session_store.clear_session_job(
+                resolved_session_id,
+                lane=normalized_lane,
+            )
+        return True
+
+    def _persist_background_worker_control_event(
+        self,
+        *,
+        session_id: str,
+        job: _GatewayBackgroundWorkerJob,
+        event_type: str,
+        status: str,
+        headline: str,
+        detail: str,
+        metadata: dict[str, Any] | None = None,
+        failure_reason: str | None = None,
+        checkpoint: bool = False,
+    ) -> dict[str, Any] | None:
+        try:
+            repo = SQLiteTaskRepository()
+        except Exception:
+            logger.debug("failed to open task repository for gateway worker control", exc_info=True)
+            return None
+        try:
+            return persist_lane_event(
+                repo,
+                session_id=session_id,
+                lane=job.lane,
+                task_id=job.task_id,
+                job_id=job.job_id,
+                event_type=event_type,
+                payload={
+                    "lane": job.lane,
+                    "task_id": job.task_id,
+                    "status": status,
+                    "headline": headline,
+                    "detail": detail,
+                    "failure_reason": failure_reason,
+                    "checkpoint": checkpoint,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                skill_refs=list(job.metadata.get("skill_refs") or []),
+                metadata=metadata,
+            )
+        except Exception:
+            logger.debug(
+                "failed to persist gateway worker control event for session %s lane %s",
+                session_id,
+                job.lane,
+                exc_info=True,
+            )
+            return None
+        finally:
+            try:
+                repo.close()
+            except Exception:
+                pass
+
+    def _update_background_worker_task_metadata(
+        self,
+        *,
+        task_id: str,
+        mutate,
+    ) -> None:
+        try:
+            repo = SQLiteTaskRepository()
+        except Exception:
+            logger.debug("failed to open task repository for gateway worker metadata update", exc_info=True)
+            return
+        try:
+            task = repo.get(task_id)
+            if task is None:
+                return
+            task.metadata = dict(task.metadata or {})
+            mutate(task.metadata)
+            repo.save(task)
+        except Exception:
+            logger.debug(
+                "failed to update gateway worker task metadata for %s",
+                task_id,
+                exc_info=True,
+            )
+        finally:
+            try:
+                repo.close()
+            except Exception:
+                pass
+
+    def _stage_background_worker_supersede(
+        self,
+        *,
+        event: MessageEvent,
+        session_key: str,
+        session_id: str,
+        job: _GatewayBackgroundWorkerJob,
+        user_revision: str,
+    ) -> _GatewayBackgroundWorkerJob:
+        request_id = uuid.uuid4().hex
+        queued_job_id = f"mente_gateway_job_{request_id}"
+        queued_task_id = f"mente_gateway_{request_id}"
+        queued_coordinator_task_id = f"mente_gateway_coordinator_{request_id}"
+        supersedes = {
+            "job_id": job.job_id,
+            "task_id": job.task_id,
+        }
+        control_contract = {
+            "action": "reprioritize",
+            "mode": "supersede_worker",
+            "runtime_mutation_supported": False,
+        }
+        replacement_metadata = {
+            **dict(job.metadata or {}),
+            "job_id": queued_job_id,
+            "task_id": queued_task_id,
+            "coordinator_task_id": queued_coordinator_task_id,
+            "job_state": "queued",
+            "failure_reason": None,
+            "blocked_reason": None,
+            "latest_event_type": None,
+            "latest_event_payload": None,
+            "latest_event_timestamp": None,
+            "final_checkpoint": None,
+            "control_contract": control_contract,
+            "supersedes": supersedes,
+            "supersedes_job_id": job.job_id,
+            "supersedes_task_id": job.task_id,
+            "previous_job_id": job.job_id,
+            "previous_task_id": job.task_id,
+            "user_revision": user_revision,
+            "supersede_reason": "user_revision",
+        }
+        if job.cancel_event is not None:
+            job.cancel_event.set()
+        superseded_by = {
+            "job_id": queued_job_id,
+            "task_id": queued_task_id,
+        }
+        self._persist_background_worker_control_event(
+            session_id=session_id,
+            job=job,
+            event_type="lane.superseded",
+            status="cancelled",
+            headline="任务已替换",
+            detail="已按最新修订排队新的后台任务。",
+            metadata={
+                "control_contract": control_contract,
+                "superseded_by": superseded_by,
+                "superseded_by_job_id": queued_job_id,
+                "superseded_by_task_id": queued_task_id,
+                "user_revision": user_revision,
+                "supersede_reason": "user_revision",
+            },
+            failure_reason="superseded_by_user_revision",
+            checkpoint=True,
+        )
+        self._update_background_worker_task_metadata(
+            task_id=job.task_id,
+            mutate=lambda metadata: metadata.update(
+                {
+                    "superseded_by": superseded_by,
+                    "superseded_by_job_id": queued_job_id,
+                    "superseded_by_task_id": queued_task_id,
+                    "user_revision": user_revision,
+                    "supersede_reason": "user_revision",
+                }
+            ),
+        )
+        previous_snapshot = None
+        if self.session_store is not None and hasattr(self.session_store, "get_recent_task_snapshot"):
+            previous_snapshot = self.session_store.get_recent_task_snapshot(
+                session_id,
+                lane=job.lane,
+            )
+        if self.session_store is not None and hasattr(self.session_store, "bind_recent_task_snapshot"):
+            snapshot_metadata = (
+                dict(previous_snapshot.get("metadata") or {})
+                if isinstance(previous_snapshot, dict)
+                else {}
+            )
+            snapshot_metadata.update(
+                {
+                    "lane": job.lane,
+                    "task_profile": job.metadata.get("task_profile"),
+                    "skill_refs": list(job.metadata.get("skill_refs") or snapshot_metadata.get("skill_refs") or []),
+                    "pending_worker_control": {
+                        "action": "reprioritize",
+                        "mode": "supersede_worker",
+                        "runtime_mutation_supported": False,
+                        "lane": job.lane,
+                        "request_id": request_id,
+                        "job_id": queued_job_id,
+                        "task_id": queued_task_id,
+                        "coordinator_task_id": queued_coordinator_task_id,
+                        "supersedes": supersedes,
+                        "supersedes_job_id": job.job_id,
+                        "supersedes_task_id": job.task_id,
+                        "previous_job_id": job.job_id,
+                        "previous_task_id": job.task_id,
+                        "task_profile": job.metadata.get("task_profile"),
+                        "skill_refs": list(job.metadata.get("skill_refs") or []),
+                        "user_revision": user_revision,
+                        "reason": "user_revision",
+                    },
+                }
+            )
+            self.session_store.bind_recent_task_snapshot(
+                session_id,
+                lane=job.lane,
+                user_request=(
+                    str(previous_snapshot.get("user_request") or "").strip()
+                    if isinstance(previous_snapshot, dict)
+                    else user_revision
+                ) or user_revision,
+                status="needs_follow_up",
+                assistant_summary=(
+                    str(previous_snapshot.get("assistant_summary") or "").strip()
+                    if isinstance(previous_snapshot, dict)
+                    else job.summary
+                ) or job.summary,
+                follow_up_tasks=[user_revision],
+                metadata=snapshot_metadata,
+            )
+        return self._register_background_worker_job(
+            session_key=session_key,
+            session_id=session_id,
+            lane=job.lane,
+            job_id=queued_job_id,
+            task_id=queued_task_id,
+            summary="Queued a superseding worker with the revised brief.",
+            status="queued",
+            metadata=replacement_metadata,
+            cancel_event=None,
+        )
+
+    def _control_background_worker_job(
+        self,
+        *,
+        event: MessageEvent | None,
+        session_key: str,
+        session_id: str,
+        request: Mapping[str, Any],
+        lane: str | None = None,
+    ) -> dict[str, Any] | None:
+        action = str(request.get("action") or "").strip().lower()
+        active_only = action in {"pause", "cancel"}
+        job = self._get_background_worker_job(session_key, lane=lane, active_only=active_only)
+        if job is None and not active_only:
+            job = self._get_background_worker_job(session_key, lane=lane, active_only=False)
+        if job is None:
+            return None
+        if action == "pause":
+            paused_metadata = {
+                **dict(job.metadata or {}),
+                "control_contract": {
+                    "action": "pause",
+                    "mode": "soft_pause",
+                    "runtime_mutation_supported": False,
+                },
+            }
+            controlled = self._register_background_worker_job(
+                session_key=session_key,
+                session_id=session_id,
+                lane=job.lane,
+                job_id=job.job_id,
+                task_id=job.task_id,
+                summary=job.summary,
+                status="paused",
+                metadata=paused_metadata,
+                cancel_event=job.cancel_event,
+            )
+            return {
+                "job": controlled,
+                "response": f"Paused the active {controlled.lane} worker. Runtime pause is soft only.",
+            }
+        if action == "cancel":
+            if job.cancel_event is not None:
+                job.cancel_event.set()
+            cancelled_metadata = {
+                **dict(job.metadata or {}),
+                "control_contract": {
+                    "action": "cancel",
+                    "mode": "cancel_event",
+                    "runtime_mutation_supported": True,
+                },
+            }
+            self._persist_background_worker_control_event(
+                session_id=session_id,
+                job=job,
+                event_type="lane.cancelled",
+                status="cancelled",
+                headline="任务已取消",
+                detail="已向后台 worker 发送取消信号。",
+                metadata=cancelled_metadata,
+                failure_reason="interrupted_by_user",
+                checkpoint=True,
+            )
+            controlled = self._register_background_worker_job(
+                session_key=session_key,
+                session_id=session_id,
+                lane=job.lane,
+                job_id=job.job_id,
+                task_id=job.task_id,
+                summary=job.summary,
+                status="cancelled",
+                metadata=cancelled_metadata,
+                cancel_event=job.cancel_event,
+            )
+            return {
+                "job": controlled,
+                "response": f"Cancelled the active {controlled.lane} worker.",
+            }
+        if action == "resume":
+            if str(job.status or "").strip().lower() == "running":
+                return {
+                    "job": job,
+                    "response": f"The {job.lane} worker is already running.",
+                }
+            if str(job.status or "").strip().lower() != "paused":
+                return {
+                    "job": job,
+                    "response": (
+                        f"I can't resume the {job.lane} worker in place because that run is no longer live."
+                    ),
+                }
+            if session_key not in self._running_agents:
+                return {
+                    "job": job,
+                    "response": (
+                        f"I can't resume the paused {job.lane} worker in place because the runtime is gone."
+                    ),
+                }
+            resumed_metadata = {
+                **dict(job.metadata or {}),
+                "control_contract": {
+                    "action": "resume",
+                    "mode": "soft_resume",
+                    "runtime_mutation_supported": False,
+                },
+            }
+            controlled = self._register_background_worker_job(
+                session_key=session_key,
+                session_id=session_id,
+                lane=job.lane,
+                job_id=job.job_id,
+                task_id=job.task_id,
+                summary=job.summary,
+                status="running",
+                metadata=resumed_metadata,
+                cancel_event=job.cancel_event,
+            )
+            return {
+                "job": controlled,
+                "response": (
+                    f"Continued the paused {controlled.lane} worker. Runtime pause is soft only, so work may already still be in flight."
+                ),
+            }
+        if action == "reprioritize":
+            user_revision = str(request.get("user_revision") or "").strip()
+            if not user_revision or event is None:
+                return None
+            replacement_job = self._stage_background_worker_supersede(
+                event=event,
+                session_key=session_key,
+                session_id=session_id,
+                job=job,
+                user_revision=user_revision,
+            )
+            if session_key in self._running_agents:
+                self._queue_or_replace_pending_event(session_key, event)
+                return {
+                    "job": replacement_job,
+                    "response": (
+                        f"Live edits aren't supported for the active {job.lane} worker. "
+                        "I cancelled that run and queued a superseding worker with your revision."
+                    ),
+                }
+            return {
+                "job": replacement_job,
+                "response": None,
+                "allow_passthrough": True,
+            }
+        return None
+
+    def _background_worker_same_lane_confirmation_needed(
+        self,
+        *,
+        message: str,
+        lane: str,
+    ) -> bool:
+        try:
+            from mente.integrations.bridge import resolve_dispatch_decision
+        except Exception:
+            return False
+        try:
+            decision = resolve_dispatch_decision(
+                message=message,
+                recent_task_snapshot={"metadata": {"lane": lane}},
+                active_lane=lane,
+            )
+        except Exception:
+            return False
+        worker_lane = _resolve_background_worker_dispatch_lane(decision)
+        dispatch_mode = getattr(decision, "dispatch_mode", None)
+        return (
+            dispatch_mode is DispatchMode.DELEGATE_BACKGROUND
+            and worker_lane == _normalize_background_worker_lane(lane)
+        )
+
+    def _render_background_worker_status_message(
+        self,
+        job: _GatewayBackgroundWorkerJob,
+    ) -> str:
+        enriched_job = _merge_gateway_background_worker_progress(job) or {
+            "lane": job.lane,
+            "status": job.status,
+            "summary": job.summary,
+        }
+        return _render_background_worker_coordinator_reply(enriched_job)
+
+    def _maybe_handle_background_worker_frontdesk_message(
+        self,
+        event: MessageEvent,
+        *,
+        session_key: str,
+        session_id: str,
+    ) -> str | None:
+        job = self._get_background_worker_job(session_key)
+        if job is None:
+            return None
+        if self._background_worker_message_matches_staged_replacement(
+            job=job,
+            message=event.text,
+        ):
+            return None
+        request = _resolve_background_worker_control_request(event.text)
+        if request is not None:
+            controlled = self._control_background_worker_job(
+                event=event,
+                session_key=session_key,
+                session_id=session_id,
+                request=request,
+                lane=job.lane,
+            )
+            if controlled is None:
+                return None
+            response = controlled.get("response")
+            if response is None and controlled.get("allow_passthrough"):
+                return None
+            return response
+        effective_status = str(job.status or "").strip().lower()
+        if _looks_like_background_worker_reply_request(
+            event.text,
+            status=effective_status,
+        ):
+            return self._render_background_worker_status_message(job)
+        if _background_worker_status_is_active(job.status) and self._background_worker_same_lane_confirmation_needed(
+            message=event.text or "",
+            lane=job.lane,
+        ):
+            return (
+                f"A {job.lane} worker is already running for this session. "
+                f"Pause or cancel it first if you want to replace that job."
+            )
+        return None
 
     def _queue_or_replace_pending_event(self, session_key: str, event: MessageEvent) -> None:
         adapter = self.adapters.get(event.source.platform)
@@ -4961,6 +6104,7 @@ class GatewayRunner:
         7. Return response
         """
         source = event.source
+        session_store = getattr(self, "session_store", None)
 
         # Internal events (e.g. background-process completion notifications)
         # are system-generated and must skip user authorization.
@@ -4980,7 +6124,7 @@ class GatewayRunner:
                     "pre_gateway_dispatch",
                     event=event,
                     gateway=self,
-                    session_store=self.session_store,
+                    session_store=session_store,
                 )
             except Exception as _hook_exc:
                 logger.warning("pre_gateway_dispatch invocation failed: %s", _hook_exc)
@@ -5184,6 +6328,18 @@ class GatewayRunner:
                 self._release_running_agent_state(_quick_key)
 
         if _quick_key in self._running_agents:
+            if (
+                session_store is not None
+                and self._get_background_worker_job(_quick_key, active_only=True) is not None
+            ):
+                session_entry = session_store.get_or_create_session(source)
+                frontdesk_response = self._maybe_handle_background_worker_frontdesk_message(
+                    event,
+                    session_key=_quick_key,
+                    session_id=session_entry.session_id,
+                )
+                if frontdesk_response is not None:
+                    return frontdesk_response
             if event.get_command() == "status":
                 return await self._handle_status_command(event)
 
@@ -5319,6 +6475,9 @@ class GatewayRunner:
                 if event.get_command() == "tasks":
                     return await self._handle_tasks_command(event)
                 return await self._handle_agents_command(event)
+
+            if _cmd_def_inner and _cmd_def_inner.name == "agent-runtime":
+                return await self._handle_agent_runtime_command(event)
 
             # /background must bypass the running-agent guard — it starts a
             # parallel task and must never interrupt the active conversation.
@@ -5458,6 +6617,20 @@ class GatewayRunner:
                 self._pending_messages[_quick_key] = event.text
             return None
 
+        session_entry = (
+            session_store.get_or_create_session(source)
+            if session_store is not None
+            else None
+        )
+        if session_entry is not None and self._get_background_worker_job(_quick_key) is not None:
+            frontdesk_response = self._maybe_handle_background_worker_frontdesk_message(
+                event,
+                session_key=_quick_key,
+                session_id=session_entry.session_id,
+            )
+            if frontdesk_response is not None:
+                return frontdesk_response
+
         # Check for commands
         command = event.get_command()
 
@@ -5546,6 +6719,9 @@ class GatewayRunner:
             if event.get_command() == "tasks":
                 return await self._handle_tasks_command(event)
             return await self._handle_agents_command(event)
+
+        if canonical == "agent-runtime":
+            return await self._handle_agent_runtime_command(event)
 
         if canonical == "restart":
             return await self._handle_restart_command(event)
@@ -7088,6 +8264,13 @@ class GatewayRunner:
             f"**Tokens:** {session_entry.total_tokens:,}",
             f"**Agent Running:** {'Yes ⚡' if is_running else 'No'}",
         ])
+        worker_jobs = self._list_background_worker_jobs(session_key)
+        if worker_jobs:
+            lines.append(f"**Background workers:** {len(worker_jobs)}")
+            for job in worker_jobs:
+                lines.append(
+                    f"- `{job.lane}` `{job.status}` — {job.summary or job.job_id}"
+                )
         if queue_depth:
             lines.append(f"**Queued follow-ups:** {queue_depth}")
         lines.extend([
@@ -7099,6 +8282,7 @@ class GatewayRunner:
 
     async def _handle_agents_command(self, event: MessageEvent) -> str:
         """Handle /agents command - list active agents and running tasks."""
+        from mente.agent_runtime_admin import list_agent_inventory
         from tools.process_registry import format_uptime_short, process_registry
 
         now = time.time()
@@ -7182,6 +8366,30 @@ class GatewayRunner:
             ]
         )
 
+        inventory = list_agent_inventory()
+        lines.extend(
+            [
+                "",
+                f"**Registered Mente agents:** {len(inventory)}",
+            ]
+        )
+        for entry in inventory[:8]:
+            lane_text = ", ".join(entry.lanes) if entry.lanes else "none"
+            profile_text = f" · profiles: {', '.join(entry.task_profiles)}" if entry.task_profiles else ""
+            runtime_bits = [f"sessions {entry.runtime.session_count}"]
+            if entry.runtime.state_files:
+                runtime_bits.append(f"state {len(entry.runtime.state_files)}")
+            if entry.runtime.log_files:
+                runtime_bits.append(f"logs {len(entry.runtime.log_files)}")
+            soul_text = entry.soul_excerpt or "No soul configured."
+            lines.append(
+                f"- `{entry.agent.agent_id}` · {entry.agent.display_name} · lanes: {lane_text}{profile_text} · "
+                f"{' · '.join(runtime_bits)}"
+            )
+            lines.append(f"  {soul_text}")
+        if len(inventory) > 8:
+            lines.append(f"... and {len(inventory) - 8} more")
+
         mente_history_lines = _format_mente_task_history(session_entry.session_id)
         if mente_history_lines:
             lines.extend(mente_history_lines)
@@ -7201,6 +8409,63 @@ class GatewayRunner:
         session_entry = self.session_store.get_or_create_session(event.source)
         query = _parse_mente_tasks_query(raw_args, session_entry.session_id)
         return _render_mente_tasks_query(query)
+
+    async def _handle_agent_runtime_command(self, event: MessageEvent) -> str:
+        """Handle /agent-runtime subcommands for one agent runtime."""
+        from mente.agent_runtime_admin import (
+            AgentRuntimeAdminError,
+            clear_agent_runtime,
+            describe_agent_runtime,
+            reset_agent_execution_context,
+        )
+
+        raw_args = event.get_command_args().strip()
+        parts = raw_args.split(maxsplit=1)
+        if len(parts) < 2:
+            return "Usage: `/agent-runtime <sessions|reset|clear> <agent>`"
+
+        action = parts[0].strip().lower()
+        agent_ref = parts[1].strip()
+
+        try:
+            if action == "sessions":
+                overview = describe_agent_runtime(agent_ref)
+                lines = [
+                    f"🗂️ **Agent Runtime: {overview.agent.display_name}**",
+                    f"**Agent ID:** `{overview.agent.agent_id}`",
+                    f"**Runtime home:** `{overview.runtime_home}`",
+                    f"**Sessions:** {overview.session_count}",
+                ]
+                if overview.session_files:
+                    lines.append("**Recent sessions:**")
+                    lines.extend(f"- `{name}`" for name in overview.session_files)
+                if overview.state_files:
+                    lines.append(f"**State DB files:** {', '.join(f'`{name}`' for name in overview.state_files)}")
+                if overview.log_files:
+                    lines.append(f"**Log DB files:** {', '.join(f'`{name}`' for name in overview.log_files)}")
+                if overview.other_files:
+                    lines.append(f"**Other top-level files:** {', '.join(f'`{name}`' for name in overview.other_files)}")
+                return "\n".join(lines)
+
+            if action == "reset":
+                result = reset_agent_execution_context(agent_ref)
+                return (
+                    f"♻️ Reset execution context for **{result.agent.display_name}** "
+                    f"(`{result.agent.agent_id}`); removed {result.removed_entries_count} entries.\n"
+                    f"`{result.runtime_home}`"
+                )
+
+            if action == "clear":
+                result = clear_agent_runtime(agent_ref)
+                return (
+                    f"🧹 Cleared runtime for **{result.agent.display_name}** "
+                    f"(`{result.agent.agent_id}`); removed {result.removed_entries_count} entries.\n"
+                    f"`{result.runtime_home}`"
+                )
+
+            return "Usage: `/agent-runtime <sessions|reset|clear> <agent>`"
+        except AgentRuntimeAdminError as exc:
+            return str(exc)
     
     async def _handle_stop_command(self, event: MessageEvent) -> str:
         """Handle /stop command - interrupt a running agent.
@@ -8837,7 +10102,7 @@ class GatewayRunner:
         }
 
         # Read current effective mode for this platform via the resolver
-        from gateway.display_config import resolve_display_setting
+        from gateway.display_config import resolve_display_setting, resolve_explicit_display_setting
         current = resolve_display_setting(user_config, platform_key, "tool_progress", "all")
         if current not in cycle:
             current = "all"
@@ -10970,7 +12235,7 @@ class GatewayRunner:
 
         platform_key = _platform_config_key(source.platform)
         user_config = _load_gateway_config()
-        from gateway.display_config import resolve_display_setting
+        from gateway.display_config import resolve_display_setting, resolve_explicit_display_setting
         _plat_streaming = resolve_display_setting(
             user_config, platform_key, "streaming"
         )
@@ -11210,41 +12475,82 @@ class GatewayRunner:
         if not isinstance(display_config, dict):
             display_config = {}
 
-        from gateway.display_config import resolve_display_setting
+        from gateway.config import resolve_explicit_env_override
+        from gateway.display_config import (
+            resolve_display_setting,
+            resolve_explicit_display_setting,
+        )
 
-        if os.getenv("HERMES_GATEWAY_EXECUTOR", "").strip().lower() == "mente":
+        gateway_cfg = user_config.get("gateway", {})
+        if not isinstance(gateway_cfg, dict):
+            gateway_cfg = {}
+        configured_executor = str(gateway_cfg.get("executor") or "").strip().lower()
+        explicit_executor = str(resolve_explicit_env_override("HERMES_GATEWAY_EXECUTOR") or "").strip().lower()
+        effective_gateway_executor = explicit_executor or configured_executor
+
+        if effective_gateway_executor == "mente":
             continuity_payload = None
+            recent_task_snapshot = None
+            latest_recent_task_snapshot = None
+            active_lane = None
+            if self.session_store is not None:
+                if hasattr(self.session_store, "get_latest_recent_task_snapshot"):
+                    latest_recent_task_snapshot = self.session_store.get_latest_recent_task_snapshot(session_id)
+                elif hasattr(self.session_store, "get_recent_task_snapshot"):
+                    latest_recent_task_snapshot = self.session_store.get_recent_task_snapshot(session_id)
+                active_lane = _resolve_gateway_recent_snapshot_active_lane(latest_recent_task_snapshot)
+                if not active_lane and hasattr(self.session_store, "get_latest_runtime_continuity"):
+                    latest_continuity = self.session_store.get_latest_runtime_continuity(session_id)
+                    if isinstance(latest_continuity, dict):
+                        active_lane = str(latest_continuity.get("lane") or "").strip().lower() or None
+            continuity_lane = _resolve_gateway_runtime_continuity_lane(
+                message=message,
+                channel_prompt=channel_prompt,
+                recent_task_snapshot=latest_recent_task_snapshot,
+                active_lane=active_lane,
+            )
+            if self.session_store is not None and hasattr(self.session_store, "get_recent_task_snapshot"):
+                recent_task_snapshot = self.session_store.get_recent_task_snapshot(
+                    session_id,
+                    lane=continuity_lane,
+                )
+            if recent_task_snapshot is None:
+                recent_task_snapshot = latest_recent_task_snapshot
             if self.session_store is not None and hasattr(self.session_store, "get_runtime_continuity"):
-                continuity_payload = self.session_store.get_runtime_continuity(session_id)
+                continuity_payload = self.session_store.get_runtime_continuity(
+                    session_id,
+                    lane=continuity_lane,
+                )
                 continuity_payload = _maybe_invalidate_gateway_runtime_continuity_when_disabled(
                     session_store=self.session_store,
                     session_id=session_id,
                     continuity_payload=continuity_payload,
+                    lane=continuity_lane,
                 )
                 continuity_payload = _maybe_invalidate_gateway_runtime_continuity_when_idle_expired(
                     session_store=self.session_store,
                     session_id=session_id,
                     continuity_payload=continuity_payload,
+                    lane=continuity_lane,
                 )
             continuity_plan = _resolve_gateway_runtime_continuity_plan(
                 session_entry=None,
                 history=history,
                 continuity_payload=continuity_payload,
+                lane=continuity_lane,
                 session_summary_available=_has_gateway_session_summary(session_id=session_id),
+                recent_task_snapshot=recent_task_snapshot,
+                message=message,
+                channel_prompt=channel_prompt,
             )
+            _explicit_tp = resolve_explicit_display_setting(user_config, platform_key, "tool_progress")
             _resolved_tp = resolve_display_setting(user_config, platform_key, "tool_progress")
-            progress_mode = (
-                _resolved_tp
-                or os.getenv("HERMES_TOOL_PROGRESS_MODE")
-                or "all"
-            )
-            recent_task_snapshot = None
-            if self.session_store is not None and hasattr(self.session_store, "get_recent_task_snapshot"):
-                recent_task_snapshot = self.session_store.get_recent_task_snapshot(session_id)
+            progress_mode = _explicit_tp or os.getenv("HERMES_TOOL_PROGRESS_MODE") or _resolved_tp or "all"
             _bind_gateway_recent_task_snapshot_start(
                 session_store=self.session_store,
                 session_id=session_id,
                 message=message,
+                lane=continuity_lane,
                 previous_snapshot=recent_task_snapshot,
             )
             tool_progress_enabled = progress_mode != "off" and source.platform != Platform.WEBHOOK
@@ -11254,9 +12560,50 @@ class GatewayRunner:
             mente_progress_last_detail = [None]
             mente_progress_active = [True]
             mente_progress_summary_items: list[str] = []
+            mente_runtime_progress_seen = [False]
             mente_notify_message_id: list[str | None] = [None]
             cancel_event = threading.Event()
             mente_run_handle = _MenteGatewayRunHandle(cancel_event, session_id=session_id)
+            def _register_live_worker(payload: dict[str, Any]) -> None:
+                if not session_key:
+                    return
+                lane = _normalize_background_worker_lane(payload.get("lane"))
+                live_job = self._register_background_worker_job(
+                    session_key=session_key,
+                    session_id=session_id,
+                    lane=lane,
+                    job_id=str(payload.get("job_id") or f"mente_gateway_job_{lane}"),
+                    task_id=str(payload.get("task_id") or f"mente_gateway_task_{lane}"),
+                    summary=str(payload.get("summary") or ""),
+                    status=str(payload.get("status") or "running"),
+                    metadata=dict(payload.get("metadata") or {}),
+                    cancel_event=payload.get("cancel_event"),
+                )
+                if str(live_job.status or "").strip().lower() == "running":
+                    accepted_reply = _render_background_worker_coordinator_reply(
+                        _merge_gateway_background_worker_progress(live_job) or {
+                            "lane": live_job.lane,
+                            "job_id": live_job.job_id,
+                            "task_id": live_job.task_id,
+                            "status": live_job.status,
+                            "summary": live_job.summary,
+                            "metadata": dict(live_job.metadata),
+                        },
+                        reply_kind="accepted",
+                    )
+                    if progress_queue is not None and accepted_reply != mente_progress_last_detail[0]:
+                        mente_progress_last_detail[0] = accepted_reply
+                        progress_queue.put(("detail", accepted_reply))
+                    _record_mente_gateway_progress_summary(
+                        mente_progress_summary_items,
+                        accepted_reply,
+                    )
+            agent_config = user_config.get("agent", {})
+            configured_content_publishing_timeout = None
+            if isinstance(agent_config, dict):
+                configured_content_publishing_timeout = agent_config.get(
+                    "mente_content_publishing_timeout"
+                )
             _MENTE_NOTIFY_INTERVAL = _resolve_gateway_notify_interval_seconds(
                 message=message,
                 channel_prompt=channel_prompt,
@@ -11266,6 +12613,8 @@ class GatewayRunner:
             gateway_timeout_seconds = _resolve_mente_gateway_host_timeout_seconds(
                 message=message,
                 channel_prompt=channel_prompt,
+                recent_task_snapshot=recent_task_snapshot,
+                content_publishing_timeout_seconds=configured_content_publishing_timeout,
             )
 
             if source.platform == Platform.SLACK:
@@ -11294,6 +12643,20 @@ class GatewayRunner:
                 if detail and detail != mente_progress_last_detail[0]:
                     mente_progress_last_detail[0] = detail
                     progress_queue.put(("detail", detail))
+                    mente_runtime_progress_seen[0] = True
+                lane_event = normalize_lane_progress_event(
+                    event_type,
+                    payload,
+                    lane=continuity_lane,
+                    task_id=str(payload.get("task_id") or "") or None,
+                )
+                if lane_event is not None:
+                    lane_event_type, lane_payload = lane_event
+                    lane_detail = render_lane_progress_text(lane_event_type, lane_payload)
+                    if lane_detail and lane_detail != mente_progress_last_detail[0]:
+                        mente_progress_last_detail[0] = lane_detail
+                        progress_queue.put(("detail", lane_detail))
+                        mente_runtime_progress_seen[0] = True
                 summary_item = _resolve_mente_gateway_progress_summary_item(event_type, payload)
                 if summary_item:
                     _record_mente_gateway_progress_summary(
@@ -11328,8 +12691,17 @@ class GatewayRunner:
                 _notify_supports_edit = (
                     type(_notify_adapter).edit_message is not BasePlatformAdapter.edit_message
                 )
+                live_worker_job = (
+                    self._get_background_worker_job(session_key, lane=continuity_lane)
+                    if session_key
+                    else None
+                )
                 _phase_update = _format_mente_gateway_phase_update(
-                    list(mente_progress_summary_items),
+                    _resolve_background_worker_phase_progress_items(
+                        session_id=session_id,
+                        job=live_worker_job,
+                        live_items=list(mente_progress_summary_items),
+                    ),
                     elapsed_seconds=time.time() - _mente_notify_start,
                 )
                 try:
@@ -11387,8 +12759,11 @@ class GatewayRunner:
                     fallback_history_fact=continuity_plan["fallback_history_fact"],
                     replay_history_in_memory_facts=continuity_plan["replay_history_in_memory_facts"],
                     recent_task_snapshot=recent_task_snapshot,
+                    active_lane=active_lane,
                     event_callback=_mente_event_callback,
                     cancel_event=cancel_event,
+                    background_worker_started=_register_live_worker,
+                    background_worker_finished=_register_live_worker,
                 )
             )
 
@@ -11439,6 +12814,7 @@ class GatewayRunner:
                     _record_gateway_runtime_continuity_result(
                         session_store=self.session_store,
                         session_id=session_id,
+                        lane=continuity_lane,
                         task_id=result.get("mente_task_id"),
                         previous_continuity_payload=continuity_payload,
                         execution_session_payload=result.get("execution_session"),
@@ -11448,6 +12824,7 @@ class GatewayRunner:
                     session_store=self.session_store,
                     session_id=session_id,
                     message=message,
+                    lane=continuity_lane,
                     result=result,
                     previous_snapshot=recent_task_snapshot,
                 )
@@ -11458,6 +12835,25 @@ class GatewayRunner:
                     and _run_still_current()
                 ):
                     await _publish_mente_phase_update()
+                lane_terminal_event = build_lane_terminal_event(
+                    ExecutionResult(
+                        status="failed" if result.get("failed", False) else "success",
+                        summary=str(result.get("final_response") or ""),
+                        changed_files=list(result.get("changed_files") or []),
+                        artifacts_out=list(result.get("artifacts_out") or []),
+                        failure_reason=result.get("failure_reason"),
+                    ),
+                    lane=continuity_lane,
+                    task_id=result.get("mente_task_id"),
+                )
+                lane_terminal_text = render_lane_progress_text(*lane_terminal_event)
+                if (
+                    lane_terminal_text
+                    and not result.get("failed", False)
+                    and mente_runtime_progress_seen[0]
+                    and progress_queue is not None
+                ):
+                    progress_queue.put(("detail", lane_terminal_text))
                 if progress_queue is not None and not result.get("failed", False):
                     progress_queue.put(("step", _MENTE_GATEWAY_PROGRESS_PROTOCOL["__gateway.completed__"]))
                 if (
@@ -11524,12 +12920,9 @@ class GatewayRunner:
             pass
 
         # Tool progress mode — resolved per-platform with env var fallback
+        _explicit_tp = resolve_explicit_display_setting(user_config, platform_key, "tool_progress")
         _resolved_tp = resolve_display_setting(user_config, platform_key, "tool_progress")
-        progress_mode = (
-            _resolved_tp
-            or os.getenv("HERMES_TOOL_PROGRESS_MODE")
-            or "all"
-        )
+        progress_mode = _explicit_tp or os.getenv("HERMES_TOOL_PROGRESS_MODE") or _resolved_tp or "all"
         # Disable tool progress for webhooks - they don't support message editing,
         # so each progress line would be sent as a separate message.
         tool_progress_enabled = progress_mode != "off" and source.platform != Platform.WEBHOOK

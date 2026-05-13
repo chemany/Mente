@@ -68,6 +68,7 @@ export interface Translations {
     };
     nav: {
       analytics: string;
+      agents: string;
       chat: string;
       config: string;
       cron: string;
@@ -213,6 +214,39 @@ export interface Translations {
     rawTask: string;
     previousPage: string;
     nextPage: string;
+  };
+
+  agents: {
+    registeredAgents: string;
+    runtimeSessions: string;
+    agentsWithStateDb: string;
+    agentsWithLogDb: string;
+    agentRegistry: string;
+    agentDetail: string;
+    noAgents: string;
+    noAgentSelected: string;
+    lanes: string;
+    taskProfiles: string;
+    sessions: string;
+    agentDir: string;
+    soulPath: string;
+    runtimeHome: string;
+    sessionFiles: string;
+    stateFiles: string;
+    logFiles: string;
+    otherFiles: string;
+    fullSoul: string;
+    noSoul: string;
+    resetRuntime: string;
+    resettingRuntime: string;
+    clearRuntime: string;
+    clearingRuntime: string;
+    runtimeResetSuccess: string;
+    runtimeClearSuccess: string;
+    failedToLoad: string;
+    failedToLoadDetail: string;
+    confirmReset: string;
+    confirmClear: string;
   };
 
   memories: {

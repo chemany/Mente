@@ -54,6 +54,14 @@ from mente.memory.memory_query import (
     serialize_memory,
     serialize_memory_query,
 )
+from mente.agent_runtime_admin import (
+    AgentInventoryEntry,
+    AgentRuntimeAdminError,
+    clear_agent_runtime,
+    get_agent_inventory_detail,
+    list_agent_inventory,
+    reset_agent_execution_context,
+)
 from mente.memory.repository import SQLiteMemoryRepository
 from mente.task_core.repository import SQLiteTaskRepository
 from mente.task_core.task_query import (
@@ -79,7 +87,7 @@ except ImportError:
 WEB_DIST = Path(os.environ["HERMES_WEB_DIST"]) if "HERMES_WEB_DIST" in os.environ else Path(__file__).parent / "web_dist"
 _log = logging.getLogger(__name__)
 
-app = FastAPI(title="Hermes Agent", version=__version__)
+app = FastAPI(title="Mente Dashboard", version=__version__)
 
 # ---------------------------------------------------------------------------
 # Session token for protecting sensitive endpoints (reveal).
@@ -1124,7 +1132,7 @@ def _anthropic_oauth_status() -> Dict[str, Any]:
         return {
             "logged_in": True,
             "source": "hermes_pkce",
-            "source_label": f"Hermes PKCE ({_HERMES_OAUTH_FILE})",
+            "source_label": f"Mente PKCE ({_HERMES_OAUTH_FILE})",
             "token_preview": _truncate_token(hermes_creds.get("accessToken")),
             "expires_at": hermes_creds.get("expiresAt"),
             "has_refresh_token": bool(hermes_creds.get("refreshToken")),
@@ -2032,6 +2040,112 @@ async def get_logs(
 
 
 # ---------------------------------------------------------------------------
+# Mente agent inventory endpoints
+# ---------------------------------------------------------------------------
+
+
+def _serialize_agent_inventory_entry(
+    entry: AgentInventoryEntry,
+    *,
+    include_soul_text: bool = False,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "agent_id": entry.agent.agent_id,
+        "display_name": entry.agent.display_name,
+        "agent_dir": str(entry.agent_dir),
+        "soul_path": str(entry.soul_path),
+        "lanes": list(entry.lanes),
+        "task_profiles": list(entry.task_profiles),
+        "soul_excerpt": entry.soul_excerpt,
+        "runtime": {
+            "runtime_home": str(entry.runtime.runtime_home),
+            "session_count": entry.runtime.session_count,
+            "session_files": list(entry.runtime.session_files),
+            "state_files": list(entry.runtime.state_files),
+            "log_files": list(entry.runtime.log_files),
+            "other_files": list(entry.runtime.other_files),
+        },
+    }
+    if include_soul_text:
+        payload["soul_text"] = entry.soul_text
+    return payload
+
+
+@app.get("/api/agents")
+async def get_agents():
+    """Return registered Mente agents plus runtime/soul inventory."""
+    try:
+        agents = list_agent_inventory()
+    except Exception as exc:
+        _log.exception("GET /api/agents failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "summary": {
+            "agent_count": len(agents),
+            "total_runtime_sessions": sum(entry.runtime.session_count for entry in agents),
+            "agents_with_state_db": sum(1 for entry in agents if entry.runtime.state_files),
+            "agents_with_log_db": sum(1 for entry in agents if entry.runtime.log_files),
+        },
+        "agents": [
+            _serialize_agent_inventory_entry(entry, include_soul_text=False)
+            for entry in agents
+        ],
+    }
+
+
+@app.get("/api/agents/{agent_ref}")
+async def get_agent_detail(agent_ref: str):
+    """Return one agent's detailed inventory, including full soul text."""
+    try:
+        entry = get_agent_inventory_detail(agent_ref)
+    except AgentRuntimeAdminError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _log.exception("GET /api/agents/%s failed", agent_ref)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return _serialize_agent_inventory_entry(entry, include_soul_text=True)
+
+
+def _serialize_agent_runtime_mutation(action: str, result: Any) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "action": action,
+        "agent_id": str(getattr(getattr(result, "agent", None), "agent_id", "") or ""),
+        "display_name": str(getattr(getattr(result, "agent", None), "display_name", "") or ""),
+        "runtime_home": str(getattr(result, "runtime_home", "") or ""),
+        "removed_entries_count": int(getattr(result, "removed_entries_count", 0) or 0),
+        "removed_entries": list(getattr(result, "removed_entries", []) or []),
+    }
+
+
+@app.post("/api/agents/{agent_ref}/runtime/reset")
+async def post_agent_runtime_reset(agent_ref: str):
+    """Reset one agent runtime's execution context."""
+    try:
+        result = reset_agent_execution_context(agent_ref)
+    except AgentRuntimeAdminError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _log.exception("POST /api/agents/%s/runtime/reset failed", agent_ref)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return _serialize_agent_runtime_mutation("reset", result)
+
+
+@app.post("/api/agents/{agent_ref}/runtime/clear")
+async def post_agent_runtime_clear(agent_ref: str):
+    """Clear one agent runtime's contents."""
+    try:
+        result = clear_agent_runtime(agent_ref)
+    except AgentRuntimeAdminError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _log.exception("POST /api/agents/%s/runtime/clear failed", agent_ref)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return _serialize_agent_runtime_mutation("clear", result)
+
+
+# ---------------------------------------------------------------------------
 # Mente task debug endpoint
 # ---------------------------------------------------------------------------
 
@@ -2713,7 +2827,7 @@ def mount_spa(application: FastAPI):
 # Built-in dashboard themes — label + description only.  The actual color
 # definitions live in the frontend (web/src/themes/presets.ts).
 _BUILTIN_DASHBOARD_THEMES = [
-    {"name": "default",   "label": "Hermes Teal",  "description": "Classic dark teal — the canonical Hermes look"},
+    {"name": "default",   "label": "Workspace Mist",  "description": "Fresh paper-and-seafoam workspace with calm contrast"},
     {"name": "midnight",  "label": "Midnight",      "description": "Deep blue-violet with cool accents"},
     {"name": "ember",     "label": "Ember",          "description": "Warm crimson and bronze — forge vibes"},
     {"name": "mono",      "label": "Mono",           "description": "Clean grayscale — minimal and focused"},
@@ -3233,5 +3347,5 @@ def start_server(
 
         threading.Thread(target=_open, daemon=True).start()
 
-    print(f"  Hermes Web UI → http://{host}:{port}")
+    print(f"  Mente Dashboard → http://{host}:{port}")
     uvicorn.run(app, host=host, port=port, log_level="warning")

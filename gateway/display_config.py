@@ -172,6 +172,38 @@ def resolve_display_setting(
     return fallback
 
 
+def resolve_explicit_display_setting(
+    user_config: dict,
+    platform_key: str,
+    setting: str,
+    fallback: Any = None,
+) -> Any:
+    """Resolve only explicit user-configured overrides, not built-in defaults."""
+
+    display_cfg = user_config.get("display") or {}
+
+    platforms = display_cfg.get("platforms") or {}
+    plat_overrides = platforms.get(platform_key)
+    if isinstance(plat_overrides, dict):
+        val = plat_overrides.get(setting)
+        if val is not None:
+            return _normalise(setting, val)
+
+    if setting == "tool_progress":
+        legacy = display_cfg.get("tool_progress_overrides")
+        if isinstance(legacy, dict):
+            val = legacy.get(platform_key)
+            if val is not None:
+                return _normalise(setting, val)
+
+    if setting != "streaming":
+        val = display_cfg.get(setting)
+        if val is not None:
+            return _normalise(setting, val)
+
+    return fallback
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

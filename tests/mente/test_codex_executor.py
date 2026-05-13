@@ -1,5 +1,6 @@
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from mente.executors.prompting import build_prompt_fingerprint, render_execution
 from mente.executors.runtime_config import (
     MENTE_CONTENT_BASE_INSTRUCTIONS,
     MENTE_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+    ModelRuntime,
     RuntimeConfig,
 )
 from mente.executors.codex import CodexExecutor
@@ -41,6 +43,10 @@ def _stub_runtime_auth_resolution(monkeypatch):
 def _build_adapter_payload(adapter: CodexKernelAdapter, request: ExecutionRequest) -> dict[str, object]:
     """Exercise the adapter seam without importing CLI-specific details."""
     return adapter.build_request_payload(request)
+
+
+def _agent_runtime_home(mente_home: Path, agent_id: str) -> Path:
+    return mente_home / "runtime" / "agents" / agent_id / "codex"
 
 
 def test_codex_kernel_adapter_contract_exists():
@@ -557,8 +563,6 @@ def test_execution_request_can_carry_tool_policy_without_cli_details():
         "native_tools": ["shell"],
         "bridge_tools": ["mente_memory_query"],
         "session_capable": False,
-        "native_tool_source": None,
-        "bridge_tool_source": None,
     }
     assert "command" not in payload
     assert "argv" not in payload
@@ -589,6 +593,34 @@ def test_codex_executor_builds_command():
 
     schema_arg = cmd[cmd.index("--output-schema") + 1]
     assert schema_arg.endswith(".json")
+
+
+def test_codex_executor_builds_command_from_runtime_launch_config():
+    runtime_config = RuntimeConfig(
+        runtime_home=Path("/private/codex-home"),
+        sandbox="danger-full-access",
+        approval_policy="on-request",
+        skip_git_repo_check=False,
+        color="always",
+    )
+    executor = CodexExecutor(codex_binary="codex", runtime_config=runtime_config)
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repository",
+        user_request="inspect repository",
+        workspace="/workspace/repo",
+    )
+
+    cmd = executor.build_command(request, output_schema="schema.json")
+
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+    assert "--sandbox" in cmd
+    assert cmd[cmd.index("--sandbox") + 1] == "danger-full-access"
+    assert "--full-auto" not in cmd
+    assert "--skip-git-repo-check" not in cmd
+    assert cmd[cmd.index("--color") + 1] == "always"
 
 
 def test_vendored_launcher_matches_codex_executor_command_and_env():
@@ -740,12 +772,16 @@ def test_render_execution_prompt_prioritizes_explicit_skill_refs():
     assert "Skill Policy:" in prompt
     assert "Use the provided skill refs first" in prompt
     assert "do not do broad workspace exploration before checking them" in prompt.lower()
+    assert "concrete file, config key, or workflow entrypoint" in prompt
     assert "Read the referenced skill instructions before broad exploration" in prompt
     assert "If the skill workflow is blocked by a real gap or failure" in prompt
     assert "fix the concrete blocker" in prompt
     assert "If the skill documentation names concrete scripts or commands" in prompt
     assert "run the most direct workflow entrypoint first" in prompt
     assert "Before finalizing, self-check the referenced skill requirements" in prompt
+    assert "Execution Modes:" in prompt
+    assert "Deterministic task mode" in prompt
+    assert "Rigorous engineering mode" in prompt
     assert "artifacts_out" in prompt
     assert "completion_status" in prompt
 
@@ -776,6 +812,29 @@ def test_render_execution_prompt_adds_direct_workflow_policy_for_content_publish
     assert "make reasonable defaults and continue" in prompt
 
 
+def test_render_execution_prompt_adds_direct_workflow_policy_for_config_admin():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Update Mente config",
+        user_request="把 terminal.cwd 改成 / 并重启 gateway",
+        workspace=".",
+        skill_refs=["software-development/mente-config-admin"],
+        metadata={"source": "gateway", "task_profile": "config_admin"},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Workflow Policy:" in prompt
+    assert "Resolve the active config, env, or auth path first" in prompt
+    assert "mente config path" in prompt
+    assert "concrete config file, key, or service action" in prompt
+    assert "do not scan the repository or home directory" in prompt
+    assert "redact secrets in user-facing confirmations" in prompt
+    assert "Restart or reload the gateway only if the changed setting requires it" in prompt
+
+
 def test_render_execution_prompt_adds_report_delivery_policy_for_deep_research():
     request = ExecutionRequest(
         task_id="task_1",
@@ -800,6 +859,28 @@ def test_render_execution_prompt_adds_report_delivery_policy_for_deep_research()
     assert "Generate the final report artifacts in Markdown, HTML, and DOCX, then report the exact paths in the final reply." in prompt
     assert "If one format generation step fails" in prompt
     assert "The task is complete only after the report artifacts exist" in prompt
+
+
+def test_render_execution_prompt_adds_direct_delivery_policy_for_artifact_followup():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Deliver existing report artifacts",
+        user_request="把刚才生成的三个报告上传到飞书云文档里",
+        workspace=".",
+        artifacts_in=["report.md", "report.html", "report.docx"],
+        metadata={"source": "gateway", "task_profile": "artifact_delivery"},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Workflow Policy:" in prompt
+    assert "narrow follow-up artifact delivery request" in prompt
+    assert "Use the provided artifact paths directly" in prompt
+    assert "Do not scan large parts of the repository" in prompt
+    assert "upload or share the listed files immediately" in prompt
+    assert "The task is complete only after the requested artifact delivery is done" in prompt
 
 
 def test_render_execution_prompt_uses_lightweight_skill_fallback_when_no_explicit_refs():
@@ -835,6 +916,114 @@ def test_render_execution_prompt_does_not_recommend_mente_superpowers_for_plain_
     assert "Mente Superpowers:" not in prompt
 
 
+def test_render_execution_prompt_uses_thin_prompt_for_plain_chat():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="你是什么大模型",
+        workspace=".",
+        memory_facts=["Session context:\n请用中文简洁回答。"],
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Task:" in prompt
+    assert "Context:" in prompt
+    assert "Session context:" in prompt
+    assert "Reply directly to the user's latest message." in prompt
+    assert "Answer directly in the user's language and keep it concise." in prompt
+    assert "Do not claim prior context, actions, or preferences that are not provided." in prompt
+    assert "Skill Policy:" not in prompt
+    assert "Execution Modes:" not in prompt
+    assert "Memory Access:" not in prompt
+    assert "Mente Superpowers:" not in prompt
+    assert "If no skill refs are provided" not in prompt
+    assert len(prompt) < 700
+
+
+def test_render_execution_prompt_uses_thin_prompt_for_director_lane():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="继续",
+        workspace=".",
+        memory_facts=["Session context:\n请延续中文对话。"],
+        metadata={"lane": "director"},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Conversation Mode:" in prompt
+    assert "Reply directly to the user's latest message." in prompt
+    assert "Execution Modes:" not in prompt
+    assert "Research Mode:" not in prompt
+    assert "Writing Mode:" not in prompt
+
+
+def test_render_execution_prompt_uses_research_prompt_for_research_lane():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Research the market positioning of open-source coding agents",
+        user_request="调研一下开源 coding agent 的市场定位和差异",
+        workspace=".",
+        metadata={"lane": "research"},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Task:" in prompt
+    assert "Research Mode:" in prompt
+    assert "Gather only the evidence needed to answer the request well." in prompt
+    assert "Deliver the analysis directly instead of turning it into an engineering workflow." in prompt
+    assert "Rigorous engineering mode" not in prompt
+    assert "Writing Mode:" not in prompt
+
+
+def test_render_execution_prompt_uses_writing_prompt_for_writing_lane():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Draft a concise launch announcement",
+        user_request="帮我写一版产品发布短文案，语气克制一点",
+        workspace=".",
+        metadata={"lane": "writing"},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Task:" in prompt
+    assert "Writing Mode:" in prompt
+    assert "Produce the requested draft or rewrite directly." in prompt
+    assert "Prefer delivering the requested wording over engineering-style process narration." in prompt
+    assert "Rigorous engineering mode" not in prompt
+    assert "Research Mode:" not in prompt
+
+
+def test_render_execution_prompt_keeps_full_prompt_for_engineering_requests():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Implement a feature in this repository",
+        user_request="请帮我在这个项目里新增登录功能并完成测试",
+        workspace=".",
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Skill Policy:" in prompt
+    assert "Execution Modes:" in prompt
+    assert "Deterministic task mode" in prompt
+    assert "Rigorous engineering mode" in prompt
+
+
 def test_codex_executor_uses_dangerous_bypass_for_full_access():
     executor = CodexExecutor(
         codex_binary="codex",
@@ -858,7 +1047,8 @@ def test_codex_executor_uses_dangerous_bypass_for_full_access():
 
 
 def test_codex_executor_execute_uses_private_codex_home(monkeypatch, tmp_path):
-    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+    mente_home = tmp_path / ".mente"
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "public-codex-home"))
     captured: dict[str, object] = {}
 
@@ -889,7 +1079,7 @@ def test_codex_executor_execute_uses_private_codex_home(monkeypatch, tmp_path):
     assert result.summary == "ok"
     runtime_config = captured["runtime_config"]
     assert isinstance(runtime_config, RuntimeConfig)
-    assert runtime_config.runtime_home == resolve_runtime_home()
+    assert runtime_config.runtime_home == _agent_runtime_home(mente_home, "product_engineering")
     assert captured["runtime_home_exists"] is True
 
 
@@ -1427,42 +1617,72 @@ def test_codex_executor_execute_delegates_to_kernel_runner(monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize(
-    ("user_request", "assistant_summary", "expected_summary"),
+    ("user_request", "assistant_summary", "model_runtime", "expected_summary"),
     [
         (
             "你是谁",
             "我是 Codex，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
+            None,
             "我是 Mente，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
         ),
         (
             "Who are you?",
             "I am Codex, an AI assistant on this machine.",
+            None,
             "I am Mente, an AI assistant on this machine.",
         ),
         (
             "你好",
             "我是 Mente，一个基于 GPT-5 的 AI 助手，主要帮你写代码、排查问题、查资料和处理各种任务。",
+            None,
             "我是 Mente，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
         ),
         (
             "你好",
             "我是 Mente，你的智能 AI 助手。\n我可以直接帮你做这些事：\n- 查资料、做调研\n- 读写代码、排查问题",
+            None,
             "我是 Mente，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
         ),
         (
             "继续",
             "⏳ Mente 正在执行\n1. 🚀 正在调用 Codex runtime\n2. 🤖 Codex 已开始执行\n3. 🧮 Codex 回合完成\n4. 📨 Codex runtime 已返回",
+            None,
             "⏳ Mente 正在执行\n1. 🚀 正在调用 Mente runtime\n2. 🤖 Mente 已开始执行\n3. 🧮 Mente 回合完成\n4. 📨 Mente runtime 已返回",
         ),
         (
             "你是谁",
             "runtime_not_bootstrapped:vendored runtime artifact is not bootstrapped for this Mente release; expected /root/code/Mente/kernel/codex/release/artifacts/linux-x86_64/codex. public codex fallback is disabled.",
+            None,
             "runtime_not_bootstrapped:vendored runtime artifact is not bootstrapped for this Mente release; expected /root/code/Mente/kernel/codex/release/artifacts/linux-x86_64/codex. public runtime fallback is disabled.",
+        ),
+        (
+            "你是什么大模型",
+            "我是 Claude，由 Anthropic 开发的大语言模型。当前运行在 Mente CLI 环境中，可以通过工具帮你执行代码、操作文件、搜索信息等任务。有什么需要帮忙的？",
+            ModelRuntime(
+                model="mimo-v2.5-pro",
+                provider="xiaomi",
+                base_url="https://token-plan-cn.xiaomimimo.com/anthropic",
+                api_mode="anthropic_messages",
+                source="mente_model_settings",
+            ),
+            "我是 Mente，当前接入的模型是 mimo-v2.5-pro。我可以通过工具帮你执行代码、操作文件、搜索信息等任务。",
+        ),
+        (
+            "你是什么大模型",
+            "我是基于 OpenAI GPT 系列大模型的 Codex CLI 智能编码助手。当前会话中可以通过 `spawn_agent` 调用多个模型变体，包括：\n\n- **GPT-5.5** — 前沿模型，适合复杂编码与研究任务\n- **GPT-5.4** — 日常编码的主力模型\n- **GPT-5.4-Mini** — 轻量快速，适合简单任务\n- **GPT-5.3-Codex** — 编码优化模型\n- **GPT-5.2** — 面向专业工作和长时运行 Agent\n\n我本身运行在 **Mente** 平台上，可以通过飞书、微信等渠道与你交互，还能连接各种工具和技能来帮你完成任务。有什么需要帮忙的？",
+            ModelRuntime(
+                model="mimo-v2.5-pro",
+                provider="xiaomi",
+                base_url="https://token-plan-cn.xiaomimimo.com/anthropic",
+                api_mode="anthropic_messages",
+                source="mente_model_settings",
+            ),
+            "我是 Mente，当前接入的模型是 mimo-v2.5-pro。我可以通过工具帮你执行代码、操作文件、搜索信息等任务。",
         ),
     ],
 )
 def test_codex_executor_normalizes_user_facing_codex_identity(
-    monkeypatch, tmp_path, user_request, assistant_summary, expected_summary
+    monkeypatch, tmp_path, user_request, assistant_summary, model_runtime, expected_summary
 ):
     monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
 
@@ -1470,7 +1690,29 @@ def test_codex_executor_normalizes_user_facing_codex_identity(
         def run(self, *, payload, session, runtime_config):
             return KernelExecutionResult(status="success", assistant_summary=assistant_summary)
 
-    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    if model_runtime is not None:
+        @contextmanager
+        def _fake_bridge(*, model_runtime, api_key):
+            yield "http://127.0.0.1:8765/v1"
+
+        monkeypatch.setattr(
+            "mente.executors.codex.start_responses_compat_bridge",
+            _fake_bridge,
+        )
+
+    executor = CodexExecutor(
+        codex_binary="codex",
+        runner=_Runner(),
+        runtime_config=RuntimeConfig(
+            runtime_home=tmp_path / ".mente" / "codex",
+            model_runtime=model_runtime or ModelRuntime(),
+            subprocess_env=(
+                {"MENTE_CODEX_API_KEY": "sk-test-xiaomi"}
+                if model_runtime is not None
+                else {}
+            ),
+        ),
+    )
     request = ExecutionRequest(
         task_id="task_1",
         session_id="session_1",
@@ -1518,6 +1760,63 @@ def test_codex_executor_execute_translates_kernel_failures(monkeypatch, tmp_path
     assert result.metadata["session_mode"] == "session"
 
 
+def test_codex_executor_bridges_non_responses_model_runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            captured["runtime_config"] = runtime_config
+            return KernelExecutionResult(status="success", assistant_summary="bridged ok")
+
+    @contextmanager
+    def _fake_bridge(*, model_runtime, api_key):
+        assert model_runtime.api_mode == "anthropic_messages"
+        assert api_key == "sk-test-xiaomi"
+        yield "http://127.0.0.1:8765/v1"
+
+    monkeypatch.setattr(
+        "mente.executors.codex.start_responses_compat_bridge",
+        _fake_bridge,
+    )
+
+    runtime_config = RuntimeConfig(
+        runtime_home=tmp_path / ".mente" / "codex",
+        model_runtime=ModelRuntime(
+            model="mimo-v2.5-pro",
+            provider="xiaomi",
+            base_url="https://token-plan-cn.xiaomimimo.com/anthropic",
+            api_mode="anthropic_messages",
+            source="mente_model_settings",
+        ),
+        subprocess_env={"MENTE_CODEX_API_KEY": "sk-test-xiaomi"},
+    )
+    executor = CodexExecutor(codex_binary="codex", runtime_config=runtime_config, runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="hello，你是谁？",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    bridged_runtime_config = captured["runtime_config"]
+    assert isinstance(bridged_runtime_config, RuntimeConfig)
+    assert result.status == "success"
+    assert result.summary == "bridged ok"
+    assert bridged_runtime_config.codex_config["model_provider"] == "mente_bridge"
+    assert bridged_runtime_config.codex_config["model_providers"]["mente_bridge"]["base_url"] == (
+        "http://127.0.0.1:8765/v1"
+    )
+    assert bridged_runtime_config.codex_config["model_providers"]["mente_bridge"]["wire_api"] == (
+        "responses"
+    )
+    assert bridged_runtime_config.subprocess_env["MENTE_CODEX_API_KEY"] == "sk-test-xiaomi"
+
+
 def test_codex_executor_collapses_machine_failure_dump_to_concise_summary(monkeypatch, tmp_path):
     monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
 
@@ -1552,6 +1851,45 @@ def test_codex_executor_collapses_machine_failure_dump_to_concise_summary(monkey
     assert result.status == "failed"
     assert result.summary == "任务已取消。"
     assert result.failure_reason == "interrupted_by_user"
+
+
+def test_codex_executor_surfaces_failure_message_from_machine_dump(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+
+    machine_dump = "\n".join(
+        [
+            '{"type":"thread.started","thread_id":"thread-123"}',
+            '{"type":"turn.started"}',
+            '{"type":"error","message":"Reconnecting... 1/5 (stream disconnected before completion: AuthenticationError: Error code: 401 - invalid_key)"}',
+            '{"type":"turn.failed","error":{"message":"stream disconnected before completion: AuthenticationError: Error code: 401 - invalid_key"}}',
+        ]
+    )
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            return KernelExecutionResult(
+                status="failed",
+                assistant_summary=machine_dump,
+                backend_failure="exit_code:1",
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="hello，你是谁？",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "failed"
+    assert result.summary == (
+        "stream disconnected before completion: AuthenticationError: Error code: 401 - invalid_key"
+    )
+    assert result.failure_reason == "exit_code:1"
 
 
 def test_codex_executor_build_command_delegates_to_vendored_launcher(monkeypatch):

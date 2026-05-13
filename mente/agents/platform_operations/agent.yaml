@@ -1,0 +1,6 @@
+id: platform_operations
+display_name: Platform Operations
+lanes:
+  - config_admin
+task_profiles:
+  - config_admin

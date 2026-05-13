@@ -119,9 +119,16 @@ def augment_runtime_config_for_bridge_tools(
     )
     return RuntimeConfig(
         runtime_home=runtime_config.runtime_home,
+        runtime_home_is_default=runtime_config.runtime_home_is_default,
         ignore_user_config=runtime_config.ignore_user_config,
         ignore_rules=runtime_config.ignore_rules,
+        sandbox=runtime_config.sandbox,
+        approval_policy=runtime_config.approval_policy,
+        skip_git_repo_check=runtime_config.skip_git_repo_check,
+        color=runtime_config.color,
+        model_runtime=runtime_config.model_runtime,
         codex_config=codex_config,
+        profile_overrides=runtime_config.profile_overrides,
         subprocess_env=subprocess_env,
     )
 

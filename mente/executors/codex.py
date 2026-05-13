@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 import logging
 import os
 import shutil
@@ -16,7 +17,12 @@ from kernel.codex.runtime.protocol import KernelExecutionPayload
 from kernel.codex.runtime.result import KernelExecutionResult
 from kernel.codex.runtime.runner import KernelRunner
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
-from mente.execution_events import ExecutionEventCallback, emit_execution_event
+from mente.execution_events import (
+    ExecutionEventCallback,
+    emit_execution_event,
+    persist_lane_progress_event,
+    persist_lane_terminal_event,
+)
 from mente.executors.bridge_mcp import augment_runtime_config_for_bridge_tools
 from mente.executors.kernel_adapter import CodexKernelAdapter
 from mente.executors.prompting import (
@@ -25,8 +31,14 @@ from mente.executors.prompting import (
     normalize_user_facing_summary,
     render_execution_prompt,
 )
+from mente.executors.responses_compat_bridge import (
+    ResponsesCompatBridgeError,
+    apply_responses_compat_bridge,
+    start_responses_compat_bridge,
+)
 from mente.executors.runtime_auth import write_private_runtime_auth
 from mente.executors.runtime_config import (
+    ModelRuntime,
     RuntimeConfig,
     adapt_runtime_config_for_request,
     resolve_runtime_config,
@@ -44,6 +56,7 @@ from mente.task_core.models import (
     ExecutionResult,
     SessionMode,
 )
+from mente.task_core.repository import SQLiteTaskRepository
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +64,21 @@ logger = logging.getLogger(__name__)
 class CodexExecutor(CodexKernelAdapter):
     """Execute Mente requests through the vendored Codex kernel runner."""
 
+    _DEFAULT_SANDBOX = "workspace-write"
+    _DEFAULT_APPROVAL_POLICY = "never"
+
     def __init__(
         self,
         codex_binary: str | None = None,
-        sandbox: str = "workspace-write",
-        approval_policy: str = "never",
+        sandbox: str | None = None,
+        approval_policy: str | None = None,
         runtime_config: RuntimeConfig | None = None,
         runtime_config_resolver: Callable[[str | Path], RuntimeConfig] | None = None,
         runner: Any | None = None,
         memory_repository: MemoryRepository | None = None,
         memory_limit: int = 5,
         memory_policy_resolver: MemoryPolicyResolver | None = None,
+        task_repository: SQLiteTaskRepository | None = None,
         event_callback: ExecutionEventCallback | None = None,
         cancel_event: Any | None = None,
     ) -> None:
@@ -80,6 +97,7 @@ class CodexExecutor(CodexKernelAdapter):
         self._memory_repository = memory_repository
         self._memory_limit = memory_limit
         self._memory_policy_resolver = memory_policy_resolver
+        self._task_repository = task_repository
         self._event_callback = event_callback
 
     def build_prompt(self, request: ExecutionRequest) -> str:
@@ -105,9 +123,16 @@ class CodexExecutor(CodexKernelAdapter):
         if config_overrides is not None:
             resolved_runtime_config = RuntimeConfig(
                 runtime_home=resolved_runtime_config.runtime_home,
+                runtime_home_is_default=resolved_runtime_config.runtime_home_is_default,
                 ignore_user_config=resolved_runtime_config.ignore_user_config,
                 ignore_rules=resolved_runtime_config.ignore_rules,
+                sandbox=resolved_runtime_config.sandbox,
+                approval_policy=resolved_runtime_config.approval_policy,
+                skip_git_repo_check=resolved_runtime_config.skip_git_repo_check,
+                color=resolved_runtime_config.color,
+                model_runtime=resolved_runtime_config.model_runtime,
                 codex_config=resolved_runtime_config.codex_config,
+                profile_overrides=resolved_runtime_config.profile_overrides,
                 subprocess_env=resolved_runtime_config.subprocess_env,
             )
         resolved_runtime_config = augment_runtime_config_for_bridge_tools(
@@ -118,8 +143,8 @@ class CodexExecutor(CodexKernelAdapter):
         return build_vendored_command(
             payload=self._build_kernel_payload(request),
             session=session_request,
-            sandbox=self.sandbox,
-            approval_policy=self.approval_policy,
+            sandbox=self._resolve_sandbox(resolved_runtime_config),
+            approval_policy=self._resolve_approval_policy(resolved_runtime_config),
             runtime_config=resolved_runtime_config,
             output_last_message=output_last_message,
             output_schema=output_schema,
@@ -131,6 +156,18 @@ class CodexExecutor(CodexKernelAdapter):
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         """Run Codex through the vendored kernel runner and translate the result."""
         enriched_request = self._prepare_request(request)
+        task_repository, owns_task_repository = self._resolve_task_repository()
+        original_event_callback = self._event_callback
+        original_runner_event_callback = getattr(self._runner, "event_callback", None)
+        wrapped_event_callback = self._build_persistent_event_callback(
+            enriched_request,
+            task_repository=task_repository,
+            original_callback=original_event_callback,
+        )
+        self._event_callback = wrapped_event_callback
+        if hasattr(self._runner, "event_callback"):
+            self._runner.event_callback = wrapped_event_callback
+        translated_result: ExecutionResult | None = None
         emit_execution_event(
             self._event_callback,
             "executor.memory_context_resolved",
@@ -157,57 +194,169 @@ class CodexExecutor(CodexKernelAdapter):
             runtime_config,
             enriched_request,
         )
-        emit_execution_event(
-            self._event_callback,
-            "executor.runtime_config_resolved",
-            {
-                "task_id": request.task_id,
-                "session_id": request.session_id,
-                "runtime_home": str(runtime_config.runtime_home),
-            },
-            logger=logger,
+        try:
+            with self._prepare_runtime_config_for_execution(runtime_config) as execution_runtime_config:
+                emit_execution_event(
+                    self._event_callback,
+                    "executor.runtime_config_resolved",
+                    {
+                        "task_id": request.task_id,
+                        "session_id": request.session_id,
+                        "runtime_home": str(execution_runtime_config.runtime_home),
+                    },
+                    logger=logger,
+                )
+                codex_home = execution_runtime_config.runtime_home
+                codex_home.mkdir(parents=True, exist_ok=True)
+                self._seed_user_skills_into_isolated_home(codex_home)
+                auth_source = self._seed_auth_into_isolated_home(codex_home, execution_runtime_config)
+                emit_execution_event(
+                    self._event_callback,
+                    "executor.auth_prepared",
+                    {
+                        "task_id": request.task_id,
+                        "session_id": request.session_id,
+                        "auth_source": auth_source,
+                    },
+                    logger=logger,
+                )
+                precondition_fallback_reason = self._session_precondition_fallback_reason(enriched_request)
+                session_request = self._build_session_request(
+                    enriched_request,
+                    precondition_fallback_reason=precondition_fallback_reason,
+                )
+                kernel_result = self._runner.run(
+                    payload=self._build_kernel_payload(enriched_request),
+                    session=session_request,
+                    runtime_config=execution_runtime_config,
+                )
+                runtime_fallback_reason: str | None = None
+                if self._should_retry_stateless(enriched_request, session_request, kernel_result):
+                    runtime_fallback_reason = kernel_result.backend_failure or "resume_failed"
+                    fallback_request = self._build_resume_fallback_request(enriched_request)
+                    session_request = KernelSessionRequest(mode=KernelSessionMode.STATELESS)
+                    kernel_result = self._runner.run(
+                        payload=self._build_kernel_payload(fallback_request),
+                        session=session_request,
+                        runtime_config=execution_runtime_config,
+                    )
+                translated_result = self._translate_kernel_result(
+                    kernel_result,
+                    enriched_request,
+                    session_request,
+                    model_name=execution_runtime_config.model_runtime.model,
+                    precondition_fallback_reason=precondition_fallback_reason,
+                    runtime_fallback_reason=runtime_fallback_reason,
+                )
+                return translated_result
+        except ResponsesCompatBridgeError as exc:
+            translated_result = self._responses_compat_bridge_failure_result(runtime_config, exc)
+            return translated_result
+        finally:
+            try:
+                if translated_result is not None and task_repository is not None:
+                    self._persist_terminal_lane_event(
+                        enriched_request,
+                        translated_result,
+                        task_repository=task_repository,
+                    )
+            except Exception:
+                logger.exception(
+                    "failed to persist terminal lane event for task %s",
+                    enriched_request.task_id,
+                )
+            self._event_callback = original_event_callback
+            if hasattr(self._runner, "event_callback"):
+                self._runner.event_callback = original_runner_event_callback
+            if owns_task_repository and task_repository is not None:
+                try:
+                    task_repository.close()
+                except Exception:
+                    logger.exception(
+                        "failed to close task repository for task %s",
+                        enriched_request.task_id,
+                    )
+
+    def _resolve_task_repository(self) -> tuple[SQLiteTaskRepository | None, bool]:
+        if self._task_repository is not None:
+            return self._task_repository, False
+        try:
+            return SQLiteTaskRepository(), True
+        except Exception:
+            logger.exception("failed to open default task repository for execution-event persistence")
+            return None, False
+
+    def _build_persistent_event_callback(
+        self,
+        request: ExecutionRequest,
+        *,
+        task_repository: SQLiteTaskRepository | None,
+        original_callback: ExecutionEventCallback | None,
+    ) -> ExecutionEventCallback:
+        lane = self._resolve_request_lane(request)
+        job_id = self._resolve_request_job_id(request)
+        skill_refs = list(request.worker_skill_refs or request.skill_refs)
+        metadata = dict(request.metadata or {})
+
+        def _callback(event_type: str, payload: dict[str, Any]) -> None:
+            if original_callback is not None:
+                try:
+                    original_callback(event_type, payload)
+                except Exception:
+                    logger.exception("failed to forward execution event %s", event_type)
+            if task_repository is None:
+                return
+            try:
+                persist_lane_progress_event(
+                    task_repository,
+                    event_type=event_type,
+                    payload=payload,
+                    session_id=request.session_id,
+                    lane=lane,
+                    task_id=request.task_id,
+                    job_id=job_id,
+                    skill_refs=skill_refs,
+                    metadata=metadata,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to persist runtime lane event %s for task %s",
+                    event_type,
+                    request.task_id,
+                )
+
+        return _callback
+
+    def _persist_terminal_lane_event(
+        self,
+        request: ExecutionRequest,
+        result: ExecutionResult,
+        *,
+        task_repository: SQLiteTaskRepository,
+    ) -> None:
+        persist_lane_terminal_event(
+            task_repository,
+            result=result,
+            session_id=request.session_id,
+            lane=self._resolve_request_lane(request),
+            task_id=request.task_id,
+            job_id=self._resolve_request_job_id(request),
+            skill_refs=list(request.worker_skill_refs or request.skill_refs),
+            metadata=dict(request.metadata or {}),
         )
-        codex_home = runtime_config.runtime_home
-        codex_home.mkdir(parents=True, exist_ok=True)
-        self._seed_user_skills_into_isolated_home(codex_home)
-        auth_source = self._seed_auth_into_isolated_home(codex_home, runtime_config)
-        emit_execution_event(
-            self._event_callback,
-            "executor.auth_prepared",
-            {
-                "task_id": request.task_id,
-                "session_id": request.session_id,
-                "auth_source": auth_source,
-            },
-            logger=logger,
+
+    def _resolve_request_lane(self, request: ExecutionRequest) -> str:
+        lane = (
+            request.worker_lane
+            or str(request.metadata.get("lane") or "").strip()
+            or "director"
         )
-        precondition_fallback_reason = self._session_precondition_fallback_reason(enriched_request)
-        session_request = self._build_session_request(
-            enriched_request,
-            precondition_fallback_reason=precondition_fallback_reason,
-        )
-        kernel_result = self._runner.run(
-            payload=self._build_kernel_payload(enriched_request),
-            session=session_request,
-            runtime_config=runtime_config,
-        )
-        runtime_fallback_reason: str | None = None
-        if self._should_retry_stateless(enriched_request, session_request, kernel_result):
-            runtime_fallback_reason = kernel_result.backend_failure or "resume_failed"
-            fallback_request = self._build_resume_fallback_request(enriched_request)
-            session_request = KernelSessionRequest(mode=KernelSessionMode.STATELESS)
-            kernel_result = self._runner.run(
-                payload=self._build_kernel_payload(fallback_request),
-                session=session_request,
-                runtime_config=runtime_config,
-            )
-        return self._translate_kernel_result(
-            kernel_result,
-            enriched_request,
-            session_request,
-            precondition_fallback_reason=precondition_fallback_reason,
-            runtime_fallback_reason=runtime_fallback_reason,
-        )
+        return str(lane).strip().lower() or "director"
+
+    def _resolve_request_job_id(self, request: ExecutionRequest) -> str | None:
+        value = request.job_id or request.metadata.get("job_id")
+        normalized = str(value or "").strip()
+        return normalized or None
 
     def _prepare_request(self, request: ExecutionRequest) -> ExecutionRequest:
         """Resolve memory context once, preserving thin-prompt delivery when requested."""
@@ -439,12 +588,76 @@ class CodexExecutor(CodexKernelAdapter):
             request,
         )
 
+    def _resolve_sandbox(self, runtime_config: RuntimeConfig) -> str:
+        if isinstance(self.sandbox, str) and self.sandbox.strip():
+            return self.sandbox.strip()
+        if isinstance(runtime_config.sandbox, str) and runtime_config.sandbox.strip():
+            return runtime_config.sandbox.strip()
+        return self._DEFAULT_SANDBOX
+
+    def _resolve_approval_policy(self, runtime_config: RuntimeConfig) -> str:
+        if isinstance(self.approval_policy, str) and self.approval_policy.strip():
+            return self.approval_policy.strip()
+        if isinstance(runtime_config.approval_policy, str) and runtime_config.approval_policy.strip():
+            return runtime_config.approval_policy.strip()
+        return self._DEFAULT_APPROVAL_POLICY
+
+    @contextmanager
+    def _prepare_runtime_config_for_execution(self, runtime_config: RuntimeConfig):
+        model_runtime = runtime_config.model_runtime
+        if not model_runtime.requires_responses_compat_proxy:
+            yield runtime_config
+            return
+        api_key = runtime_config.subprocess_env.get("MENTE_CODEX_API_KEY")
+        if not api_key:
+            raise ResponsesCompatBridgeError("missing_api_key_for_responses_compat_bridge")
+        with start_responses_compat_bridge(
+            model_runtime=model_runtime,
+            api_key=api_key,
+        ) as bridge_base_url:
+            yield apply_responses_compat_bridge(
+                runtime_config,
+                bridge_base_url=bridge_base_url,
+            )
+
+    def _responses_compat_bridge_failure_result(
+        self,
+        runtime_config: RuntimeConfig,
+        error: Exception,
+    ) -> ExecutionResult:
+        model_runtime = runtime_config.model_runtime
+        summary = self._format_responses_compat_bridge_failure_summary(model_runtime, error)
+        return ExecutionResult(
+            status="failed",
+            summary=summary,
+            failure_reason=f"responses_compat_bridge_error:{model_runtime.api_mode}",
+            metadata={
+                "model_runtime": model_runtime.to_metadata(),
+                "bridge_error": str(error),
+            },
+        )
+
+    def _format_responses_compat_bridge_failure_summary(
+        self,
+        model_runtime: ModelRuntime,
+        error: Exception,
+    ) -> str:
+        provider = model_runtime.provider or "custom"
+        endpoint = model_runtime.base_url or "(missing base_url)"
+        model_name = model_runtime.model or "(missing model)"
+        return (
+            "Mente 的 Responses 兼容桥启动或转发失败："
+            f"检测到 model={model_name}、provider={provider}、api_mode={model_runtime.api_mode}、base_url={endpoint}。"
+            f"错误={type(error).__name__}: {error}。"
+        )
+
     def _translate_kernel_result(
         self,
         result: KernelExecutionResult,
         request: ExecutionRequest,
         session_request: KernelSessionRequest,
         *,
+        model_name: str | None = None,
         precondition_fallback_reason: str | None = None,
         runtime_fallback_reason: str | None = None,
     ) -> ExecutionResult:
@@ -455,6 +668,7 @@ class CodexExecutor(CodexKernelAdapter):
                 normalize_user_facing_summary(
                     result.assistant_summary,
                     user_request=request.user_request,
+                    model_name=model_name,
                 )
                 if result.status == "success"
                 else normalize_user_facing_failure_summary(

@@ -1,0 +1,53 @@
+version: 1
+lanes:
+  coordinator: executive_office
+  director: executive_office
+  engineering: product_engineering
+  research: strategy_research
+  writing: editorial
+  config_admin: platform_operations
+task_profiles:
+  content_publishing: publishing_operations
+agents:
+  executive_office:
+    id: executive_office
+    display_name: Executive Office
+    lanes:
+      - coordinator
+      - director
+  product_engineering:
+    id: product_engineering
+    display_name: Product Engineering
+    lanes:
+      - engineering
+  strategy_research:
+    id: strategy_research
+    display_name: Strategy Research
+    lanes:
+      - research
+    task_profiles:
+      - deep_research
+    skill_owners:
+      - research/deep-research-pro
+  editorial:
+    id: editorial
+    display_name: Editorial
+    lanes:
+      - writing
+    skill_owners:
+      - media/wechat-publisher
+      - imagegen
+  platform_operations:
+    id: platform_operations
+    display_name: Platform Operations
+    lanes:
+      - config_admin
+    task_profiles:
+      - config_admin
+    skill_owners:
+      - software-development/mente-config-admin
+  publishing_operations:
+    id: publishing_operations
+    display_name: Publishing Operations
+    task_profiles:
+      - content_publishing

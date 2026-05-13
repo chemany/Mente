@@ -6,17 +6,12 @@ from kernel.codex.bridge.tool_surface import (
 from mente.executors import ToolExposurePolicy, resolve_tool_exposure_policy
 
 
-EXPECTED_GATEWAY_BRIDGE_TOOLS = [
-    "mente_memory_query",
-    "mente_memory_save",
-    "mente_task_lookup",
-    "mente_session_notify",
-    "mente_wechat_publish_draft",
-]
+EXPECTED_GATEWAY_BRIDGE_TOOLS: list[str] = []
 EXPECTED_API_SERVER_BRIDGE_TOOLS = [
     "mente_memory_query",
     "mente_memory_save",
 ]
+EXPECTED_TUI_BRIDGE_TOOLS: list[str] = []
 
 
 def test_tool_exposure_policy_serializes_native_and_bridge_tools_with_sources():
@@ -59,11 +54,10 @@ def test_resolve_tool_exposure_policy_filters_vendored_surface_and_keeps_bridge_
     assert all(tool not in policy.native_tools for tool in policy.bridge_tools)
 
 
-def test_resolve_tool_exposure_policy_fails_closed_for_memory_bridge_tools_by_default():
+def test_resolve_tool_exposure_policy_keeps_generic_gateway_conversation_off_bridge_mcp_by_default():
     policy = resolve_tool_exposure_policy(source="gateway", task_type="conversation")
 
-    assert "mente_memory_query" in policy.bridge_tools
-    assert "mente_memory_save" not in policy.bridge_tools
+    assert policy.bridge_tools == EXPECTED_GATEWAY_BRIDGE_TOOLS
 
 
 def test_resolve_tool_exposure_policy_narrows_content_publishing_bridge_tools():
@@ -89,6 +83,14 @@ def test_resolve_tool_exposure_policy_exposes_all_vendored_native_tools_for_api_
     assert policy.bridge_tools == EXPECTED_API_SERVER_BRIDGE_TOOLS
     assert policy.session_capable is True
     assert all(tool not in policy.native_tools for tool in policy.bridge_tools)
+
+
+def test_resolve_tool_exposure_policy_keeps_generic_tui_conversation_off_bridge_mcp_by_default():
+    policy = resolve_tool_exposure_policy(source="tui", task_type="conversation")
+
+    assert policy.native_tools == get_vendored_native_tool_names()
+    assert policy.bridge_tools == EXPECTED_TUI_BRIDGE_TOOLS
+    assert policy.session_capable is True
 
 
 

@@ -677,6 +677,59 @@ class TestSessionStoreRuntimeContinuity:
         assert payload["created_at"]
         assert payload["updated_at"]
 
+    def test_runtime_continuity_supports_independent_lanes(self, tmp_path):
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        store._db = None
+
+        store.bind_runtime_continuity(
+            session_id="sess-1",
+            lane="director",
+            runtime="codex",
+            continuity_id="thread-director",
+            status="active",
+        )
+        store.bind_runtime_continuity(
+            session_id="sess-1",
+            lane="engineering",
+            runtime="codex",
+            continuity_id="thread-engineering",
+            status="active",
+        )
+
+        director_payload = store.get_runtime_continuity("sess-1")
+        engineering_payload = store.get_runtime_continuity("sess-1", lane="engineering")
+
+        assert director_payload["continuity_id"] == "thread-director"
+        assert director_payload["lane"] == "director"
+        assert engineering_payload["continuity_id"] == "thread-engineering"
+        assert engineering_payload["lane"] == "engineering"
+
+    def test_runtime_continuity_legacy_disk_payload_loads_into_director_lane(self, tmp_path):
+        runtime_continuity_file = tmp_path / "runtime_continuity.json"
+        runtime_continuity_file.write_text(
+            json.dumps(
+                {
+                    "sess-1": {
+                        "runtime": "codex",
+                        "continuity_id": "thread-legacy",
+                        "status": "active",
+                        "last_mode": "resume",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        store._db = None
+
+        payload = store.get_runtime_continuity("sess-1")
+
+        assert payload is not None
+        assert payload["continuity_id"] == "thread-legacy"
+        assert payload["lane"] == "director"
+        assert store.get_runtime_continuity("sess-1", lane="engineering") is None
+
     def test_runtime_continuity_invalidation_marks_entry_but_keeps_record(self, tmp_path):
         store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
         store._db = None
@@ -784,6 +837,63 @@ class TestSessionStoreRuntimeContinuity:
 
         assert second.clear_recent_task_snapshot("sess-1") is True
         assert second.get_recent_task_snapshot("sess-1") is None
+
+    def test_recent_task_snapshot_supports_independent_lanes(self, tmp_path):
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        store._db = None
+        store.bind_recent_task_snapshot(
+            "sess-1",
+            lane="director",
+            user_request="你好",
+            status="running",
+            assistant_summary="正在回复问候。",
+            metadata={"lane": "director"},
+        )
+        store.bind_recent_task_snapshot(
+            "sess-1",
+            lane="engineering",
+            user_request="修复 pytest 失败",
+            status="needs_follow_up",
+            assistant_summary="已定位到 tests/gateway/test_session.py。",
+            follow_up_tasks=["继续修复并跑测试"],
+            metadata={"lane": "engineering"},
+        )
+
+        director_payload = store.get_recent_task_snapshot("sess-1")
+        engineering_payload = store.get_recent_task_snapshot("sess-1", lane="engineering")
+
+        assert director_payload["user_request"] == "你好"
+        assert director_payload["metadata"]["lane"] == "director"
+        assert engineering_payload["user_request"] == "修复 pytest 失败"
+        assert engineering_payload["metadata"]["lane"] == "engineering"
+        assert engineering_payload["follow_up_tasks"] == ["继续修复并跑测试"]
+
+    def test_recent_task_snapshot_legacy_disk_payload_loads_into_director_lane(self, tmp_path):
+        recent_task_snapshots_file = tmp_path / "recent_task_snapshots.json"
+        recent_task_snapshots_file.write_text(
+            json.dumps(
+                {
+                    "sess-1": {
+                        "user_request": "继续排查 tavily 配置",
+                        "status": "running",
+                        "assistant_summary": "已定位到服务目录。",
+                        "follow_up_tasks": ["读取 .env"],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        store._db = None
+
+        director_payload = store.get_recent_task_snapshot("sess-1")
+        engineering_payload = store.get_recent_task_snapshot("sess-1", lane="engineering")
+
+        assert director_payload is not None
+        assert director_payload["user_request"] == "继续排查 tavily 配置"
+        assert director_payload["metadata"]["lane"] == "director"
+        assert engineering_payload is None
 
 
 class TestWhatsAppSessionKeyConsistency:

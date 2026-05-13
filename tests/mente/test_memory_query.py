@@ -19,6 +19,7 @@ def test_parse_http_memory_query_normalizes_filters():
         "source": "gateway",
         "task_type": "conversation",
         "memory_scope": "session",
+        "include_superseded": False,
         "limit": 50,
         "offset": 10,
     }

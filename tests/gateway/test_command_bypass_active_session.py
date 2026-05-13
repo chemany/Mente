@@ -201,6 +201,22 @@ class TestCommandBypassActiveSession:
         )
 
     @pytest.mark.asyncio
+    async def test_agent_runtime_bypasses_guard(self):
+        """/agent-runtime must bypass so runtime admin queries don't get queued."""
+        adapter = _make_adapter()
+        sk = _session_key()
+        adapter._active_sessions[sk] = asyncio.Event()
+
+        await adapter.handle_message(_make_event("/agent-runtime sessions director"))
+
+        assert sk not in adapter._pending_messages, (
+            "/agent-runtime was queued as a pending message instead of being dispatched"
+        )
+        assert any("handled:agent-runtime" in r for r in adapter.sent_responses), (
+            "/agent-runtime response was not sent back to the user"
+        )
+
+    @pytest.mark.asyncio
     async def test_steer_bypasses_guard(self):
         """/steer must bypass the Level-1 active-session guard so it reaches
         the gateway runner's /steer handler and injects into the running

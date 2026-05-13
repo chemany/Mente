@@ -1,0 +1,4 @@
+id: publishing_operations
+display_name: Publishing Operations
+task_profiles:
+  - content_publishing

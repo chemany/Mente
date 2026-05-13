@@ -4110,6 +4110,7 @@ class HermesCLI:
 
     def _handle_agents_command(self):
         """Handle /agents — show background processes and agent status."""
+        from mente.agent_runtime_admin import list_agent_inventory
         from tools.process_registry import format_uptime_short, process_registry
 
         processes = process_registry.list_sessions()
@@ -4127,6 +4128,79 @@ class HermesCLI:
 
         agent_running = getattr(self, "_agent_running", False)
         _cprint(f"  Agent: {'running' if agent_running else 'idle'}")
+
+        inventory = list_agent_inventory()
+        _cprint(f"  Registered Mente agents: {len(inventory)}")
+        for entry in inventory[:8]:
+            lane_text = ", ".join(entry.lanes) if entry.lanes else "none"
+            profile_text = f" · profiles: {', '.join(entry.task_profiles)}" if entry.task_profiles else ""
+            runtime_bits = [f"sessions {entry.runtime.session_count}"]
+            if entry.runtime.state_files:
+                runtime_bits.append(f"state {len(entry.runtime.state_files)}")
+            if entry.runtime.log_files:
+                runtime_bits.append(f"logs {len(entry.runtime.log_files)}")
+            _cprint(
+                f"    {entry.agent.agent_id} · {entry.agent.display_name} · lanes: {lane_text}{profile_text} · "
+                f"{' · '.join(runtime_bits)}"
+            )
+            if entry.soul_excerpt:
+                _cprint(f"      {entry.soul_excerpt}")
+
+    def _handle_agent_runtime_command(self, cmd_original: str):
+        """Handle /agent-runtime — inspect or clean one agent runtime."""
+        from mente.agent_runtime_admin import (
+            AgentRuntimeAdminError,
+            clear_agent_runtime,
+            describe_agent_runtime,
+            reset_agent_execution_context,
+        )
+
+        parts = cmd_original.strip().split(maxsplit=2)
+        if len(parts) < 3:
+            _cprint("  Usage: /agent-runtime <sessions|reset|clear> <agent>")
+            return
+
+        action = parts[1].strip().lower()
+        agent_ref = parts[2].strip()
+
+        try:
+            if action == "sessions":
+                overview = describe_agent_runtime(agent_ref)
+                _cprint(f"  Agent runtime: {overview.agent.display_name} ({overview.agent.agent_id})")
+                _cprint(f"  Path: {overview.runtime_home}")
+                _cprint(f"  Sessions: {overview.session_count}")
+                for name in overview.session_files:
+                    _cprint(f"    {name}")
+                if overview.state_files:
+                    _cprint(f"  State DB: {', '.join(overview.state_files)}")
+                if overview.log_files:
+                    _cprint(f"  Log DB: {', '.join(overview.log_files)}")
+                if overview.other_files:
+                    _cprint(f"  Other files: {', '.join(overview.other_files)}")
+                return
+
+            if action == "reset":
+                result = reset_agent_execution_context(agent_ref)
+                _cprint(
+                    f"  Reset runtime context for {result.agent.display_name} "
+                    f"({result.agent.agent_id}); removed {result.removed_entries_count} entries."
+                )
+                _cprint(f"  Path: {result.runtime_home}")
+                return
+
+            if action == "clear":
+                result = clear_agent_runtime(agent_ref)
+                _cprint(
+                    f"  Cleared runtime for {result.agent.display_name} "
+                    f"({result.agent.agent_id}); removed {result.removed_entries_count} entries."
+                )
+                _cprint(f"  Path: {result.runtime_home}")
+                return
+
+            _cprint(f"  Unknown subcommand: {action}")
+            _cprint("  Usage: /agent-runtime <sessions|reset|clear> <agent>")
+        except AgentRuntimeAdminError as exc:
+            _cprint(f"  {exc}")
 
     def _handle_paste_command(self):
         """Handle /paste — explicitly check clipboard for an image.
@@ -6290,6 +6364,8 @@ class HermesCLI:
             self._handle_stop_command()
         elif canonical == "agents":
             self._handle_agents_command()
+        elif canonical == "agent-runtime":
+            self._handle_agent_runtime_command(cmd_original)
         elif canonical == "background":
             self._handle_background_command(cmd_original)
         elif canonical == "queue":

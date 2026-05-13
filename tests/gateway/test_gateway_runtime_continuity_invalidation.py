@@ -61,5 +61,6 @@ async def test_undo_invalidates_runtime_continuity_on_transcript_rewrite():
     runner.session_store.rewrite_transcript.assert_called_once_with("sess-1", history[:2])
     runner.session_store.invalidate_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="director",
         reason="undo_rewrite",
     )

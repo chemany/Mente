@@ -1,6 +1,6 @@
 # Gateway Runtime Continuity Idle Expiry Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Mente:** REQUIRED SKILL: Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** Expire idle Mente gateway runtime continuity after a bounded inactivity window so long-idle chats start a fresh continuity session while preserving session records and transcripts.
 

@@ -202,6 +202,49 @@ def test_kernel_runner_normalizes_stateless_transport_output(monkeypatch, tmp_pa
     assert result.debug["returncode"] == 0
 
 
+def test_kernel_runner_uses_runtime_launch_settings_when_configured(monkeypatch, tmp_path):
+    runtime_workdir = tmp_path / "isolated-workdir"
+    runtime_workdir.mkdir()
+    captured: dict[str, object] = {}
+
+    class _Transport:
+        def execute(self, request: KernelTransportRequest) -> KernelTransportResponse:
+            captured["request"] = request
+            return KernelTransportResponse(
+                command=["codex", "exec"],
+                returncode=0,
+                stdout="",
+                stderr="",
+                raw_output='{"assistant_summary":"ok","memory_candidates":[]}',
+            )
+
+    monkeypatch.setattr(
+        "kernel.codex.runtime.runner.prepare_isolated_workspace",
+        lambda: runtime_workdir,
+        raising=False,
+    )
+
+    runner = KernelRunner(transport=_Transport())
+    result = runner.run(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(
+            runtime_home=tmp_path / "private-codex-home",
+            sandbox="danger-full-access",
+            approval_policy="on-request",
+        ),
+    )
+
+    request = captured["request"]
+    assert request.sandbox == "danger-full-access"
+    assert request.approval_policy == "on-request"
+    assert result.status == "success"
+
+
 def test_kernel_runner_respects_blocked_completion_status(tmp_path):
     class _Transport:
         def execute(self, request: KernelTransportRequest) -> KernelTransportResponse:

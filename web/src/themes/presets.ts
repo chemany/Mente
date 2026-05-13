@@ -1,4 +1,4 @@
-import type { DashboardTheme, ThemeTypography, ThemeLayout } from "./types";
+import type { DashboardTheme } from "./types";
 
 /**
  * Built-in dashboard themes.
@@ -21,36 +21,86 @@ const SYSTEM_SANS =
 const SYSTEM_MONO =
   'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace';
 
-const DEFAULT_TYPOGRAPHY: ThemeTypography = {
-  fontSans: SYSTEM_SANS,
-  fontMono: SYSTEM_MONO,
-  baseSize: "15px",
-  lineHeight: "1.55",
-  letterSpacing: "0",
-};
-
-const DEFAULT_LAYOUT: ThemeLayout = {
-  radius: "0.5rem",
-  density: "comfortable",
-};
-
 // ---------------------------------------------------------------------------
 // Themes
 // ---------------------------------------------------------------------------
 
 export const defaultTheme: DashboardTheme = {
   name: "default",
-  label: "Hermes Teal",
-  description: "Classic dark teal — the canonical Hermes look",
+  label: "Workspace Mist",
+  description: "Fresh paper-and-seafoam workspace with calm contrast",
   palette: {
-    background: { hex: "#041c1c", alpha: 1 },
-    midground: { hex: "#ffe6cb", alpha: 1 },
-    foreground: { hex: "#ffffff", alpha: 0 },
-    warmGlow: "rgba(255, 189, 56, 0.35)",
-    noiseOpacity: 1,
+    background: { hex: "#f4f7f4", alpha: 1 },
+    midground: { hex: "#111111", alpha: 1 },
+    foreground: { hex: "#ffffff", alpha: 0.6 },
+    warmGlow: "rgba(176, 214, 194, 0.28)",
+    noiseOpacity: 0.24,
   },
-  typography: DEFAULT_TYPOGRAPHY,
-  layout: DEFAULT_LAYOUT,
+  typography: {
+    fontSans:
+      `"Source Sans 3", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ${SYSTEM_SANS}`,
+    fontMono: `"IBM Plex Mono", "JetBrains Mono", ${SYSTEM_MONO}`,
+    fontDisplay:
+      `"Source Sans 3", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ${SYSTEM_SANS}`,
+    baseSize: "15px",
+    lineHeight: "1.6",
+    letterSpacing: "0",
+  },
+  layout: {
+    radius: "0.85rem",
+    density: "spacious",
+  },
+  colorOverrides: {
+    card: "#ffffff",
+    cardForeground: "#111111",
+    popover: "#fbfcfb",
+    popoverForeground: "#111111",
+    secondary: "#e9f0ec",
+    secondaryForeground: "#1b1e20",
+    muted: "#edf3ef",
+    mutedForeground: "#3f4649",
+    accent: "#dce8e2",
+    accentForeground: "#111111",
+    border: "#8f9d98",
+    input: "#8f9d98",
+    ring: "#2d6a5f",
+    success: "#2f7d63",
+    warning: "#d08a2f",
+    destructive: "#be4b49",
+  },
+  customCSS: `
+    :root {
+      --theme-text-blend-mode: normal;
+    }
+  `,
+  componentStyles: {
+    card: {
+      borderRadius: "calc(var(--theme-radius) + 0.35rem)",
+      background:
+        "linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(247, 250, 248, 0.84) 100%)",
+      boxShadow:
+        "0 20px 60px -36px rgba(31, 79, 70, 0.28), 0 0 0 1px rgba(31, 79, 70, 0.06) inset",
+    },
+    header: {
+      background:
+        "linear-gradient(180deg, rgba(244, 247, 244, 0.94) 0%, rgba(236, 243, 239, 0.88) 100%)",
+    },
+    sidebar: {
+      background:
+        "linear-gradient(180deg, rgba(244, 247, 244, 0.97) 0%, rgba(235, 242, 238, 0.93) 100%)",
+    },
+    backdrop: {
+      baseBackground:
+        "linear-gradient(180deg, rgba(248, 251, 248, 1) 0%, rgba(239, 245, 241, 1) 54%, rgba(232, 239, 234, 1) 100%)",
+      baseMixBlendMode: "normal",
+      glowOpacity: "0.18",
+      noiseBlendMode: "soft-light",
+      noiseOpacity: "0.18",
+      fillerBlendMode: "soft-light",
+      fillerOpacity: "0.014",
+      backgroundPosition: "center top",
+    },
+  },
 };
 
 export const midnightTheme: DashboardTheme = {
@@ -67,8 +117,6 @@ export const midnightTheme: DashboardTheme = {
   typography: {
     fontSans: `"Inter", ${SYSTEM_SANS}`,
     fontMono: `"JetBrains Mono", ${SYSTEM_MONO}`,
-    fontUrl:
-      "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap",
     baseSize: "14px",
     lineHeight: "1.6",
     letterSpacing: "-0.005em",
@@ -93,8 +141,6 @@ export const emberTheme: DashboardTheme = {
   typography: {
     fontSans: `"Spectral", Georgia, "Times New Roman", serif`,
     fontMono: `"IBM Plex Mono", ${SYSTEM_MONO}`,
-    fontUrl:
-      "https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;700&display=swap",
     baseSize: "15px",
     lineHeight: "1.6",
     letterSpacing: "0",
@@ -123,8 +169,6 @@ export const monoTheme: DashboardTheme = {
   typography: {
     fontSans: `"IBM Plex Sans", ${SYSTEM_SANS}`,
     fontMono: `"IBM Plex Mono", ${SYSTEM_MONO}`,
-    fontUrl:
-      "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap",
     baseSize: "13px",
     lineHeight: "1.5",
     letterSpacing: "0",
@@ -149,8 +193,6 @@ export const cyberpunkTheme: DashboardTheme = {
   typography: {
     fontSans: `"Share Tech Mono", "JetBrains Mono", ${SYSTEM_MONO}`,
     fontMono: `"Share Tech Mono", "JetBrains Mono", ${SYSTEM_MONO}`,
-    fontUrl:
-      "https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=JetBrains+Mono:wght@400;700&display=swap",
     baseSize: "14px",
     lineHeight: "1.5",
     letterSpacing: "0.02em",
@@ -180,8 +222,6 @@ export const roseTheme: DashboardTheme = {
   typography: {
     fontSans: `"Fraunces", Georgia, serif`,
     fontMono: `"DM Mono", ${SYSTEM_MONO}`,
-    fontUrl:
-      "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=DM+Mono:wght@400;500&display=swap",
     baseSize: "16px",
     lineHeight: "1.7",
     letterSpacing: "0",

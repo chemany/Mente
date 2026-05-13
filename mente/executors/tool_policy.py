@@ -33,13 +33,7 @@ _POLICY_PROFILES: dict[tuple[str, str], _PolicyProfile] = {
     ),
     ("gateway", "conversation"): _PolicyProfile(
         expose_all_native_tools=True,
-        bridge_tools=(
-            "mente_memory_query",
-            "mente_memory_save",
-            "mente_task_lookup",
-            "mente_session_notify",
-            "mente_wechat_publish_draft",
-        ),
+        bridge_tools=(),
         session_capable=True,
     ),
     ("api_server", "conversation"): _PolicyProfile(
@@ -49,12 +43,7 @@ _POLICY_PROFILES: dict[tuple[str, str], _PolicyProfile] = {
     ),
     ("tui", "conversation"): _PolicyProfile(
         expose_all_native_tools=True,
-        bridge_tools=(
-            "mente_memory_query",
-            "mente_memory_save",
-            "mente_task_lookup",
-            "mente_wechat_publish_draft",
-        ),
+        bridge_tools=(),
         session_capable=True,
     ),
 }
@@ -80,7 +69,7 @@ class ToolExposurePolicy(BaseModel):
 
     def as_metadata(self) -> dict[str, object]:
         """Serialize the policy for request and result metadata surfaces."""
-        return self.model_dump(mode="json")
+        return self.model_dump(mode="json", exclude_none=True)
 
 
 
@@ -111,7 +100,7 @@ def resolve_tool_exposure_policy(
     profile = _POLICY_PROFILES.get((source, task_type), _DEFAULT_POLICY_PROFILE)
     normalized_task_profile = str(task_profile or "").strip().lower()
     if (
-        source == "gateway"
+        source in {"gateway", "tui"}
         and task_type == "conversation"
         and normalized_task_profile == "content_publishing"
     ):

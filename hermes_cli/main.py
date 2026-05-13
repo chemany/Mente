@@ -47,6 +47,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -225,6 +226,111 @@ from hermes_cli import __version__, __release_date__
 from hermes_constants import AI_GATEWAY_BASE_URL, OPENROUTER_BASE_URL
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_dashboard_autostart_enabled(config: Optional[dict] = None) -> bool:
+    """Resolve whether interactive chat should auto-start the dashboard."""
+    from utils import is_truthy_value
+
+    env_value = os.environ.get("HERMES_DASHBOARD_AUTOSTART")
+    if env_value is not None:
+        return is_truthy_value(env_value, default=False)
+
+    if config is None:
+        try:
+            from hermes_cli.config import load_config
+
+            config = load_config()
+        except Exception:
+            config = None
+
+    dashboard = config.get("dashboard") if isinstance(config, dict) else None
+    if not isinstance(dashboard, dict):
+        return True
+    return is_truthy_value(
+        dashboard.get("autostart_on_chat_launch"),
+        default=True,
+    )
+
+
+def _is_dashboard_listening(host: str, port: int) -> bool:
+    """Best-effort TCP probe for the dashboard listener."""
+    probe_host = "127.0.0.1" if host in {"0.0.0.0", "::", ""} else host
+    try:
+        with socket.create_connection((probe_host, int(port)), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
+def _maybe_autostart_dashboard_for_chat(args, use_tui: bool) -> bool:
+    """Start the dashboard in the background for interactive chat launches."""
+    if getattr(args, "query", None):
+        return False
+    if not use_tui:
+        return False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+
+    try:
+        from hermes_cli.config import get_hermes_home, load_config
+
+        config = load_config()
+        if not _resolve_dashboard_autostart_enabled(config):
+            return False
+
+        dashboard_cfg = config.get("dashboard") if isinstance(config, dict) else {}
+        if not isinstance(dashboard_cfg, dict):
+            dashboard_cfg = {}
+
+        host = str(dashboard_cfg.get("host") or "127.0.0.1")
+        try:
+            port = int(dashboard_cfg.get("port") or 9119)
+        except (TypeError, ValueError):
+            port = 9119
+
+        if _is_dashboard_listening(host, port):
+            return False
+
+        logs_dir = get_hermes_home() / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / "dashboard-autostart.log"
+        log_file = open(log_path, "ab", buffering=0)
+        log_file.write(
+            f"\n=== dashboard autostart {host}:{port} {_time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode()
+        )
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "hermes_cli.main",
+            "dashboard",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--no-open",
+        ]
+        popen_kwargs = {
+            "cwd": str(PROJECT_ROOT),
+            "stdin": subprocess.DEVNULL,
+            "stdout": log_file,
+            "stderr": subprocess.STDOUT,
+            "env": {**os.environ, "HERMES_NONINTERACTIVE": "1"},
+        }
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                | getattr(subprocess, "DETACHED_PROCESS", 0)
+            )
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        subprocess.Popen(cmd, **popen_kwargs)
+        return True
+    except Exception:
+        logger.debug("dashboard autostart skipped", exc_info=True)
+        return False
 
 
 def _relative_time(ts) -> str:
@@ -1294,6 +1400,9 @@ def cmd_chat(args):
     # --source: tag session source for filtering (e.g. 'tool' for third-party integrations)
     if getattr(args, "source", None):
         os.environ["HERMES_SESSION_SOURCE"] = args.source
+
+    if use_tui and not getattr(args, "query", None):
+        _maybe_autostart_dashboard_for_chat(args, use_tui)
 
     if use_tui:
         _launch_tui(

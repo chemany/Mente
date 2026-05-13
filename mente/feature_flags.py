@@ -260,6 +260,7 @@ def build_conversation_workflow_contract(
     source: str,
     skill_refs: Sequence[str] | None = None,
     execution_mode: str = "stateless",
+    lane: str = "director",
     environment: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the machine-readable rollout contract for one conversation entrypoint."""
@@ -288,12 +289,18 @@ def build_conversation_workflow_contract(
         and normalized_source in session_synthesis_sources(environment=environment)
     )
     review_enabled = normalized_source == "api_server" and adoption_enabled
+    normalized_lane = str(lane).strip() or "director"
 
     return {
         "workflow_id": workflow_id,
         "adoption_id": adoption_id,
         "source": normalized_source,
         "task_type": "conversation",
+        "lane": {
+            "name": normalized_lane,
+            "router": "deterministic_v1",
+            "resumable": True,
+        },
         "adoption_enabled": adoption_enabled,
         "memory_read": {
             "mode": "runtime_on_demand_query",
@@ -339,6 +346,8 @@ def build_conversation_workflow_contract(
             "mode": "execution_session_handoff",
             "enabled": True,
             "requested_mode": str(execution_mode).strip() or "stateless",
+            "scope": "lane",
+            "lane": normalized_lane,
         },
     }
 

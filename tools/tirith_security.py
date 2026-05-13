@@ -406,7 +406,7 @@ def _resolve_tirith_path(configured_path: str) -> str:
     Failed installs are cached for the process lifetime (and persisted to
     disk for 24h) to avoid repeated network attempts.
     """
-    global _resolved_path, _install_failure_reason
+    global _resolved_path, _install_failure_reason, _install_thread
 
     # Fast path: successfully resolved on a previous call.
     if _resolved_path is not None and _resolved_path is not _INSTALL_FAILED:
@@ -476,17 +476,15 @@ def _resolve_tirith_path(configured_path: str) -> str:
         _install_failure_reason = disk_reason
         return expanded
 
-    installed, reason = _install_tirith()
-    if installed:
-        _resolved_path = installed
-        _install_failure_reason = ""
-        _clear_install_failed()
-        return installed
-
-    # Install failed — cache the miss and persist reason to disk
-    _resolved_path = _INSTALL_FAILED
-    _install_failure_reason = reason
-    _mark_install_failed(reason)
+    # Need to download — do it in the background so command approvals don't
+    # block on network I/O before the gateway can notify the user.
+    if _install_thread is None or not _install_thread.is_alive():
+        _install_thread = threading.Thread(
+            target=_background_install,
+            kwargs={"log_failures": True},
+            daemon=True,
+        )
+        _install_thread.start()
     return expanded
 
 

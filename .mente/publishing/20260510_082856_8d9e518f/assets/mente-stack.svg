@@ -1,0 +1,46 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="1120" y2="680" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#172554"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#22C55E"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="720" rx="32" fill="url(#bg)"/>
+  <rect x="48" y="48" width="1104" height="624" rx="28" fill="#0B1220" stroke="#1F2937" stroke-width="2"/>
+
+  <text x="92" y="116" fill="#F8FAFC" font-family="Arial, sans-serif" font-size="42" font-weight="700">Mente Surface, Codex Core</text>
+  <text x="92" y="152" fill="#93C5FD" font-family="Arial, sans-serif" font-size="22">One npm entrypoint, one product name, one visible workflow.</text>
+
+  <rect x="88" y="196" width="1024" height="108" rx="24" fill="url(#accent)" opacity="0.15" stroke="#22C55E" stroke-width="2"/>
+  <text x="120" y="244" fill="#DCFCE7" font-family="Arial, sans-serif" font-size="20" font-weight="700">User-facing Mente layer</text>
+  <text x="120" y="279" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="26" font-weight="700">CLI / TUI / Gateway / Messaging all speak as Mente</text>
+
+  <rect x="88" y="334" width="492" height="134" rx="24" fill="url(#panel)" stroke="#334155" stroke-width="2"/>
+  <text x="118" y="382" fill="#F8FAFC" font-family="Arial, sans-serif" font-size="24" font-weight="700">Packaging + install</text>
+  <text x="118" y="418" fill="#BFDBFE" font-family="Arial, sans-serif" font-size="18">npm package is only a bootstrapper</text>
+  <text x="118" y="448" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="18">Publishes launcher + installer scripts, not user secrets</text>
+
+  <rect x="620" y="334" width="492" height="134" rx="24" fill="url(#panel)" stroke="#334155" stroke-width="2"/>
+  <text x="650" y="382" fill="#F8FAFC" font-family="Arial, sans-serif" font-size="24" font-weight="700">Runtime branding</text>
+  <text x="650" y="418" fill="#BFDBFE" font-family="Arial, sans-serif" font-size="18">External progress flow stays visible</text>
+  <text x="650" y="448" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="18">Internal executor remains Codex-backed behind Mente naming</text>
+
+  <rect x="88" y="500" width="492" height="134" rx="24" fill="url(#panel)" stroke="#334155" stroke-width="2"/>
+  <text x="118" y="548" fill="#F8FAFC" font-family="Arial, sans-serif" font-size="24" font-weight="700">Config + admin workflow</text>
+  <text x="118" y="584" fill="#BFDBFE" font-family="Arial, sans-serif" font-size="18">API keys, provider auth, gateway restart rules are explicit</text>
+  <text x="118" y="614" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="18">Mente consults a dedicated config-admin skill when needed</text>
+
+  <rect x="620" y="500" width="492" height="134" rx="24" fill="url(#panel)" stroke="#334155" stroke-width="2"/>
+  <text x="650" y="548" fill="#F8FAFC" font-family="Arial, sans-serif" font-size="24" font-weight="700">Operational outcome</text>
+  <text x="650" y="584" fill="#BFDBFE" font-family="Arial, sans-serif" font-size="18">Install with npm, run with `mente`, operate with a stable product surface</text>
+  <text x="650" y="614" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="18">Gateway, memory, skills and Codex execution stay wired underneath</text>
+</svg>

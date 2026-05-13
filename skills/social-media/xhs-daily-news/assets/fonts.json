@@ -1,0 +1,33 @@
+{
+  "fonts": {
+    "chinese": [
+      {
+        "name": "Noto Sans CJK SC",
+        "family": "Noto Sans CJK SC, Source Han Sans CN, PingFang SC, Microsoft YaHei, sans-serif",
+        "path": "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "fallback": true
+      },
+      {
+        "name": "WenQuanYi Zen Hei",
+        "family": "WenQuanYi Zen Hei, 文泉驿正黑, sans-serif",
+        "path": "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
+      },
+      {
+        "name": "AR PL UKai",
+        "family": "AR PL UKai CN, 文鼎 PL 简中楷, serif",
+        "path": "/usr/share/fonts/truetype/arphic/ukai.ttc"
+      }
+    ],
+    "english": [
+      {
+        "name": "Noto Sans",
+        "family": "Noto Sans, sans-serif"
+      }
+    ]
+  },
+  "css_font_stack": {
+    "primary": "'Noto Sans CJK SC', 'Source Han Sans CN', 'PingFang SC', 'Microsoft YaHei', 'WenQuanYi Zen Hei', sans-serif",
+    "secondary": "'AR PL UKai CN', 'Noto Serif CJK SC', serif",
+    "monospace": "'Noto Sans Mono CJK SC', 'Source Han Mono', 'WenQuanYi Zen Hei Mono', monospace"
+  }
+}

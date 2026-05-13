@@ -2018,11 +2018,21 @@ class AIAgent:
             else:
                 print(f"📊 Context limit: {self.context_compressor.context_length:,} tokens (auto-compression disabled)")
 
-        # Check immediately so CLI users see the warning at startup.
-        # Gateway status_callback is not yet wired, so any warning is stored
-        # in _compression_warning and replayed in the first run_conversation().
+        # Check immediately for interactive/CLI agents so they see the warning
+        # at startup. Gateway-style quiet agents defer the probe until the
+        # first run_conversation(), which avoids repeated auxiliary-provider
+        # auto-detect work during cache warmup while preserving warning replay.
         self._compression_warning = None
-        self._check_compression_model_feasibility()
+        self._compression_feasibility_checked = False
+        should_defer_compression_probe = bool(
+            self.quiet_mode
+            and self.platform
+            and self.platform != "cli"
+            and self.status_callback is None
+        )
+        if not should_defer_compression_probe:
+            self._check_compression_model_feasibility()
+            self._compression_feasibility_checked = True
 
         # Snapshot primary runtime for per-turn restoration.  When fallback
         # activates during a turn, the next turn restores these values so the
@@ -9671,6 +9681,10 @@ class AIAgent:
                     )
             except Exception:
                 pass
+        if not getattr(self, "_compression_feasibility_checked", True):
+            self._check_compression_model_feasibility()
+            self._compression_feasibility_checked = True
+
         # Replay compression warning through status_callback for gateway
         # platforms (the callback was not wired during __init__).
         if self._compression_warning:

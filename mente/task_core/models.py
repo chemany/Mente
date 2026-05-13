@@ -30,6 +30,21 @@ class ExecutionMode(StrEnum):
     SESSIONFUL = "sessionful"
 
 
+class TaskRole(StrEnum):
+    """High-level Mente-owned task role selection."""
+
+    COORDINATOR = "coordinator"
+    WORKER = "worker"
+
+
+class DispatchMode(StrEnum):
+    """Dispatch mode chosen for one task envelope."""
+
+    INLINE = "inline"
+    DELEGATE_BACKGROUND = "delegate_background"
+    DELEGATE_FOREGROUND = "delegate_foreground"
+
+
 class SessionMode(StrEnum):
     """Mente-owned session continuity mode selection."""
 
@@ -79,6 +94,12 @@ class Task(BaseModel):
     artifacts_in: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     budget: dict[str, Any] = Field(default_factory=dict)
+    parent_task_id: str | None = None
+    job_id: str | None = None
+    role: TaskRole = TaskRole.WORKER
+    dispatch_mode: DispatchMode = DispatchMode.INLINE
+    worker_lane: str | None = None
+    worker_skill_refs: list[str] = Field(default_factory=list)
     execution_mode: ExecutionMode = ExecutionMode.STATELESS
     execution_session: ExecutionSession | None = None
     resume_token: str | None = None
@@ -119,6 +140,12 @@ class ExecutionRequest(BaseModel):
     artifacts_in: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     budget: dict[str, Any] = Field(default_factory=dict)
+    parent_task_id: str | None = None
+    job_id: str | None = None
+    role: TaskRole = TaskRole.WORKER
+    dispatch_mode: DispatchMode = DispatchMode.INLINE
+    worker_lane: str | None = None
+    worker_skill_refs: list[str] = Field(default_factory=list)
     execution_mode: ExecutionMode = ExecutionMode.STATELESS
     execution_session: ExecutionSession | None = None
     resume_token: str | None = None
@@ -134,7 +161,7 @@ class ExecutionRequest(BaseModel):
     @classmethod
     def _serialize_tool_policy(cls, value: Any) -> Any:
         if isinstance(value, BaseModel):
-            return value.model_dump(mode="json")
+            return value.model_dump(mode="json", exclude_none=True)
         return value
 
     @model_validator(mode="after")

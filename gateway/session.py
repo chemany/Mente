@@ -21,10 +21,35 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_RUNTIME_CONTINUITY_LANE = "director"
+
 
 def _now() -> datetime:
     """Return the current local time."""
     return datetime.now()
+
+
+def _normalize_runtime_continuity_lane(value: str | None) -> str:
+    lane = str(value or "").strip().lower()
+    return lane or _DEFAULT_RUNTIME_CONTINUITY_LANE
+
+
+def _looks_like_runtime_continuity_payload(payload: Any) -> bool:
+    return isinstance(payload, dict) and any(
+        key in payload for key in ("runtime", "continuity_id", "status")
+    )
+
+
+def _looks_like_recent_task_snapshot_payload(payload: Any) -> bool:
+    return isinstance(payload, dict) and any(
+        key in payload for key in ("user_request", "status", "assistant_summary")
+    )
+
+
+def _looks_like_session_job_payload(payload: Any) -> bool:
+    return isinstance(payload, dict) and any(
+        key in payload for key in ("job_id", "task_id", "status", "summary")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -650,8 +675,9 @@ class SessionStore:
         self.sessions_dir = sessions_dir
         self.config = config
         self._entries: Dict[str, SessionEntry] = {}
-        self._runtime_continuity: Dict[str, Dict[str, Any]] = {}
-        self._recent_task_snapshots: Dict[str, Dict[str, Any]] = {}
+        self._runtime_continuity: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._recent_task_snapshots: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._session_jobs: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._loaded = False
         self._lock = threading.Lock()
         self._has_active_processes_fn = has_active_processes_fn
@@ -678,6 +704,7 @@ class SessionStore:
         sessions_file = self.sessions_dir / "sessions.json"
         runtime_continuity_file = self.sessions_dir / "runtime_continuity.json"
         recent_task_snapshots_file = self.sessions_dir / "recent_task_snapshots.json"
+        session_jobs_file = self.sessions_dir / "session_jobs.json"
 
         if sessions_file.exists():
             try:
@@ -698,8 +725,9 @@ class SessionStore:
                     data = json.load(f)
                     if isinstance(data, dict):
                         for session_id, payload in data.items():
-                            if isinstance(payload, dict):
-                                self._runtime_continuity[str(session_id)] = dict(payload)
+                            normalized = self._normalize_runtime_continuity_registry(payload)
+                            if normalized:
+                                self._runtime_continuity[str(session_id)] = normalized
             except Exception as e:
                 print(f"[gateway] Warning: Failed to load runtime continuity: {e}")
 
@@ -709,10 +737,23 @@ class SessionStore:
                     data = json.load(f)
                     if isinstance(data, dict):
                         for session_id, payload in data.items():
-                            if isinstance(payload, dict):
-                                self._recent_task_snapshots[str(session_id)] = dict(payload)
+                            normalized = self._normalize_recent_task_snapshot_registry(payload)
+                            if normalized:
+                                self._recent_task_snapshots[str(session_id)] = normalized
             except Exception as e:
                 print(f"[gateway] Warning: Failed to load recent task snapshots: {e}")
+
+        if session_jobs_file.exists():
+            try:
+                with open(session_jobs_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        for session_id, payload in data.items():
+                            normalized = self._normalize_session_job_registry(payload)
+                            if normalized:
+                                self._session_jobs[str(session_id)] = normalized
+            except Exception as e:
+                print(f"[gateway] Warning: Failed to load session jobs: {e}")
 
         self._loaded = True
 
@@ -737,11 +778,12 @@ class SessionStore:
             raise
     
     def _save(self) -> None:
-        """Save session and runtime continuity indexes to disk."""
+        """Save session state indexes to disk."""
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         sessions_file = self.sessions_dir / "sessions.json"
         runtime_continuity_file = self.sessions_dir / "runtime_continuity.json"
         recent_task_snapshots_file = self.sessions_dir / "recent_task_snapshots.json"
+        session_jobs_file = self.sessions_dir / "session_jobs.json"
 
         self._atomic_write_json(
             sessions_file,
@@ -749,11 +791,33 @@ class SessionStore:
         )
         self._atomic_write_json(
             runtime_continuity_file,
-            {key: dict(payload) for key, payload in self._runtime_continuity.items()},
+            {
+                session_id: {
+                    lane: dict(payload)
+                    for lane, payload in lanes.items()
+                }
+                for session_id, lanes in self._runtime_continuity.items()
+            },
         )
         self._atomic_write_json(
             recent_task_snapshots_file,
-            {key: dict(payload) for key, payload in self._recent_task_snapshots.items()},
+            {
+                session_id: {
+                    lane: dict(payload)
+                    for lane, payload in lanes.items()
+                }
+                for session_id, lanes in self._recent_task_snapshots.items()
+            },
+        )
+        self._atomic_write_json(
+            session_jobs_file,
+            {
+                session_id: {
+                    lane: dict(payload)
+                    for lane, payload in lanes.items()
+                }
+                for session_id, lanes in self._session_jobs.items()
+            },
         )
     
     def _generate_session_key(self, source: SessionSource) -> str:
@@ -764,6 +828,128 @@ class SessionStore:
             thread_sessions_per_user=getattr(self.config, "thread_sessions_per_user", False),
         )
     
+    def _normalize_runtime_continuity_registry(
+        self,
+        payload: Any,
+    ) -> Dict[str, Dict[str, Any]]:
+        if _looks_like_runtime_continuity_payload(payload):
+            lane = _normalize_runtime_continuity_lane(payload.get("lane"))
+            lane_payload = dict(payload)
+            lane_payload["lane"] = lane
+            return {lane: lane_payload}
+        if not isinstance(payload, dict):
+            return {}
+
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for lane_name, lane_payload in payload.items():
+            if not _looks_like_runtime_continuity_payload(lane_payload):
+                continue
+            lane = _normalize_runtime_continuity_lane(str(lane_name))
+            lane_data = dict(lane_payload)
+            lane_data["lane"] = lane
+            normalized[lane] = lane_data
+        return normalized
+
+    def _normalize_recent_task_snapshot_registry(
+        self,
+        payload: Any,
+    ) -> Dict[str, Dict[str, Any]]:
+        if _looks_like_recent_task_snapshot_payload(payload):
+            lane_payload = self._normalize_recent_task_snapshot_payload(
+                payload,
+                lane=_DEFAULT_RUNTIME_CONTINUITY_LANE,
+                created_at=str(payload.get("created_at") or "") or None,
+            )
+            return {_DEFAULT_RUNTIME_CONTINUITY_LANE: lane_payload}
+        if not isinstance(payload, dict):
+            return {}
+
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for lane_name, lane_payload in payload.items():
+            if not _looks_like_recent_task_snapshot_payload(lane_payload):
+                continue
+            lane = _normalize_runtime_continuity_lane(str(lane_name))
+            normalized[lane] = self._normalize_recent_task_snapshot_payload(
+                lane_payload,
+                lane=lane,
+                created_at=str(lane_payload.get("created_at") or "") or None,
+            )
+        return normalized
+
+    def _normalize_session_job_registry(
+        self,
+        payload: Any,
+    ) -> Dict[str, Dict[str, Any]]:
+        if _looks_like_session_job_payload(payload):
+            lane_payload = self._normalize_session_job_payload(
+                payload,
+                lane=_DEFAULT_RUNTIME_CONTINUITY_LANE,
+                requested_at=str(payload.get("requested_at") or "") or None,
+            )
+            return {_DEFAULT_RUNTIME_CONTINUITY_LANE: lane_payload}
+        if not isinstance(payload, dict):
+            return {}
+
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for lane_name, lane_payload in payload.items():
+            if not _looks_like_session_job_payload(lane_payload):
+                continue
+            lane = _normalize_runtime_continuity_lane(str(lane_name))
+            normalized[lane] = self._normalize_session_job_payload(
+                lane_payload,
+                lane=lane,
+                requested_at=str(lane_payload.get("requested_at") or "") or None,
+            )
+        return normalized
+
+    def _normalize_recent_task_snapshot_payload(
+        self,
+        payload: Dict[str, Any],
+        *,
+        lane: str,
+        created_at: str | None = None,
+    ) -> Dict[str, Any]:
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        normalized_metadata = dict(metadata)
+        normalized_metadata["lane"] = lane
+        return {
+            "user_request": str(payload.get("user_request") or "").strip(),
+            "status": str(payload.get("status") or "").strip() or "running",
+            "assistant_summary": str(payload.get("assistant_summary") or "").strip(),
+            "follow_up_tasks": [
+                str(item).strip()
+                for item in payload.get("follow_up_tasks") or []
+                if str(item).strip()
+            ],
+            "metadata": normalized_metadata,
+            "created_at": created_at or str(payload.get("created_at") or "") or _now().isoformat(),
+            "updated_at": str(payload.get("updated_at") or "") or _now().isoformat(),
+        }
+
+    def _normalize_session_job_payload(
+        self,
+        payload: Dict[str, Any],
+        *,
+        lane: str,
+        requested_at: str | None = None,
+    ) -> Dict[str, Any]:
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        return {
+            "lane": lane,
+            "job_id": str(payload.get("job_id") or "").strip(),
+            "task_id": str(payload.get("task_id") or "").strip(),
+            "status": str(payload.get("status") or "").strip() or "running",
+            "summary": str(payload.get("summary") or "").strip(),
+            "skill_refs": [
+                str(item).strip()
+                for item in payload.get("skill_refs") or []
+                if str(item).strip()
+            ],
+            "metadata": dict(metadata),
+            "requested_at": requested_at or str(payload.get("requested_at") or "") or _now().isoformat(),
+            "updated_at": str(payload.get("updated_at") or "") or _now().isoformat(),
+        }
+
     def _is_session_expired(self, entry: SessionEntry) -> bool:
         """Check if a session has expired based on its reset policy.
         
@@ -1243,17 +1429,49 @@ class SessionStore:
 
         return new_entry
 
-    def get_runtime_continuity(self, session_id: str) -> Dict[str, Any] | None:
+    def get_runtime_continuity(
+        self,
+        session_id: str,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
+    ) -> Dict[str, Any] | None:
         """Return the persisted runtime continuity payload for a gateway session."""
         with self._lock:
             self._ensure_loaded_locked()
-            payload = self._runtime_continuity.get(session_id)
+            session_payloads = self._runtime_continuity.get(session_id) or {}
+            payload = session_payloads.get(_normalize_runtime_continuity_lane(lane))
             return dict(payload) if payload is not None else None
+
+    def get_latest_runtime_continuity(self, session_id: str) -> Dict[str, Any] | None:
+        """Return the most recently updated active continuity payload across lanes."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            session_payloads = self._runtime_continuity.get(session_id) or {}
+            if not isinstance(session_payloads, dict) or not session_payloads:
+                return None
+
+            latest_payload: Dict[str, Any] | None = None
+            latest_sort_key = ""
+            for lane_payload in session_payloads.values():
+                if not isinstance(lane_payload, dict):
+                    continue
+                status = str(lane_payload.get("status") or "").strip().lower()
+                if status != "active":
+                    continue
+                sort_key = str(
+                    lane_payload.get("updated_at")
+                    or lane_payload.get("created_at")
+                    or ""
+                )
+                if latest_payload is None or sort_key >= latest_sort_key:
+                    latest_payload = dict(lane_payload)
+                    latest_sort_key = sort_key
+            return latest_payload
 
     def bind_runtime_continuity(
         self,
         session_id: str,
         *,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
         runtime: str,
         continuity_id: str,
         status: str = "active",
@@ -1265,8 +1483,11 @@ class SessionStore:
         with self._lock:
             self._ensure_loaded_locked()
             now = _now().isoformat()
-            existing = dict(self._runtime_continuity.get(session_id) or {})
+            normalized_lane = _normalize_runtime_continuity_lane(lane)
+            session_payloads = self._runtime_continuity.setdefault(session_id, {})
+            existing = dict(session_payloads.get(normalized_lane) or {})
             payload = {
+                "lane": normalized_lane,
                 "runtime": runtime,
                 "continuity_id": continuity_id,
                 "status": status,
@@ -1277,14 +1498,21 @@ class SessionStore:
                 "created_at": existing.get("created_at") or now,
                 "updated_at": now,
             }
-            self._runtime_continuity[session_id] = payload
+            session_payloads[normalized_lane] = payload
             self._save()
 
-    def invalidate_runtime_continuity(self, session_id: str, *, reason: str) -> bool:
+    def invalidate_runtime_continuity(
+        self,
+        session_id: str,
+        *,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
+        reason: str,
+    ) -> bool:
         """Mark one runtime continuity binding invalidated but keep it for diagnostics."""
         with self._lock:
             self._ensure_loaded_locked()
-            payload = self._runtime_continuity.get(session_id)
+            session_payloads = self._runtime_continuity.get(session_id) or {}
+            payload = session_payloads.get(_normalize_runtime_continuity_lane(lane))
             if payload is None:
                 return False
             payload["status"] = "invalidated"
@@ -1293,27 +1521,66 @@ class SessionStore:
             self._save()
             return True
 
-    def clear_runtime_continuity(self, session_id: str) -> bool:
+    def clear_runtime_continuity(
+        self,
+        session_id: str,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
+    ) -> bool:
         """Delete one runtime continuity binding entirely."""
         with self._lock:
             self._ensure_loaded_locked()
-            if session_id not in self._runtime_continuity:
+            session_payloads = self._runtime_continuity.get(session_id)
+            if not isinstance(session_payloads, dict):
                 return False
-            self._runtime_continuity.pop(session_id, None)
+            normalized_lane = _normalize_runtime_continuity_lane(lane)
+            if normalized_lane not in session_payloads:
+                return False
+            session_payloads.pop(normalized_lane, None)
+            if not session_payloads:
+                self._runtime_continuity.pop(session_id, None)
             self._save()
             return True
 
-    def get_recent_task_snapshot(self, session_id: str) -> Dict[str, Any] | None:
+    def get_recent_task_snapshot(
+        self,
+        session_id: str,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
+    ) -> Dict[str, Any] | None:
         """Return the persisted short-term task snapshot for one session."""
         with self._lock:
             self._ensure_loaded_locked()
-            payload = self._recent_task_snapshots.get(session_id)
+            session_payloads = self._recent_task_snapshots.get(session_id) or {}
+            payload = session_payloads.get(_normalize_runtime_continuity_lane(lane))
             return dict(payload) if payload is not None else None
+
+    def get_latest_recent_task_snapshot(self, session_id: str) -> Dict[str, Any] | None:
+        """Return the most recently updated snapshot across all lanes for one session."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            session_payloads = self._recent_task_snapshots.get(session_id) or {}
+            if not isinstance(session_payloads, dict) or not session_payloads:
+                return None
+
+            latest_payload: Dict[str, Any] | None = None
+            latest_sort_key = ""
+            for lane_payload in session_payloads.values():
+                if not isinstance(lane_payload, dict):
+                    continue
+                sort_key = str(
+                    lane_payload.get("updated_at")
+                    or lane_payload.get("created_at")
+                    or ""
+                )
+                if latest_payload is None or sort_key >= latest_sort_key:
+                    latest_payload = dict(lane_payload)
+                    latest_sort_key = sort_key
+            return latest_payload
 
     def bind_recent_task_snapshot(
         self,
         session_id: str,
         *,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
         user_request: str,
         status: str,
         assistant_summary: str | None = None,
@@ -1323,7 +1590,11 @@ class SessionStore:
         """Create or update one short-term task snapshot for one session."""
         with self._lock:
             self._ensure_loaded_locked()
-            existing = dict(self._recent_task_snapshots.get(session_id) or {})
+            normalized_lane = _normalize_runtime_continuity_lane(lane)
+            session_payloads = self._recent_task_snapshots.setdefault(session_id, {})
+            existing = dict(session_payloads.get(normalized_lane) or {})
+            normalized_metadata = dict(metadata or {})
+            normalized_metadata["lane"] = normalized_lane
             payload = {
                 "user_request": str(user_request or "").strip(),
                 "status": str(status or "").strip() or "running",
@@ -1333,20 +1604,134 @@ class SessionStore:
                     for item in (follow_up_tasks or [])
                     if str(item).strip()
                 ],
-                "metadata": dict(metadata or {}),
+                "metadata": normalized_metadata,
                 "created_at": existing.get("created_at") or _now().isoformat(),
                 "updated_at": _now().isoformat(),
             }
-            self._recent_task_snapshots[session_id] = payload
+            session_payloads[normalized_lane] = payload
             self._save()
 
-    def clear_recent_task_snapshot(self, session_id: str) -> bool:
+    def clear_recent_task_snapshot(
+        self,
+        session_id: str,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
+    ) -> bool:
         """Delete one short-term task snapshot entirely."""
         with self._lock:
             self._ensure_loaded_locked()
-            if session_id not in self._recent_task_snapshots:
+            session_payloads = self._recent_task_snapshots.get(session_id)
+            if not isinstance(session_payloads, dict):
                 return False
-            self._recent_task_snapshots.pop(session_id, None)
+            normalized_lane = _normalize_runtime_continuity_lane(lane)
+            if normalized_lane not in session_payloads:
+                return False
+            session_payloads.pop(normalized_lane, None)
+            if not session_payloads:
+                self._recent_task_snapshots.pop(session_id, None)
+            self._save()
+            return True
+
+    def get_session_job(
+        self,
+        session_id: str,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
+    ) -> Dict[str, Any] | None:
+        """Return the persisted active job payload for one session lane."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            session_payloads = self._session_jobs.get(session_id) or {}
+            payload = session_payloads.get(_normalize_runtime_continuity_lane(lane))
+            return dict(payload) if payload is not None else None
+
+    def list_session_jobs(
+        self,
+        session_id: str,
+        status: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """List active jobs for one session, newest first."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            session_payloads = self._session_jobs.get(session_id) or {}
+            jobs = [
+                dict(payload)
+                for payload in session_payloads.values()
+                if isinstance(payload, dict)
+            ]
+            if status is not None:
+                normalized_status = str(status or "").strip().lower()
+                jobs = [
+                    payload
+                    for payload in jobs
+                    if str(payload.get("status") or "").strip().lower() == normalized_status
+                ]
+            jobs.sort(
+                key=lambda payload: (
+                    str(payload.get("updated_at") or ""),
+                    str(payload.get("requested_at") or ""),
+                    str(payload.get("lane") or ""),
+                ),
+                reverse=True,
+            )
+            return jobs
+
+    def bind_session_job(
+        self,
+        session_id: str,
+        *,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
+        job_id: str,
+        task_id: str,
+        status: str,
+        summary: str | None = None,
+        skill_refs: list[str] | None = None,
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        """Create or update one active worker job binding for a session lane."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            normalized_lane = _normalize_runtime_continuity_lane(lane)
+            session_payloads = self._session_jobs.setdefault(session_id, {})
+            existing = dict(session_payloads.get(normalized_lane) or {})
+            now = _now().isoformat()
+            requested_at = (
+                str(existing.get("requested_at") or now)
+                if str(existing.get("job_id") or "") == str(job_id)
+                else now
+            )
+            session_payloads[normalized_lane] = {
+                "lane": normalized_lane,
+                "job_id": str(job_id).strip(),
+                "task_id": str(task_id).strip(),
+                "status": str(status or "").strip() or "running",
+                "summary": str(summary or "").strip(),
+                "skill_refs": [
+                    str(item).strip()
+                    for item in (skill_refs or [])
+                    if str(item).strip()
+                ],
+                "metadata": dict(metadata or {}),
+                "requested_at": requested_at,
+                "updated_at": now,
+            }
+            self._save()
+
+    def clear_session_job(
+        self,
+        session_id: str,
+        lane: str = _DEFAULT_RUNTIME_CONTINUITY_LANE,
+    ) -> bool:
+        """Delete one active worker job binding entirely."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            session_payloads = self._session_jobs.get(session_id)
+            if not isinstance(session_payloads, dict):
+                return False
+            normalized_lane = _normalize_runtime_continuity_lane(lane)
+            if normalized_lane not in session_payloads:
+                return False
+            session_payloads.pop(normalized_lane, None)
+            if not session_payloads:
+                self._session_jobs.pop(session_id, None)
             self._save()
             return True
 

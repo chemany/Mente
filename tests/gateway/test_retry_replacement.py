@@ -119,6 +119,7 @@ async def test_gateway_retry_invalidates_runtime_continuity_before_replay(tmp_pa
     async def fake_handle_message(event):
         gw.session_store.invalidate_runtime_continuity.assert_called_once_with(
             "test-session",
+            lane="director",
             reason="retry_rewrite",
         )
         assert event.text == "real message"

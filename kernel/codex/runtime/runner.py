@@ -233,13 +233,16 @@ def _extract_thread_id_from_jsonl(raw_output: str) -> str | None:
 class KernelRunner:
     """Own vendored execution orchestration for kernel-backed runs."""
 
+    _DEFAULT_SANDBOX = "workspace-write"
+    _DEFAULT_APPROVAL_POLICY = "never"
+
     def __init__(
         self,
         transport: KernelTransport | None = None,
         *,
         codex_binary: str | None = None,
-        sandbox: str = "workspace-write",
-        approval_policy: str = "never",
+        sandbox: str | None = None,
+        approval_policy: str | None = None,
         event_callback: ExecutionEventCallback | None = None,
         cancel_event: threading.Event | None = None,
     ) -> None:
@@ -261,6 +264,8 @@ class KernelRunner:
         schema_path: Path | None = None
         runtime_workdir: Path | None = None
         try:
+            sandbox = self._resolve_sandbox(runtime_config)
+            approval_policy = self._resolve_approval_policy(runtime_config)
             with tempfile.NamedTemporaryFile(
                 prefix="mente-codex-",
                 suffix=".txt",
@@ -296,8 +301,8 @@ class KernelRunner:
                         payload=payload,
                         session=session,
                         runtime_config=runtime_config,
-                        sandbox=self.sandbox,
-                        approval_policy=self.approval_policy,
+                        sandbox=sandbox,
+                        approval_policy=approval_policy,
                         cwd=payload.workspace,
                         workdir=str(runtime_workdir),
                         output_last_message=str(output_path),
@@ -325,8 +330,8 @@ class KernelRunner:
                     payload=payload,
                     session=session,
                     runtime_config=runtime_config,
-                    sandbox=self.sandbox,
-                    approval_policy=self.approval_policy,
+                    sandbox=sandbox,
+                    approval_policy=approval_policy,
                     cwd=payload.workspace,
                     workdir=str(runtime_workdir),
                     output_last_message=str(output_path),
@@ -378,6 +383,22 @@ class KernelRunner:
                     pass
             if runtime_workdir is not None:
                 shutil.rmtree(runtime_workdir, ignore_errors=True)
+
+    def _resolve_sandbox(self, runtime_config: Any) -> str:
+        if isinstance(self.sandbox, str) and self.sandbox.strip():
+            return self.sandbox.strip()
+        configured = getattr(runtime_config, "sandbox", None)
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip()
+        return self._DEFAULT_SANDBOX
+
+    def _resolve_approval_policy(self, runtime_config: Any) -> str:
+        if isinstance(self.approval_policy, str) and self.approval_policy.strip():
+            return self.approval_policy.strip()
+        configured = getattr(runtime_config, "approval_policy", None)
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip()
+        return self._DEFAULT_APPROVAL_POLICY
 
     def _normalize_transport_response(self, response) -> KernelExecutionResult:
         structured_output = parse_structured_output(response.raw_output)

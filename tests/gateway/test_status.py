@@ -19,6 +19,38 @@ class TestGatewayPidState:
         assert isinstance(payload["argv"], list)
         assert payload["argv"]
 
+    def test_write_pid_file_prefers_live_proc_cmdline_over_wrapper_sys_argv(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr(status.sys, "argv", ["/home/jason/.local/bin/hermes", "gateway"])
+        monkeypatch.setattr(
+            status,
+            "_read_process_argv",
+            lambda pid: [
+                "/root/code/Mente/.venv/bin/python",
+                "-m",
+                "hermes_cli.main",
+                "gateway",
+                "run",
+                "--replace",
+            ],
+        )
+        monkeypatch.setattr(status, "_read_process_cwd", lambda pid: "/root/code/Mente")
+
+        status.write_pid_file()
+
+        payload = json.loads((tmp_path / "gateway.pid").read_text())
+        assert payload["argv"] == [
+            "/root/code/Mente/.venv/bin/python",
+            "-m",
+            "hermes_cli.main",
+            "gateway",
+            "run",
+            "--replace",
+        ]
+        assert payload["argv_source"] == "proc_cmdline"
+        assert payload["cwd"] == "/root/code/Mente"
+        assert payload["cwd_source"] == "proc_cwd"
+
     def test_write_pid_file_is_atomic_against_concurrent_writers(self, tmp_path, monkeypatch):
         """Regression: two concurrent --replace invocations must not both win.
 
@@ -173,6 +205,33 @@ class TestGatewayPidState:
         assert status.get_running_pid() is None
         assert not pid_path.exists()
 
+    def test_get_running_pid_marks_live_runtime_status_stale_without_runtime_lock(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "gateway.pid").write_text(json.dumps({
+            "pid": os.getpid(),
+            "kind": "mente-gateway",
+            "argv": ["python", "-m", "hermes_cli.main", "gateway"],
+            "start_time": 123,
+        }))
+        (tmp_path / "gateway_state.json").write_text(json.dumps({
+            "pid": os.getpid(),
+            "kind": "hermes-gateway",
+            "argv": ["/home/jason/.local/bin/hermes", "gateway"],
+            "gateway_state": "running",
+            "exit_reason": None,
+            "updated_at": "2025-01-01T00:00:00Z",
+            "platforms": {},
+        }))
+
+        assert status.get_running_pid() is None
+
+        payload = status.read_runtime_status()
+        assert payload["gateway_state"] == "stopped"
+        assert payload["exit_reason"] == "Gateway process is not running"
+        assert payload["stale"] is True
+        assert payload["stale_detected_at"]
+        assert payload["updated_at"] == "2025-01-01T00:00:00Z"
+
     def test_get_running_pid_cleans_stale_metadata_from_dead_foreign_pid(self, tmp_path, monkeypatch):
         """Stale PID file from a *different* PID (crashed process) must still be cleaned.
 
@@ -248,15 +307,21 @@ class TestGatewayRuntimeStatus:
     def test_write_runtime_status_overwrites_stale_pid_on_restart(self, tmp_path, monkeypatch):
         """Regression: setdefault() preserved stale PID from previous process (#1631)."""
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr(status.sys, "argv", ["mente", "gateway", "run"])
+        monkeypatch.setattr(status, "_read_process_argv", lambda pid: None)
+        monkeypatch.setattr(status, "_read_systemd_execstart_argv", lambda: None)
 
         # Simulate a previous gateway run that left a state file with a stale PID
         state_path = tmp_path / "gateway_state.json"
         state_path.write_text(json.dumps({
             "pid": 99999,
             "start_time": 1000.0,
-            "kind": "mente-gateway",
+            "kind": "hermes-gateway",
+            "argv": ["/home/jason/.local/bin/hermes", "gateway"],
             "platforms": {},
             "updated_at": "2025-01-01T00:00:00Z",
+            "stale": True,
+            "stale_detected_at": "2025-01-01T01:00:00Z",
         }))
 
         status.write_runtime_status(gateway_state="running")
@@ -264,6 +329,98 @@ class TestGatewayRuntimeStatus:
         payload = status.read_runtime_status()
         assert payload["pid"] == os.getpid(), "PID should be overwritten, not preserved via setdefault"
         assert payload["start_time"] != 1000.0, "start_time should be overwritten on restart"
+        assert payload["kind"] == "mente-gateway"
+        assert payload["argv"] == ["mente", "gateway", "run"]
+        assert "stale" not in payload
+        assert "stale_detected_at" not in payload
+
+    def test_write_runtime_status_falls_back_to_systemd_execstart_when_proc_cmdline_unavailable(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr(status.sys, "argv", ["/home/jason/.local/bin/hermes", "gateway"])
+        monkeypatch.setattr(status, "_read_process_argv", lambda pid: None)
+        monkeypatch.setattr(
+            status,
+            "_read_systemd_execstart_argv",
+            lambda: [
+                "/root/code/Mente/.venv/bin/python",
+                "-m",
+                "hermes_cli.main",
+                "gateway",
+                "run",
+                "--replace",
+            ],
+        )
+        monkeypatch.setattr(status, "_read_systemd_working_directory", lambda: "/root/code/Mente")
+
+        status.write_runtime_status(gateway_state="running")
+
+        payload = status.read_runtime_status()
+        assert payload["argv"] == [
+            "/root/code/Mente/.venv/bin/python",
+            "-m",
+            "hermes_cli.main",
+            "gateway",
+            "run",
+            "--replace",
+        ]
+        assert payload["argv_source"] == "systemd_execstart"
+        assert payload["cwd"] == "/root/code/Mente"
+        assert payload["cwd_source"] == "systemd_working_directory"
+
+    def test_read_runtime_status_normalizes_live_wrapper_argv_from_proc_cmdline(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        state_path = tmp_path / "gateway_state.json"
+        state_path.write_text(json.dumps({
+            "pid": os.getpid(),
+            "start_time": 123,
+            "kind": "mente-gateway",
+            "argv": ["/home/jason/.local/bin/hermes", "gateway"],
+            "argv_source": "sys_argv",
+            "cwd": "/home/jason/.mente",
+            "cwd_source": "os_cwd",
+            "gateway_state": "running",
+            "platforms": {},
+            "updated_at": "2025-01-01T00:00:00Z",
+        }))
+        monkeypatch.setattr(status.os, "kill", lambda pid, sig: None)
+        monkeypatch.setattr(status, "_get_process_start_time", lambda pid: 123)
+        monkeypatch.setattr(
+            status,
+            "_read_process_argv",
+            lambda pid: [
+                "/root/code/Mente/.venv/bin/python",
+                "-m",
+                "hermes_cli.main",
+                "gateway",
+                "run",
+                "--replace",
+            ],
+        )
+        monkeypatch.setattr(status, "_read_process_cwd", lambda pid: "/root/code/Mente")
+
+        payload = status.read_runtime_status()
+
+        assert payload["argv"] == [
+            "/root/code/Mente/.venv/bin/python",
+            "-m",
+            "hermes_cli.main",
+            "gateway",
+            "run",
+            "--replace",
+        ]
+        assert payload["argv_source"] == "proc_cmdline"
+        assert payload["cwd"] == "/root/code/Mente"
+        assert payload["cwd_source"] == "proc_cwd"
+
+        persisted = json.loads(state_path.read_text())
+        assert persisted["argv"] == payload["argv"]
+        assert persisted["argv_source"] == "proc_cmdline"
+        assert persisted["cwd"] == "/root/code/Mente"
+        assert persisted["cwd_source"] == "proc_cwd"
 
     def test_write_runtime_status_records_platform_failure(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))

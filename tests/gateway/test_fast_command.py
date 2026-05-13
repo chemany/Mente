@@ -144,6 +144,7 @@ async def test_run_agent_passes_priority_processing_to_gateway_agent(monkeypatch
     runner = _make_runner()
 
     (tmp_path / "config.yaml").write_text("agent:\n  service_tier: fast\n", encoding="utf-8")
+    monkeypatch.delenv("HERMES_GATEWAY_EXECUTOR", raising=False)
     monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
     monkeypatch.setattr(gateway_run, "_env_path", tmp_path / ".env")
     monkeypatch.setattr(gateway_run, "load_dotenv", lambda *args, **kwargs: None)

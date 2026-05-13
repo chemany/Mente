@@ -417,7 +417,7 @@ def test_format_mente_skill_review_outcome_patch_not_allowed_is_silent():
 
 
 @pytest.mark.asyncio
-async def test_run_agent_registers_post_delivery_reviews_and_sends_compact_followups(monkeypatch):
+async def test_run_agent_does_not_register_post_delivery_review_followups_for_gateway_chats(monkeypatch):
     monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
     monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
 
@@ -507,21 +507,10 @@ async def test_run_agent_registers_post_delivery_reviews_and_sends_compact_follo
     assert review_calls == []
     assert adapter.sent == []
 
-    callback = adapter.pop_post_delivery_callback(
-        "agent:main:feishu:dm:oc_test",
-        generation=7,
-    )
-    assert callable(callback)
-
-    callback()
-    await asyncio.sleep(0)
-
-    assert review_calls == ["task-1"]
-    assert skill_review_calls == ["task-1"]
-    assert [entry["content"] for entry in adapter.sent] == [
-        "💾 记忆复盘已保存（1 条）",
-        "🛠️ 技能复盘已生成建议：coding/python-debug",
-    ]
+    assert getattr(adapter, "_post_delivery_callbacks", {}) == {}
+    assert review_calls == []
+    assert skill_review_calls == []
+    assert adapter.sent == []
 
 
 @pytest.mark.asyncio
@@ -831,6 +820,74 @@ async def test_run_agent_mente_host_timeout_cancels_stalled_turn(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_mente_passes_content_publishing_timeout_config(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+    monkeypatch.setattr(
+        gateway_run,
+        "_load_gateway_config",
+        lambda: {"agent": {"mente_content_publishing_timeout": 321}},
+        raising=False,
+    )
+
+    captured = {}
+
+    monkeypatch.setattr(
+        gateway_run,
+        "_resolve_mente_gateway_host_timeout_seconds",
+        lambda **kwargs: captured.setdefault(
+            "content_publishing_timeout_seconds",
+            kwargs.get("content_publishing_timeout_seconds"),
+        ),
+        raising=False,
+    )
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+        }
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _fake_to_thread)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=13,
+    )
+
+    assert result["final_response"] == "done"
+    assert captured["content_publishing_timeout_seconds"] == 321
+
+
+@pytest.mark.asyncio
 async def test_run_agent_mente_host_timeout_recovers_publishing_draft_when_source_exists(monkeypatch):
     monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
     monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
@@ -1050,7 +1107,12 @@ async def test_run_agent_mente_emits_compact_progress_without_raw_command_detail
         assert callable(event_callback)
         event_callback(
             "kernel.codex.agent_message.completed",
-            {"item_id": "msg-1", "status": "completed", "text": agent_message},
+            {
+                "item_id": "msg-1",
+                "status": "completed",
+                "phase": "commentary",
+                "text": agent_message,
+            },
         )
         event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
         event_callback("kernel.codex.mcp_tool.completed", {"tool": tool_name})
@@ -1140,7 +1202,12 @@ async def test_run_agent_mente_interrupted_failure_includes_recent_progress_summ
         assert callable(event_callback)
         event_callback(
             "kernel.codex.agent_message.completed",
-            {"item_id": "msg-1", "status": "completed", "text": agent_message},
+            {
+                "item_id": "msg-1",
+                "status": "completed",
+                "phase": "commentary",
+                "text": agent_message,
+            },
         )
         event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
         event_callback("kernel.codex.command.started", {"command": command})
@@ -1217,7 +1284,12 @@ async def test_run_agent_mente_long_running_emits_phase_update(monkeypatch):
         assert callable(event_callback)
         event_callback(
             "kernel.codex.agent_message.completed",
-            {"item_id": "msg-1", "status": "completed", "text": agent_message},
+            {
+                "item_id": "msg-1",
+                "status": "completed",
+                "phase": "commentary",
+                "text": agent_message,
+            },
         )
         event_callback("kernel.codex.mcp_tool.started", {"tool": tool_name})
         event_callback("kernel.codex.command.started", {"command": command})
@@ -1294,7 +1366,12 @@ async def test_run_agent_mente_long_running_reuses_editable_phase_update_message
         assert callable(event_callback)
         event_callback(
             "kernel.codex.agent_message.completed",
-            {"item_id": "msg-1", "status": "completed", "text": agent_message},
+            {
+                "item_id": "msg-1",
+                "status": "completed",
+                "phase": "commentary",
+                "text": agent_message,
+            },
         )
         event_callback("kernel.codex.command.started", {"command": command})
         return {
@@ -1414,12 +1491,85 @@ async def test_run_agent_mente_progress_details_include_command_explanation(monk
     assert "💻 Bash · sed SKILL.md" in progress_text
 
 
-def test_resolve_mente_gateway_progress_detail_surfaces_agent_message_text():
+@pytest.mark.asyncio
+async def test_run_agent_mente_surfaces_lane_progress_in_director_voice(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _direct_to_thread)
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        event_callback(
+            "kernel.codex.mcp_tool.started",
+            {"tool": "mcp__mente__mente_memory_query"},
+        )
+        event_callback(
+            "kernel.codex.command.started",
+            {"command": "/bin/bash -lc 'rg -n \"十三碳二酸\" agent.log'"},
+        )
+        return {
+            "final_response": "done",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+            "failed": False,
+            "failure_reason": None,
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="深度研究一下采用菜籽油制备十三碳二酸的可行性",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=15,
+    )
+
+    assert result["failed"] is False
+    progress_text = "\n".join(
+        [entry["content"] for entry in adapter.sent] + [entry["content"] for entry in adapter.edits]
+    )
+    assert "市场部正在调用工具：mente_memory_query" in progress_text
+    assert "市场部正在执行：Bash · rg 十三碳二酸 agent.log" in progress_text
+    assert "kernel.codex.command.started" not in progress_text
+
+
+def test_resolve_mente_gateway_progress_detail_surfaces_commentary_agent_message_text():
     detail = gateway_run._resolve_mente_gateway_progress_detail(
         "kernel.codex.agent_message.completed",
         {
             "item_id": "msg-1",
             "status": "completed",
+            "phase": "commentary",
             "text": "先确认 SSH 别名，再上远端看实际部署目录。",
         },
     )
@@ -1439,6 +1589,93 @@ def test_resolve_mente_gateway_progress_detail_surfaces_updated_agent_message_te
     )
 
     assert detail == "我先读取技能说明，确认这个工作流的标准入口。"
+
+
+def test_resolve_mente_gateway_progress_detail_ignores_non_commentary_agent_message():
+    detail = gateway_run._resolve_mente_gateway_progress_detail(
+        "kernel.codex.agent_message.completed",
+        {
+            "item_id": "msg-1",
+            "status": "completed",
+            "text": "我是 Claude，由 Anthropic 开发的大语言模型。",
+        },
+    )
+
+    assert detail is None
+
+
+@pytest.mark.asyncio
+async def test_run_agent_mente_does_not_emit_non_commentary_agent_message_as_progress(monkeypatch):
+    monkeypatch.setenv("HERMES_GATEWAY_EXECUTOR", "mente")
+    monkeypatch.setattr(gateway_run.GatewayRunner, "_get_proxy_url", lambda self: None)
+
+    async def _direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_run.asyncio, "to_thread", _direct_to_thread)
+
+    final_agent_message = "我是 Claude，由 Anthropic 开发的大语言模型。"
+
+    def _fake_mente_turn(**kwargs):
+        event_callback = kwargs.get("event_callback")
+        assert callable(event_callback)
+        event_callback(
+            "kernel.codex.agent_message.completed",
+            {
+                "item_id": "msg-1",
+                "status": "completed",
+                "text": final_agent_message,
+            },
+        )
+        return {
+            "final_response": "我是 Mente，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。",
+            "last_reasoning": None,
+            "messages": [],
+            "api_calls": 0,
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "session_id": "session-1",
+            "response_previewed": False,
+            "mente_task_id": "task-1",
+            "failed": False,
+            "failure_reason": None,
+        }
+
+    monkeypatch.setattr(gateway_run, "_run_mente_gateway_turn", _fake_mente_turn, raising=False)
+
+    adapter = _ProgressAdapter()
+    runner = _make_runner()
+    runner.adapters = {Platform.FEISHU: adapter}
+    runner._is_session_run_current = lambda *_args, **_kwargs: True
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = await runner._run_agent(
+        message="你是什么大模型",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        run_generation=15,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert result["final_response"].startswith("我是 Mente")
+    progress_text = "\n".join(
+        [entry["content"] for entry in adapter.sent] + [entry["content"] for entry in adapter.edits]
+    )
+    assert final_agent_message not in progress_text
 
 
 def test_resolve_mente_gateway_progress_explanation_explains_skill_reads():
@@ -1592,13 +1829,5 @@ async def test_run_agent_flag_off_post_delivery_reviews_stay_silent_and_do_not_b
 
     assert result["final_response"] == "done"
 
-    callback = adapter.pop_post_delivery_callback(
-        "agent:main:feishu:dm:oc_test",
-        generation=8,
-    )
-    assert callable(callback)
-
-    callback()
-    await asyncio.sleep(0)
-
+    assert getattr(adapter, "_post_delivery_callbacks", {}) == {}
     assert adapter.sent == []

@@ -89,6 +89,9 @@ COMMAND_REGISTRY: list[CommandDef] = [
                aliases=("bg", "btw"), args_hint="<prompt>"),
     CommandDef("agents", "Show active agents and running tasks", "Session",
                aliases=("tasks",)),
+    CommandDef("agent-runtime", "Inspect or clean one agent runtime", "Session",
+               aliases=("agent_runtime",), args_hint="<sessions|reset|clear> <agent>",
+               subcommands=("sessions", "reset", "clear")),
     CommandDef("queue", "Queue a prompt for the next turn (doesn't interrupt)", "Session",
                aliases=("q",), args_hint="<prompt>"),
     CommandDef("steer", "Inject a message after the next tool call without interrupting", "Session",
@@ -291,6 +294,7 @@ def is_gateway_known_command(name: str | None) -> bool:
 ACTIVE_SESSION_BYPASS_COMMANDS: frozenset[str] = frozenset(
     {
         "agents",
+        "agent-runtime",
         "approve",
         "background",
         "commands",

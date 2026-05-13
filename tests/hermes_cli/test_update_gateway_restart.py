@@ -965,6 +965,27 @@ class TestFindGatewayPidsExclude:
 
         assert pids == [100]
 
+    def test_ignores_gateway_management_commands(self, monkeypatch):
+        monkeypatch.setattr(gateway_cli, "is_windows", lambda: False)
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                cmd, 0,
+                stdout=(
+                    "100 /bin/bash -lc mente gateway status\n"
+                    "200 /Users/dgrieco/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main gateway run --replace\n"
+                ),
+                stderr="",
+            )
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+        monkeypatch.setattr("os.getpid", lambda: 999)
+        monkeypatch.setattr(gateway_cli, "_get_service_pids", lambda: set())
+
+        pids = gateway_cli.find_gateway_pids()
+
+        assert pids == [200]
+
 
 # ---------------------------------------------------------------------------
 # Gateway mode writes exit code before restart (#8300)

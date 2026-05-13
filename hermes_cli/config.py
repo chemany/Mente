@@ -441,6 +441,11 @@ DEFAULT_CONFIG = {
         # (60+ tool iterations with tiny output) before users assume the
         # bot is dead and /restart.
         "gateway_notify_interval": 180,
+        # Host-side timeout for Mente-managed content publishing gateway tasks
+        # (seconds).  0 = disabled. Keep this separate from the general
+        # gateway inactivity timeout because publishing tasks may be actively
+        # working for a long time without being "hung".
+        "mente_content_publishing_timeout": 0,
         # How user-attached images are presented to the main model on each turn.
         #   "auto"   — attach natively when the active model reports
         #              supports_vision=True AND the user hasn't explicitly
@@ -729,6 +734,9 @@ DEFAULT_CONFIG = {
     "dashboard": {
         "theme": "default",  # Dashboard visual theme: "default", "midnight", "ember", "mono", "cyberpunk", "rose"
         "embedded_chat": True,  # Show the in-browser Chat tab backed by the real TUI
+        "autostart_on_chat_launch": True,  # Auto-start the dashboard in background for interactive `mente` chat launches
+        "host": "127.0.0.1",  # Bind address used by `mente dashboard` and chat auto-start
+        "port": 9119,  # Port used by `mente dashboard` and chat auto-start
     },
 
     # Privacy settings
@@ -2485,6 +2493,7 @@ _KNOWN_ROOT_KEYS = {
     "fallback_providers", "credential_pool_strategies", "toolsets",
     "agent", "terminal", "display", "compression", "delegation",
     "auxiliary", "custom_providers", "context", "memory", "gateway",
+    "codex",
     "sessions",
 }
 

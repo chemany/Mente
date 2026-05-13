@@ -107,10 +107,12 @@ class TestResolveCommand:
         assert resolve_command("set-home").name == "sethome"
         assert resolve_command("reload_mcp").name == "reload-mcp"
         assert resolve_command("tasks").name == "agents"
+        assert resolve_command("agent_runtime").name == "agent-runtime"
 
     def test_leading_slash_stripped(self):
         assert resolve_command("/help").name == "help"
         assert resolve_command("/bg").name == "background"
+        assert resolve_command("/agent-runtime").name == "agent-runtime"
 
     def test_unknown_returns_none(self):
         assert resolve_command("nonexistent") is None
@@ -142,6 +144,7 @@ class TestDerivedDicts:
         assert "/exit" in COMMANDS
         assert "/reload_mcp" in COMMANDS
         assert "/gateway" in COMMANDS
+        assert "/agent_runtime" in COMMANDS
 
     def test_commands_by_category_covers_all_categories(self):
         registry_categories = {cmd.category for cmd in COMMAND_REGISTRY if not cmd.gateway_only}
@@ -250,6 +253,7 @@ class TestSlackSubcommandMap:
         mapping = slack_subcommand_map()
         assert "bg" in mapping
         assert "reset" in mapping
+        assert "agent_runtime" in mapping
 
     def test_excludes_cli_only_without_config_gate(self):
         mapping = slack_subcommand_map()

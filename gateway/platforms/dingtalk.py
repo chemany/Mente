@@ -27,6 +27,7 @@ Configuration in config.yaml:
 """
 
 import asyncio
+from types import SimpleNamespace
 import json
 import logging
 import os
@@ -81,11 +82,28 @@ try:
 except ImportError:
     CARD_SDK_AVAILABLE = False
     dingtalk_card_client = None
-    dingtalk_card_models = None
+    class _CardSDKModel:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    dingtalk_card_models = SimpleNamespace(
+        CreateCardRequest=_CardSDKModel,
+        CreateCardRequestCardData=_CardSDKModel,
+        CreateCardRequestImGroupOpenSpaceModel=_CardSDKModel,
+        CreateCardRequestImRobotOpenSpaceModel=_CardSDKModel,
+        CreateCardHeaders=_CardSDKModel,
+        DeliverCardRequest=_CardSDKModel,
+        DeliverCardRequestImGroupOpenDeliverModel=_CardSDKModel,
+        DeliverCardRequestImRobotOpenDeliverModel=_CardSDKModel,
+        DeliverCardHeaders=_CardSDKModel,
+        StreamingUpdateRequest=_CardSDKModel,
+        StreamingUpdateHeaders=_CardSDKModel,
+    )
     dingtalk_robot_client = None
     dingtalk_robot_models = None
     open_api_models = None
-    tea_util_models = None
+    tea_util_models = SimpleNamespace(RuntimeOptions=_CardSDKModel)
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.helpers import MessageDeduplicator
@@ -1301,8 +1319,14 @@ class _IncomingHandler(
             if isinstance(data, str):
                 data = json.loads(data)
 
-            # Parse dict into ChatbotMessage using SDK's from_dict
-            chatbot_msg = ChatbotMessage.from_dict(data)
+            # Parse dict into ChatbotMessage using SDK's from_dict when the
+            # dependency is present. Tests and degraded environments can still
+            # exercise the adapter without the SDK by falling back to a simple
+            # attribute carrier built from the callback payload.
+            if ChatbotMessage is not None and hasattr(ChatbotMessage, "from_dict"):
+                chatbot_msg = ChatbotMessage.from_dict(data)
+            else:
+                chatbot_msg = _build_chatbot_message_fallback(data)
 
             # Ensure session_webhook is populated even if the SDK's
             # from_dict() did not map it (field name mismatch across
@@ -1360,3 +1384,31 @@ class _IncomingHandler(
             logger.exception(
                 "[%s] Error processing incoming message", self._adapter.name
             )
+
+
+def _build_chatbot_message_fallback(data: object) -> SimpleNamespace:
+    """Build a minimal ChatbotMessage-like object from raw callback data."""
+    payload = data if isinstance(data, dict) else {}
+    return SimpleNamespace(
+        msgtype=payload.get("msgtype"),
+        text=payload.get("text"),
+        rich_text=payload.get("richText"),
+        rich_text_content=payload.get("richTextContent"),
+        sender_id=payload.get("senderId") or payload.get("sender_id") or "",
+        sender_staff_id=payload.get("senderStaffId") or payload.get("sender_staff_id") or "",
+        sender_nick=payload.get("senderNick") or payload.get("sender_nick") or "",
+        conversation_id=payload.get("conversationId") or payload.get("conversation_id") or "",
+        conversation_type=payload.get("conversationType") or payload.get("conversation_type") or "1",
+        conversation_title=payload.get("conversationTitle") or payload.get("conversation_title"),
+        session_webhook=payload.get("sessionWebhook") or payload.get("session_webhook") or "",
+        session_webhook_expired_time=payload.get("sessionWebhookExpiredTime")
+        or payload.get("session_webhook_expired_time")
+        or 0,
+        message_id=payload.get("msgId") or payload.get("messageId") or payload.get("message_id") or "",
+        create_at=payload.get("createAt") or payload.get("create_at"),
+        is_in_at_list=bool(payload.get("isInAtList") or payload.get("is_in_at_list")),
+        image_content=payload.get("imageContent") or payload.get("image_content"),
+        audio_content=payload.get("audioContent") or payload.get("audio_content"),
+        video_content=payload.get("videoContent") or payload.get("video_content"),
+        file_content=payload.get("fileContent") or payload.get("file_content"),
+    )

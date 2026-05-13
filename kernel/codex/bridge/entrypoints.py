@@ -240,6 +240,12 @@ def invoke_vendored_front_door(
                 subprocess_popen=subprocess_popen,
             )
     except OSError as exc:
+        if isinstance(exc, FileNotFoundError):
+            missing_binary = exc.filename or (command[0] if command else str(codex_binary_override or ""))
+            return CodexBridgeInvocationResult(
+                command=command,
+                backend_failure=f"runtime_not_bootstrapped:{missing_binary}",
+            )
         return CodexBridgeInvocationResult(
             command=command,
             backend_failure=f"spawn_error:{type(exc).__name__}:{exc}",

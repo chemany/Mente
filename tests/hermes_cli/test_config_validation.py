@@ -159,6 +159,23 @@ class TestMissingModelSection:
         assert not any("no 'model' section" in i.message for i in issues)
 
 
+class TestCodexNamespaceValidation:
+    """Supported Codex runtime config should be allowed at config root."""
+
+    def test_codex_root_namespace_is_accepted(self):
+        issues = validate_config_structure({
+            "codex": {
+                "runtime": {"ignore_user_config": True},
+                "profiles": {
+                    "content_publishing": {
+                        "agents": {"job_max_runtime_seconds": 420},
+                    },
+                },
+            },
+        })
+        assert issues == []
+
+
 class TestConfigIssueDataclass:
     """ConfigIssue should be a proper dataclass."""
 

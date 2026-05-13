@@ -85,6 +85,7 @@ async def test_compress_command_reports_noop_without_success_banner():
     assert "Rough transcript estimate: ~100 tokens (unchanged)" in result
     runner.session_store.invalidate_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="director",
         reason="compress_rewrite",
     )
     agent_instance.shutdown_memory_provider.assert_called_once()
@@ -127,6 +128,7 @@ async def test_compress_command_explains_when_token_estimate_rises():
     assert "denser summaries" in result
     runner.session_store.invalidate_runtime_continuity.assert_called_once_with(
         "sess-1",
+        lane="director",
         reason="compress_rewrite",
     )
     agent_instance.shutdown_memory_provider.assert_called_once()

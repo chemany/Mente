@@ -6,7 +6,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { PluginSlot } from "@/plugins";
 
-export const HERMES_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/";
+export const MENTE_DOCS_URL = "https://chemany.github.io/Mente/docs/";
 
 export default function DocsPage() {
   const { t } = useI18n();
@@ -15,7 +15,7 @@ export default function DocsPage() {
   useLayoutEffect(() => {
     setEnd(
       <a
-        href={HERMES_DOCS_URL}
+        href={MENTE_DOCS_URL}
         target="_blank"
         rel="noopener noreferrer"
         className={cn(
@@ -42,7 +42,7 @@ export default function DocsPage() {
       <PluginSlot name="docs:top" />
       <iframe
         title={t.app.nav.documentation}
-        src={HERMES_DOCS_URL}
+        src={MENTE_DOCS_URL}
         className={cn(
           "min-h-0 w-full min-w-0 flex-1",
           "rounded-sm border border-current/20",

@@ -40,13 +40,26 @@ async function getSessionToken(): Promise<string> {
     _sessionToken = injected;
     return _sessionToken;
   }
-  throw new Error("Session token not available — page must be served by the Hermes dashboard server");
+  throw new Error("Session token not available — page must be served by the Mente dashboard server");
 }
 
 export const api = {
   getStatus: () => fetchJSON<StatusResponse>("/api/status"),
   getSessions: (limit = 20, offset = 0) =>
     fetchJSON<PaginatedSessions>(`/api/sessions?limit=${limit}&offset=${offset}`),
+  getAgents: () => fetchJSON<AgentInventoryListResponse>("/api/agents"),
+  getAgentDetail: (id: string) =>
+    fetchJSON<AgentInventory>(`/api/agents/${encodeURIComponent(id)}`),
+  resetAgentRuntime: (id: string) =>
+    fetchJSON<AgentRuntimeActionResponse>(
+      `/api/agents/${encodeURIComponent(id)}/runtime/reset`,
+      { method: "POST" },
+    ),
+  clearAgentRuntime: (id: string) =>
+    fetchJSON<AgentRuntimeActionResponse>(
+      `/api/agents/${encodeURIComponent(id)}/runtime/clear`,
+      { method: "POST" },
+    ),
   getSessionMessages: (id: string) =>
     fetchJSON<SessionMessagesResponse>(`/api/sessions/${encodeURIComponent(id)}/messages`),
   deleteSession: (id: string) =>
@@ -303,6 +316,49 @@ export interface PaginatedSessions {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface AgentRuntimeInfo {
+  runtime_home: string;
+  session_count: number;
+  session_files: string[];
+  state_files: string[];
+  log_files: string[];
+  other_files: string[];
+}
+
+export interface AgentInventory {
+  agent_id: string;
+  display_name: string;
+  agent_dir: string;
+  soul_path: string;
+  lanes: string[];
+  task_profiles: string[];
+  soul_excerpt: string;
+  soul_text?: string;
+  runtime: AgentRuntimeInfo;
+}
+
+export interface AgentsSummary {
+  agent_count: number;
+  total_runtime_sessions: number;
+  agents_with_state_db: number;
+  agents_with_log_db: number;
+}
+
+export interface AgentInventoryListResponse {
+  summary: AgentsSummary;
+  agents: AgentInventory[];
+}
+
+export interface AgentRuntimeActionResponse {
+  ok: boolean;
+  action: string;
+  agent_id: string;
+  display_name: string;
+  runtime_home: string;
+  removed_entries_count: number;
+  removed_entries: string[];
 }
 
 export interface EnvVarInfo {

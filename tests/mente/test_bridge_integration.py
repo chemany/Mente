@@ -6,14 +6,16 @@ from gateway.session import SessionSource
 
 from mente.integrations import bridge as mente_bridge
 from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_tool_exposure_policy
-from mente.executors.runtime_config import RuntimeConfig
+from mente.executors.runtime_config import ModelRuntime, RuntimeConfig
 from mente.integrations.bridge import (
     build_api_server_task,
     build_cron_task,
     build_gateway_task,
+    build_tui_task,
     extract_execution_session_handoff,
     normalize_api_execution_continuity,
     recover_gateway_content_publishing_artifacts,
+    resolve_conversation_route,
     resolve_gateway_task_host_timeout_seconds,
     resolve_gateway_task_notify_interval_seconds,
     run_post_turn_memory_review,
@@ -21,14 +23,17 @@ from mente.integrations.bridge import (
     run_api_server_task,
     run_cron_task,
     run_gateway_task,
+    run_tui_task,
 )
 from mente.memory.repository import SQLiteMemoryRepository
 from mente.task_core.models import (
+    DispatchMode,
     ExecutionMode,
     ExecutionRequest,
     ExecutionResult,
     ExecutionSession,
     SessionMode,
+    TaskRole,
 )
 from mente.task_core.repository import SQLiteTaskRepository
 
@@ -107,6 +112,14 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     assert task.metadata["tool_policy"] == resolve_tool_exposure_policy(
         source="gateway", task_type="conversation"
     ).as_metadata()
+    assert task.metadata["lane"] == "director"
+    assert task.metadata["workflow_contract"]["lane"] == {
+        "name": "director",
+        "router": "deterministic_v1",
+        "resumable": True,
+    }
+    assert task.metadata["workflow_contract"]["continuity"]["scope"] == "lane"
+    assert task.metadata["workflow_contract"]["continuity"]["lane"] == "director"
     assert any("Session context:" in fact for fact in task.memory_facts)
     assert any("Channel prompt:" in fact for fact in task.memory_facts)
     history_fact = next(
@@ -114,6 +127,95 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     )
     assert '"role":"user"' in history_fact
     assert "timestamp" not in history_fact
+
+
+def test_build_gateway_task_defaults_director_lane_workspace_under_mente_home(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    fallback_cwd = tmp_path / "fallback-cwd"
+    mente_home.mkdir()
+    fallback_cwd.mkdir()
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("TERMINAL_CWD", str(fallback_cwd))
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="你好，你是谁？",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+    )
+
+    assert task.metadata["lane"] == "director"
+    assert task.workspace == str(mente_home / "workspace-director")
+    assert Path(task.workspace).is_dir()
+
+
+def test_build_gateway_task_defaults_engineering_lane_workspace_under_mente_home(
+    monkeypatch, tmp_path
+):
+    mente_home = tmp_path / ".mente"
+    fallback_cwd = tmp_path / "fallback-cwd"
+    mente_home.mkdir()
+    fallback_cwd.mkdir()
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("TERMINAL_CWD", str(fallback_cwd))
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="帮我修复 tests/mente/test_bridge_integration.py 失败，跑一下 pytest 看报错",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+    )
+
+    assert task.metadata["lane"] == "engineering"
+    assert task.workspace == str(mente_home / "workspace-engineering")
+    assert Path(task.workspace).is_dir()
+
+
+def test_build_gateway_task_preserves_explicit_workspace_over_lane_default(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    explicit_workspace = tmp_path / "repo"
+    mente_home.mkdir()
+    explicit_workspace.mkdir()
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="帮我修复 tests/mente/test_bridge_integration.py 失败，跑一下 pytest 看报错",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        workspace=str(explicit_workspace),
+    )
+
+    assert task.metadata["lane"] == "engineering"
+    assert task.workspace == str(explicit_workspace)
 
 
 def test_build_gateway_task_injects_recent_task_snapshot_for_continue_request(tmp_path):
@@ -149,6 +251,457 @@ def test_build_gateway_task_injects_recent_task_snapshot_for_continue_request(tm
     assert "已定位到 ~/services/tavily-proxy" in snapshot_fact
     assert "读取 .env" in snapshot_fact
     assert "running" in snapshot_fact
+
+
+def test_resolve_conversation_route_prefers_active_lane_for_continue_turn():
+    route = resolve_conversation_route(
+        message="继续刚才的任务",
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "metadata": {
+                "lane": "engineering",
+            },
+        },
+        active_lane="engineering",
+    )
+
+    assert route.lane == "director"
+    assert route.reason == "continue_active_job:engineering"
+
+
+def test_resolve_conversation_route_routes_status_follow_up_to_director():
+    route = resolve_conversation_route(
+        message="做到哪了？",
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "follow_up_tasks": ["继续修复并跑测试"],
+            "metadata": {
+                "lane": "engineering",
+            },
+        },
+        active_lane="engineering",
+    )
+
+    assert route.lane == "director"
+    assert route.reason == "status_follow_up:engineering"
+
+
+def test_resolve_conversation_route_uses_classifier_for_ambiguous_turn(monkeypatch):
+    def _classify(**kwargs):
+        assert kwargs["message"] == "帮我整理一份竞品对比结论"
+        return {
+            "lane": "research",
+            "confidence": "medium",
+            "reason": "competitor_analysis_language",
+        }
+
+    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _classify)
+
+    route = resolve_conversation_route(
+        message="帮我整理一份竞品对比结论",
+        recent_task_snapshot=None,
+        active_lane=None,
+    )
+
+    assert route.lane == "research"
+    assert route.reason == "llm_classifier:research"
+
+
+def test_resolve_conversation_route_skips_classifier_for_obvious_engineering_turn(
+    monkeypatch,
+):
+    def _fail_if_called(**kwargs):
+        raise AssertionError("classifier should not run for obvious engineering requests")
+
+    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _fail_if_called)
+
+    route = resolve_conversation_route(
+        message="帮我修复 tests/gateway/test_session.py 的失败并跑 pytest",
+        recent_task_snapshot=None,
+        active_lane=None,
+    )
+
+    assert route.lane == "engineering"
+    assert route.reason == "engineering_heuristic"
+
+
+def test_resolve_conversation_route_classifier_failure_falls_back_to_director(monkeypatch):
+    def _raise(**kwargs):
+        raise RuntimeError("classifier unavailable")
+
+    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _raise)
+
+    route = resolve_conversation_route(
+        message="帮我总结一下这个需求要怎么推进",
+        recent_task_snapshot=None,
+        active_lane=None,
+    )
+
+    assert route.lane == "director"
+    assert route.reason == "default_director"
+
+
+def test_resolve_conversation_route_skips_classifier_for_fast_identity_turn(monkeypatch):
+    def _fail_if_called(**kwargs):
+        raise AssertionError("classifier should not run for fast identity turns")
+
+    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _fail_if_called)
+
+    route = resolve_conversation_route(
+        message="你好，你是谁？",
+        recent_task_snapshot=None,
+        active_lane=None,
+    )
+
+    assert route.lane == "director"
+    assert route.reason == "fast_identity_or_model"
+
+
+def test_resolve_conversation_route_skips_classifier_for_generic_director_chat(
+    monkeypatch,
+):
+    def _fail_if_called(**kwargs):
+        raise AssertionError("classifier should not run for generic director chat")
+
+    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _fail_if_called)
+
+    route = resolve_conversation_route(
+        message="first question",
+        recent_task_snapshot=None,
+        active_lane=None,
+    )
+
+    assert route.lane == "director"
+    assert route.reason == "default_director"
+
+
+def test_build_gateway_task_routes_generic_continue_turn_to_coordinator_with_worker_target(
+    tmp_path,
+):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="继续刚才的任务",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "metadata": {
+                "lane": "engineering",
+            },
+        },
+        active_lane="engineering",
+    )
+
+    assert task.role == TaskRole.COORDINATOR
+    assert task.dispatch_mode == DispatchMode.INLINE
+    assert task.worker_lane == "engineering"
+    assert task.worker_skill_refs == []
+    assert task.metadata["lane"] == "director"
+    assert task.metadata["dispatch_decision"] == {
+        "lane": "director",
+        "dispatch_mode": "inline",
+        "target_job_lane": "engineering",
+        "worker_lane": "engineering",
+        "skill_refs": [],
+        "worker_skill_refs": [],
+        "needs_clarification": False,
+        "reason": "continue_active_job:engineering",
+    }
+    assert task.metadata["workflow_contract"]["lane"] == {
+        "name": "director",
+        "router": "deterministic_v1",
+        "resumable": True,
+    }
+    assert task.metadata["workflow_contract"]["continuity"]["lane"] == "director"
+    assert task.metadata["workflow_contract"]["dispatch"] == {
+        "role": "coordinator",
+        "mode": "inline",
+        "target_job_lane": "engineering",
+        "worker_lane": "engineering",
+        "needs_clarification": False,
+    }
+
+
+def test_build_gateway_task_preserves_status_follow_up_dispatch_metadata(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="当前进度？",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "metadata": {
+                "lane": "engineering",
+            },
+        },
+        active_lane="engineering",
+    )
+
+    assert task.role == TaskRole.COORDINATOR
+    assert task.dispatch_mode == DispatchMode.INLINE
+    assert task.worker_lane == "engineering"
+    assert task.metadata["lane"] == "director"
+    assert task.metadata["dispatch_decision"]["target_job_lane"] == "engineering"
+    assert task.metadata["dispatch_decision"]["reason"] == "status_follow_up:engineering"
+    assert task.metadata["workflow_contract"]["dispatch"] == {
+        "role": "coordinator",
+        "mode": "inline",
+        "target_job_lane": "engineering",
+        "worker_lane": "engineering",
+        "needs_clarification": False,
+    }
+
+
+def test_build_gateway_task_injects_lane_handoff_capsule_for_status_follow_up(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="当前进度？",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "follow_up_tasks": ["继续修复并跑测试"],
+            "metadata": {
+                "lane": "engineering",
+                "artifacts_out": ["/tmp/pytest.log"],
+            },
+        },
+        active_lane="engineering",
+    )
+
+    capsule_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Active lane handoff capsule:")
+    )
+    assert task.metadata["lane"] == "director"
+    assert "engineering" in capsule_fact
+    assert "已定位到失败断言。" in capsule_fact
+    assert "继续修复并跑测试" in capsule_fact
+    assert "pytest.log" in capsule_fact
+    assert not any(
+        fact.startswith("Recent active task snapshot:")
+        for fact in task.memory_facts
+    )
+
+
+def test_build_gateway_task_marks_ambiguous_skill_request_as_clarification_turn(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="调用技能帮我处理一下这个任务",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+    )
+
+    assert task.role == TaskRole.COORDINATOR
+    assert task.dispatch_mode == DispatchMode.INLINE
+    assert task.worker_lane is None
+    assert task.worker_skill_refs == []
+    assert task.metadata["lane"] == "director"
+    assert task.metadata["dispatch_decision"] == {
+        "lane": "director",
+        "dispatch_mode": "inline",
+        "target_job_lane": None,
+        "worker_lane": None,
+        "skill_refs": [],
+        "worker_skill_refs": [],
+        "needs_clarification": True,
+        "reason": "ambiguous_skill_request",
+    }
+    assert task.metadata["workflow_contract"]["dispatch"] == {
+        "role": "coordinator",
+        "mode": "inline",
+        "target_job_lane": None,
+        "worker_lane": None,
+        "needs_clarification": True,
+    }
+    assert "clarify" in task.objective.lower()
+    assert any(
+        "clarification" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+
+
+def test_build_tui_task_preserves_continue_dispatch_metadata(tmp_path):
+    task = build_tui_task(
+        user_message="继续刚才的任务",
+        conversation_history=[],
+        session_id="tui-session-1",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "修复 tests/gateway/test_session.py 的失败并跑 pytest",
+            "status": "running",
+            "assistant_summary": "已定位到失败断言。",
+            "metadata": {
+                "lane": "engineering",
+            },
+        },
+        active_lane="engineering",
+    )
+
+    assert task.role == TaskRole.COORDINATOR
+    assert task.dispatch_mode == DispatchMode.INLINE
+    assert task.worker_lane == "engineering"
+    assert task.metadata["lane"] == "director"
+    assert task.metadata["dispatch_decision"]["target_job_lane"] == "engineering"
+    assert task.metadata["workflow_contract"]["continuity"]["lane"] == "director"
+    assert task.metadata["workflow_contract"]["dispatch"] == {
+        "role": "coordinator",
+        "mode": "inline",
+        "target_job_lane": "engineering",
+        "worker_lane": "engineering",
+        "needs_clarification": False,
+    }
+
+
+def test_build_tui_task_marks_ambiguous_skill_request_as_clarification_turn(tmp_path):
+    task = build_tui_task(
+        user_message="调用技能帮我处理一下这个任务",
+        conversation_history=[],
+        session_id="tui-session-1",
+        workspace=str(tmp_path),
+    )
+
+    assert task.role == TaskRole.COORDINATOR
+    assert task.dispatch_mode == DispatchMode.INLINE
+    assert task.worker_lane is None
+    assert task.worker_skill_refs == []
+    assert task.metadata["lane"] == "director"
+    assert task.metadata["dispatch_decision"] == {
+        "lane": "director",
+        "dispatch_mode": "inline",
+        "target_job_lane": None,
+        "worker_lane": None,
+        "skill_refs": [],
+        "worker_skill_refs": [],
+        "needs_clarification": True,
+        "reason": "ambiguous_skill_request",
+    }
+    assert task.metadata["workflow_contract"]["dispatch"] == {
+        "role": "coordinator",
+        "mode": "inline",
+        "target_job_lane": None,
+        "worker_lane": None,
+        "needs_clarification": True,
+    }
+    assert "clarify" in task.objective.lower()
+    assert any(
+        "clarification" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+
+
+def test_build_gateway_task_recent_snapshot_includes_artifact_paths_for_follow_up_delivery(tmp_path):
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    report_paths = [
+        "/home/jason/.mente/deep-research/report.md",
+        "/home/jason/.mente/deep-research/report.html",
+        "/home/jason/.mente/deep-research/report.docx",
+    ]
+
+    task = build_gateway_task(
+        message="你刚才完成了丁香酚的深度调研，生成了三个报告。你把这三个报告上传到我的飞书云文档里",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "深度研究下丁香酚，评估愈创木酚合成法成本 技术 供应商 客户，对比天然提取工艺，形成项目深度调研报告",
+            "status": "needs_follow_up",
+            "assistant_summary": "已生成 Markdown、HTML、DOCX 三份报告。",
+            "follow_up_tasks": ["上传这三个报告到飞书云文档"],
+            "metadata": {
+                "task_profile": "deep_research",
+                "artifacts_out": report_paths,
+            },
+        },
+    )
+
+    snapshot_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Recent active task snapshot:")
+    )
+    assert "report.md" in snapshot_fact
+    assert "report.html" in snapshot_fact
+    assert "report.docx" in snapshot_fact
+    assert task.metadata["lane"] == "research"
+    assert task.metadata["task_profile"] == "artifact_delivery"
+    assert task.artifacts_in == report_paths
+    assert any(
+        fact.startswith("Artifact delivery workflow brief:")
+        for fact in task.memory_facts
+    )
+    assert any(
+        fact.startswith("Artifact delivery inputs:")
+        for fact in task.memory_facts
+    )
+    assert any(
+        "use the provided artifact paths directly" in constraint.lower()
+        for constraint in task.constraints
+    )
+    assert any(
+        "upload or share the provided artifact files" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
 
 
 def test_build_gateway_task_skips_recent_task_snapshot_for_new_unrelated_request(tmp_path):
@@ -212,6 +765,7 @@ def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_worksp
 
     assert task.workspace == str(project_root)
     assert task.skill_refs == ["media/wechat-publisher", "imagegen"]
+    assert task.metadata["lane"] == "writing"
     assert task.metadata["task_profile"] == "content_publishing"
     assert task.metadata["tool_policy"]["bridge_tools"] == ["mente_wechat_publish_draft"]
     assert any(
@@ -248,6 +802,95 @@ def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_worksp
     )
 
 
+def test_build_gateway_task_does_not_misclassify_xhs_publish_requests_as_wechat_content_publishing(
+    monkeypatch, tmp_path
+):
+    project_root = tmp_path / "Mente"
+    mente_home = tmp_path / "mente-home"
+    fake_home = tmp_path / "home"
+    project_root.mkdir()
+    mente_home.mkdir()
+    fake_home.mkdir()
+    (project_root / ".git").mkdir()
+    monkeypatch.chdir(project_root)
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("TERMINAL_CWD", str(fake_home))
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="帮我生成小红书每日新闻卡片并发布到 rednote/xhs",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+    )
+
+    assert task.workspace == str(mente_home / "workspace-director")
+    assert task.metadata["lane"] == "director"
+    assert "media/wechat-publisher" not in task.skill_refs
+    assert "task_profile" not in task.metadata
+    assert not any(
+        fact.startswith("Publishing workflow brief:")
+        for fact in task.memory_facts
+    )
+    assert resolve_gateway_task_host_timeout_seconds(message=task.user_request) is None
+
+
+def test_build_gateway_task_infers_config_admin_skill_for_direct_mente_config_updates(
+    monkeypatch, tmp_path
+):
+    project_root = tmp_path / "Mente"
+    project_root.mkdir()
+    (project_root / ".git").mkdir()
+    monkeypatch.chdir(project_root)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="把 config.yaml 里的 terminal.cwd 改成 /，然后 restart gateway",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+    )
+
+    assert task.workspace == str(project_root)
+    assert task.skill_refs == ["software-development/mente-config-admin"]
+    assert task.metadata["lane"] == "config_admin"
+    assert task.metadata["task_profile"] == "config_admin"
+    assert any(
+        fact.startswith("Config-admin workflow brief:")
+        for fact in task.memory_facts
+    )
+    assert any(
+        "resolve the active config, env, or auth path first" in constraint.lower()
+        for constraint in task.constraints
+    )
+    assert any(
+        "use the provided config-admin skill directly" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+    assert any(
+        "exact file, key, and restart action" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+
+
 def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
     monkeypatch, tmp_path
 ):
@@ -274,6 +917,7 @@ def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
     )
 
     assert task.skill_refs == ["research/deep-research-pro"]
+    assert task.metadata["lane"] == "research"
     assert task.metadata["task_profile"] == "deep_research"
     assert any(
         fact.startswith("Deep research workflow brief:")
@@ -283,30 +927,34 @@ def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
         fact for fact in task.memory_facts if fact.startswith("Deep research execution plan:")
     )
     assert "delegate_task" in entrypoint_fact
-    assert "chapter_1 + chapter_4" in entrypoint_fact
-    assert "chapter_2 + chapter_3" in entrypoint_fact
-    assert "chapter_5 + chapter_6 + chapter_7" in entrypoint_fact
-    output_fact = next(
-        fact for fact in task.memory_facts if fact.startswith("Deep research output plan:")
+
+
+def test_build_gateway_task_routes_obvious_coding_request_to_engineering_lane(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
     )
-    assert str(mente_home / "deep-research") in output_fact
-    assert "Markdown (.md), HTML (.html), DOCX (.docx)" in output_fact
-    assert any(
-        "do not stop after intermediate findings" in constraint.lower()
-        for constraint in task.constraints
+
+    task = build_gateway_task(
+        message="帮我修复 tests/mente/test_bridge_integration.py 失败，跑一下 pytest 看报错",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        workspace=str(tmp_path),
     )
-    assert any(
-        "do not ask whether the user wants a formal report" in constraint.lower()
-        for constraint in task.constraints
-    )
-    assert any(
-        "markdown, html, and docx formats" in criterion.lower()
-        for criterion in task.acceptance_criteria
-    )
-    assert any(
-        "list the generated report artifact paths" in criterion.lower()
-        for criterion in task.acceptance_criteria
-    )
+
+    assert task.metadata["lane"] == "engineering"
+    assert "task_profile" not in task.metadata
+    assert task.metadata["workflow_contract"]["lane"] == {
+        "name": "engineering",
+        "router": "deterministic_v1",
+        "resumable": True,
+    }
+    assert task.metadata["workflow_contract"]["continuity"]["lane"] == "engineering"
 
 
 def test_build_gateway_task_deep_research_parallel_plan_is_workspace_scoped(tmp_path):
@@ -336,14 +984,24 @@ def test_build_gateway_task_deep_research_parallel_plan_is_workspace_scoped(tmp_
     assert "Avoid broad repository or home-directory scans before delegating work." in entrypoint_fact
 
 
-def test_resolve_gateway_task_host_timeout_seconds_detects_content_publishing():
+def test_resolve_gateway_task_host_timeout_seconds_defaults_content_publishing_timeout_off():
     assert (
         resolve_gateway_task_host_timeout_seconds(
             message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
         )
-        == 420.0
+        is None
     )
     assert resolve_gateway_task_host_timeout_seconds(message="你好") is None
+
+
+def test_resolve_gateway_task_host_timeout_seconds_honors_content_publishing_timeout_override():
+    assert (
+        resolve_gateway_task_host_timeout_seconds(
+            message="调用WeChat技能，帮我写一个文案，做好标题正文配图，发布到我的微信公众号草稿",
+            content_publishing_timeout_seconds=420,
+        )
+        == 420.0
+    )
 
 
 def test_resolve_gateway_task_notify_interval_seconds_caps_deep_research_defaults():
@@ -1126,7 +1784,8 @@ def test_second_run_receives_first_run_memory(monkeypatch, tmp_path):
 
     assert len(seen_requests) == 2
     assert "Memory: User prefers concise replies." not in seen_requests[1].memory_facts
-    assert "mente_memory_query" in seen_requests[1].tool_policy["bridge_tools"]
+    assert "mente_memory_query" not in seen_requests[1].tool_policy["bridge_tools"]
+    assert seen_requests[1].tool_policy["bridge_tools"] == []
 
 
 def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_path):
@@ -1438,6 +2097,127 @@ def test_run_gateway_task_threads_cancel_event_into_orchestrator(monkeypatch, tm
     assert result.status == "success"
     assert captured["task"].metadata["source"] == "gateway"
     assert captured["cancel_event"] is cancel_event
+
+
+def test_run_gateway_task_fast_paths_simple_model_identity_requests(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(db_path))
+
+    class _FakeUuid:
+        hex = "gatewayfastmodel"
+
+    def _fail_build_orchestrator(*args, **kwargs):
+        raise AssertionError("fast-path requests must not build the orchestrator")
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(mente_bridge, "_build_orchestrator", _fail_build_orchestrator)
+    monkeypatch.setattr(
+        mente_bridge,
+        "_resolve_runtime_config_for_workspace",
+        lambda workspace: RuntimeConfig(
+            runtime_home=tmp_path / "runtime-home",
+            model_runtime=ModelRuntime(model="mimo-v2.5-pro"),
+        ),
+    )
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = run_gateway_task(
+        message="你是什么大模型",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+    )
+
+    stored = SQLiteTaskRepository(db_path=db_path).get("mente_gateway_gatewayfastmodel")
+    assert result.status == "success"
+    assert (
+        result.summary
+        == "我是 Mente，当前接入的模型是 mimo-v2.5-pro。我可以通过工具帮你执行代码、操作文件、搜索信息等任务。"
+    )
+    assert result.metadata["fast_path"]["kind"] == "model_identity"
+    assert stored is not None
+    assert stored.status.value == "succeeded"
+    assert stored.metadata["fast_path"]["kind"] == "model_identity"
+
+
+def test_run_tui_task_fast_paths_simple_identity_requests(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(db_path))
+
+    class _FakeUuid:
+        hex = "tuifastidentity"
+
+    def _fail_build_orchestrator(*args, **kwargs):
+        raise AssertionError("fast-path requests must not build the orchestrator")
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(mente_bridge, "_build_orchestrator", _fail_build_orchestrator)
+
+    result = run_tui_task(
+        user_message="你是谁",
+        conversation_history=[],
+        session_id="tui-session-1",
+        workspace=str(tmp_path),
+    )
+
+    stored = SQLiteTaskRepository(db_path=db_path).get("mente_tui_tuifastidentity")
+    assert result.status == "success"
+    assert result.summary == "我是 Mente，一个在这台机器上帮你处理代码、文件、命令行任务和一般问题的 AI 助手。"
+    assert result.metadata["fast_path"]["kind"] == "identity"
+    assert stored is not None
+    assert stored.status.value == "succeeded"
+    assert stored.metadata["fast_path"]["kind"] == "identity"
+
+
+def test_run_api_server_task_fast_paths_simple_model_identity_requests(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(db_path))
+
+    class _FakeUuid:
+        hex = "apifastmodel"
+
+    def _fail_build_orchestrator(*args, **kwargs):
+        raise AssertionError("fast-path requests must not build the orchestrator")
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(mente_bridge, "_build_orchestrator", _fail_build_orchestrator)
+    monkeypatch.setattr(
+        mente_bridge,
+        "_resolve_runtime_config_for_workspace",
+        lambda workspace: RuntimeConfig(
+            runtime_home=tmp_path / "runtime-home",
+            model_runtime=ModelRuntime(model="mimo-v2.5-pro"),
+        ),
+    )
+
+    result = run_api_server_task(
+        user_message="你是什么大模型",
+        conversation_history=[],
+        session_id="api-session-1",
+        api_mode="responses",
+        workspace=str(tmp_path),
+    )
+
+    stored = SQLiteTaskRepository(db_path=db_path).get("mente_api_server_apifastmodel")
+    assert result.status == "success"
+    assert (
+        result.summary
+        == "我是 Mente，当前接入的模型是 mimo-v2.5-pro。我可以通过工具帮你执行代码、操作文件、搜索信息等任务。"
+    )
+    assert result.metadata["fast_path"]["kind"] == "model_identity"
+    assert stored is not None
+    assert stored.status.value == "succeeded"
+    assert stored.metadata["fast_path"]["kind"] == "model_identity"
 
 
 def test_run_gateway_task_direct_writes_explicit_chinese_remember_intent_when_flag_enabled(

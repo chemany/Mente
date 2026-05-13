@@ -20,6 +20,33 @@ def test_context_builder_produces_execution_request():
     assert request.objective == "Inspect repository"
 
 
+def test_context_builder_preserves_dispatch_fields_in_execution_request():
+    builder = ContextBuilder()
+    task = Task(
+        task_id="task_dispatch",
+        session_id="session_dispatch",
+        task_type="conversation",
+        objective="Coordinate background work",
+        user_request="先分派给 research worker",
+        parent_task_id="task_parent",
+        job_id="job_123",
+        role="coordinator",
+        dispatch_mode="delegate_background",
+        worker_lane="research",
+        worker_skill_refs=["research/deep-dive"],
+        metadata={"source": "gateway"},
+    )
+
+    request = builder.build(task)
+
+    assert request.parent_task_id == "task_parent"
+    assert request.job_id == "job_123"
+    assert request.role.value == "coordinator"
+    assert request.dispatch_mode.value == "delegate_background"
+    assert request.worker_lane == "research"
+    assert request.worker_skill_refs == ["research/deep-dive"]
+
+
 def test_context_builder_prepends_retrieved_memory():
     memory_repo = InMemoryMemoryRepository()
     memory_repo.save(
@@ -518,7 +545,7 @@ def test_context_builder_disabling_session_summary_policy_reverts_to_generic_pre
         item.reason for item in [*disabled_trace.selected, *disabled_trace.skipped]
     }
 
-    assert disabled_request.memory_facts == baseline_request.memory_facts
+    assert disabled_request.memory_facts == []
     assert [item.memory_id for item in disabled_trace.selected] == [
         item.memory_id for item in baseline_trace.selected
     ]

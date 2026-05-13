@@ -226,6 +226,13 @@ _HERMES_BEHAVIORAL_VARS = frozenset({
     "WHATSAPP_REQUIRE_MENTION",
     "DINGTALK_REQUIRE_MENTION",
     "MATRIX_REQUIRE_MENTION",
+    # API server toggles are non-secret, but they materially change
+    # load_gateway_config() and can leak in from the developer shell.
+    "API_SERVER_ENABLED",
+    "API_SERVER_PORT",
+    "API_SERVER_HOST",
+    "API_SERVER_CORS_ORIGINS",
+    "API_SERVER_MODEL_NAME",
 })
 
 

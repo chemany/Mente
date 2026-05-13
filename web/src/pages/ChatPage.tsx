@@ -111,7 +111,7 @@ export default function ChatPage() {
   // body doesn't have to setState (React 19's set-state-in-effect rule).
   const [banner, setBanner] = useState<string | null>(() =>
     typeof window !== "undefined" && !window.__HERMES_SESSION_TOKEN__
-      ? "Session token unavailable. Open this page through `hermes dashboard`, not directly."
+      ? "Session token unavailable. Open this page through `mente dashboard`, not directly."
       : null,
   );
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
@@ -651,8 +651,7 @@ export default function ChatPage() {
             )}
           >
             <Typography
-              className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
-              style={{ mixBlendMode: "plus-lighter" }}
+              className="blend-lighter font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
             >
               {t.app.modelToolsSheetTitle}
               <br />

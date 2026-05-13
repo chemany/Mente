@@ -40,7 +40,7 @@ def load_private_model_settings() -> dict[str, str]:
         return {}
 
     settings: dict[str, str] = {}
-    for key in ("default", "model", "provider", "base_url", "api_key"):
+    for key in ("default", "model", "provider", "base_url", "api_key", "api_mode"):
         value = model.get(key)
         if isinstance(value, str) and value.strip():
             settings[key] = value.strip()

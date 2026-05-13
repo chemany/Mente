@@ -42,9 +42,16 @@ class ContextBuilder:
         request_memory_facts = memory_facts
         memory_read_mode = resolve_memory_read_mode(task)
         if uses_on_demand_memory(task):
-            request_memory_facts = list(task.memory_facts)
-            trace.injected_count = 0
-            trace.prompt_budget_char_count = 0
+            task_memory_facts = list(task.memory_facts)
+            selected_prompt_facts = memory_facts[: max(0, len(memory_facts) - len(task_memory_facts))]
+            summary_prompt_facts = [
+                prompt_fact
+                for prompt_fact, item in zip(selected_prompt_facts, trace.selected)
+                if item.reason == "session_summary_priority"
+            ]
+            request_memory_facts = [*summary_prompt_facts, *task_memory_facts]
+            trace.injected_count = len(summary_prompt_facts)
+            trace.prompt_budget_char_count = sum(len(fact) for fact in summary_prompt_facts)
         metadata = dict(task.metadata)
         metadata["memory_context_prepared"] = True
         metadata["memory_read_mode"] = memory_read_mode
@@ -62,6 +69,12 @@ class ContextBuilder:
             artifacts_in=list(task.artifacts_in),
             acceptance_criteria=list(task.acceptance_criteria),
             budget=dict(task.budget),
+            parent_task_id=task.parent_task_id,
+            job_id=task.job_id,
+            role=task.role,
+            dispatch_mode=task.dispatch_mode,
+            worker_lane=task.worker_lane,
+            worker_skill_refs=list(task.worker_skill_refs),
             execution_mode=task.execution_mode,
             execution_session=task.execution_session,
             resume_token=task.resume_token,

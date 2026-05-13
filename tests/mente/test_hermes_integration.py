@@ -413,7 +413,7 @@ def test_second_run_receives_first_run_memory(monkeypatch, tmp_path):
 
     assert len(seen_requests) == 2
     assert "Memory: User prefers concise replies." not in seen_requests[1].memory_facts
-    assert "mente_memory_query" in seen_requests[1].tool_policy["bridge_tools"]
+    assert "mente_memory_query" not in seen_requests[1].tool_policy["bridge_tools"]
 
 
 def test_run_gateway_task_threads_continuity_controls_into_task(monkeypatch, tmp_path):

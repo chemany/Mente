@@ -492,6 +492,103 @@ class TestWebServerEndpoints:
         resp = unauth_client.get("/api/debug/tasks")
         assert resp.status_code == 401
 
+    def test_get_agents_returns_inventory(self, monkeypatch):
+        """GET /api/agents should expose registered Mente agent inventory."""
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setattr(
+            web_server,
+            "list_agent_inventory",
+            lambda: [
+                MagicMock(
+                    agent=MagicMock(agent_id="executive_office", display_name="Executive Office"),
+                    lanes=["director"],
+                    task_profiles=[],
+                    agent_dir=Path("/tmp/.mente/agents/executive_office"),
+                    soul_path=Path("/tmp/.mente/agents/executive_office/soul.md"),
+                    soul_text="Executive office soul.",
+                    soul_excerpt="Executive office soul.",
+                    runtime=MagicMock(
+                        runtime_home=Path("/tmp/.mente/runtime/agents/executive_office/codex"),
+                        session_count=2,
+                        session_files=["20260513-aaa.jsonl"],
+                        state_files=["state.sqlite"],
+                        log_files=["logs.sqlite"],
+                        other_files=["auth.json"],
+                    ),
+                )
+            ],
+        )
+
+        resp = self.client.get("/api/agents")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["summary"]["agent_count"] == 1
+        assert data["summary"]["total_runtime_sessions"] == 2
+        assert data["agents"][0]["agent_id"] == "executive_office"
+        assert data["agents"][0]["lanes"] == ["director"]
+        assert data["agents"][0]["runtime"]["session_count"] == 2
+        assert data["agents"][0]["soul_excerpt"] == "Executive office soul."
+
+    def test_get_agent_detail_returns_full_soul(self, monkeypatch):
+        """GET /api/agents/{agent_id} should expose detailed soul/runtime fields."""
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setattr(
+            web_server,
+            "get_agent_inventory_detail",
+            lambda agent_id: MagicMock(
+                agent=MagicMock(agent_id=agent_id, display_name="Executive Office"),
+                lanes=["director"],
+                task_profiles=[],
+                agent_dir=Path("/tmp/.mente/agents/executive_office"),
+                soul_path=Path("/tmp/.mente/agents/executive_office/soul.md"),
+                soul_text="Full executive office soul.",
+                soul_excerpt="Full executive office soul.",
+                runtime=MagicMock(
+                    runtime_home=Path("/tmp/.mente/runtime/agents/executive_office/codex"),
+                    session_count=1,
+                    session_files=["20260513-aaa.jsonl"],
+                    state_files=[],
+                    log_files=[],
+                    other_files=[],
+                ),
+            ),
+        )
+
+        resp = self.client.get("/api/agents/executive_office")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["agent_id"] == "executive_office"
+        assert data["soul_text"] == "Full executive office soul."
+        assert data["runtime"]["session_files"] == ["20260513-aaa.jsonl"]
+
+    def test_post_agent_runtime_reset_returns_mutation(self, monkeypatch):
+        """POST /api/agents/{agent_id}/runtime/reset should run the reset action."""
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setattr(
+            web_server,
+            "reset_agent_execution_context",
+            lambda agent_id: MagicMock(
+                agent=MagicMock(agent_id=agent_id, display_name="Executive Office"),
+                runtime_home=Path("/tmp/.mente/runtime/agents/executive_office/codex"),
+                removed_entries=["sessions/20260513-aaa.jsonl", "state.sqlite"],
+                removed_entries_count=2,
+            ),
+        )
+
+        resp = self.client.post("/api/agents/executive_office/runtime/reset")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["action"] == "reset"
+        assert data["agent_id"] == "executive_office"
+        assert data["removed_entries_count"] == 2
+
     def test_get_debug_memories_recent_with_filters(self, monkeypatch):
         """GET /api/debug/memories should expose filtered recent memory records."""
         import hermes_cli.web_server as web_server
@@ -2200,3 +2297,66 @@ class TestPtyWebSocket:
             ):
                 pass
         assert exc.value.code == 4400
+
+
+class TestBuiltInDashboardThemes:
+
+    def test_default_theme_metadata_matches_fresh_workspace_direction(self):
+        from hermes_cli.web_server import _BUILTIN_DASHBOARD_THEMES
+
+        default = next(t for t in _BUILTIN_DASHBOARD_THEMES if t["name"] == "default")
+        assert default["label"] == "Workspace Mist"
+        assert default["description"] == "Fresh paper-and-seafoam workspace with calm contrast"
+
+
+class TestDashboardBranding:
+
+    def test_fastapi_title_uses_mente_branding(self):
+        import importlib
+        import hermes_cli.web_server as web_server
+
+        web_server = importlib.reload(web_server)
+        assert web_server.app.title == "Mente Dashboard"
+
+    def test_anthropic_status_labels_mente_pkce_source(self, monkeypatch):
+        import importlib
+        import sys
+        import types
+        import hermes_cli.web_server as web_server
+
+        fake_adapter = types.SimpleNamespace(
+            read_hermes_oauth_credentials=lambda: {
+                "accessToken": "abc.def.signaturetail",
+                "expiresAt": "2026-05-13T00:00:00Z",
+                "refreshToken": "refresh-token",
+            },
+            read_claude_code_credentials=lambda: None,
+            _HERMES_OAUTH_FILE="/home/jason/.hermes/.anthropic_oauth.json",
+        )
+        monkeypatch.setitem(sys.modules, "agent.anthropic_adapter", fake_adapter)
+        web_server = importlib.reload(web_server)
+
+        status = web_server._anthropic_oauth_status()
+
+        assert status["source"] == "hermes_pkce"
+        assert status["source_label"] == "Mente PKCE (/home/jason/.hermes/.anthropic_oauth.json)"
+
+    def test_start_server_prints_mente_web_ui_banner(self, monkeypatch):
+        import builtins
+        import importlib
+        import sys
+        import types
+        import hermes_cli.web_server as web_server
+
+        captured = []
+        web_server = importlib.reload(web_server)
+        monkeypatch.setitem(
+            sys.modules,
+            "uvicorn",
+            types.SimpleNamespace(run=lambda *args, **kwargs: None),
+        )
+        monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: captured.append(" ".join(str(a) for a in args)))
+
+        web_server.start_server(host="127.0.0.1", port=9119, open_browser=False)
+
+        assert captured == ["  Mente Dashboard → http://127.0.0.1:9119"]
