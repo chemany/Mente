@@ -5,7 +5,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
-from mente.executors.responses_compat_bridge import start_responses_compat_bridge
+from mente.executors.responses_compat_bridge import (
+    _translate_responses_request_to_anthropic,
+    _translate_responses_request_to_chat_completions,
+    start_responses_compat_bridge,
+)
 from mente.executors.runtime_config import ModelRuntime
 
 
@@ -469,3 +473,172 @@ def test_responses_compat_bridge_lifts_developer_messages_into_anthropic_system(
     assert captured["body"]["system"] == "你是一个简洁的中文助手。"
     assert [message["role"] for message in captured["body"]["messages"]] == ["user"]
     assert "hello，你是谁？" in json.dumps(captured["body"]["messages"], ensure_ascii=False)
+
+
+def test_translate_chat_completions_request_pads_reasoning_content_for_thinking_tool_replay():
+    request = _translate_responses_request_to_chat_completions(
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "列出当前目录"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell",
+                    "arguments": "{\"command\":\"pwd\"}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "/root/code/Mente\n",
+                },
+            ]
+        },
+        model="deepseek-v3.1",
+        provider="deepseek",
+        base_url="https://api.deepseek.com/v1",
+    )
+
+    assistant_replay = request["messages"][1]
+    assert assistant_replay["role"] == "assistant"
+    assert assistant_replay["tool_calls"][0]["function"]["name"] == "shell"
+    assert assistant_replay["reasoning_content"] == ""
+
+
+def test_translate_chat_completions_request_pads_reasoning_content_for_xiaomi_mimo_tool_replay():
+    request = _translate_responses_request_to_chat_completions(
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "列出当前目录"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell",
+                    "arguments": "{\"command\":\"cat SKILL.md\"}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "# skill instructions\n",
+                },
+            ]
+        },
+        model="mimo-v2.5-pro",
+        provider="xiaomi",
+        base_url="https://token-plan-cn.xiaomimimo.com/v1",
+    )
+
+    assistant_replay = request["messages"][1]
+    assert assistant_replay["role"] == "assistant"
+    assert assistant_replay["tool_calls"][0]["function"]["name"] == "shell"
+    assert assistant_replay["reasoning_content"] == ""
+
+
+def test_translate_chat_completions_request_reuses_reasoning_item_for_next_assistant_message():
+    request = _translate_responses_request_to_chat_completions(
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "列出当前目录"}],
+                },
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "先确认技能说明，再决定下一步。"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell",
+                    "arguments": "{\"command\":\"cat SKILL.md\"}",
+                },
+            ]
+        },
+        model="moonshot-v1-8k-thinking",
+        provider="moonshot",
+        base_url="https://api.moonshot.ai/v1",
+    )
+
+    assistant_replay = request["messages"][1]
+    assert assistant_replay["role"] == "assistant"
+    assert assistant_replay["tool_calls"][0]["function"]["name"] == "shell"
+    assert assistant_replay["reasoning_content"] == "先确认技能说明，再决定下一步。"
+
+
+def test_translate_anthropic_request_preserves_reasoning_before_tool_replay():
+    request = _translate_responses_request_to_anthropic(
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "列出当前目录"}],
+                },
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "先确认技能说明，再决定下一步。"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell",
+                    "arguments": "{\"command\":\"cat SKILL.md\"}",
+                },
+            ]
+        },
+        model="claude-3-7-sonnet-20250219",
+    )
+
+    assistant_replay = request["messages"][1]
+    assert assistant_replay["role"] == "assistant"
+    assert assistant_replay["content"][0] == {
+        "type": "text",
+        "text": "先确认技能说明，再决定下一步。",
+    }
+    assert assistant_replay["content"][1]["type"] == "tool_use"
+    assert assistant_replay["content"][1]["name"] == "shell"
+
+
+def test_translate_anthropic_request_pads_thinking_block_for_xiaomi_mimo_tool_replay():
+    request = _translate_responses_request_to_anthropic(
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "列出当前目录"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell",
+                    "arguments": "{\"command\":\"cat SKILL.md\"}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "# skill instructions\n",
+                },
+            ]
+        },
+        model="mimo-v2.5-pro",
+        provider="xiaomi",
+        base_url="https://token-plan-cn.xiaomimimo.com/anthropic",
+    )
+
+    assistant_replay = request["messages"][1]
+    assert assistant_replay["role"] == "assistant"
+    assert assistant_replay["content"][0] == {
+        "type": "thinking",
+        "thinking": "",
+    }
+    assert assistant_replay["content"][1]["type"] == "tool_use"
+    assert assistant_replay["content"][1]["name"] == "shell"

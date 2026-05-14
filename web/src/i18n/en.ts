@@ -205,7 +205,8 @@ export const en: Translations = {
     offset: "Offset",
     nextCursor: "Next Cursor",
     queryScope: "Query Scope",
-    sessionRequired: "Session scope requires a session id before tasks can be queried.",
+    sessionRequired:
+      "Session scope requires a session id before tasks can be queried.",
     noTasks: "No task records match the current filters.",
     rawTask: "Raw Task Payload",
     previousPage: "Previous page",
@@ -220,7 +221,8 @@ export const en: Translations = {
     agentRegistry: "Agent Registry",
     agentDetail: "Agent Detail",
     noAgents: "No registered agents were found.",
-    noAgentSelected: "Select an agent to inspect runtime state and soul content.",
+    noAgentSelected:
+      "Select an agent to inspect runtime state and soul content.",
     lanes: "Lane",
     taskProfiles: "Task Profile",
     sessions: "sessions",
@@ -265,7 +267,8 @@ export const en: Translations = {
     offset: "Offset",
     nextCursor: "Next Cursor",
     queryScope: "Query Scope",
-    sessionRequired: "Session scope requires a session id before memories can be queried.",
+    sessionRequired:
+      "Session scope requires a session id before memories can be queried.",
     noMemories: "No memory records match the current filters.",
     rawMemory: "Raw Memory Payload",
     memoryId: "Memory ID",
@@ -344,6 +347,28 @@ export const en: Translations = {
     failedToLoadRaw: "Failed to load raw config",
     configImported: "Config imported — review and save",
     invalidJson: "Invalid JSON file",
+    modelQuickSwitch: "Model Quick Switch",
+    mainModel: "Main Model",
+    memoryModel: "Memory Review Model",
+    autoMemoryModel: "Auto",
+    currentEndpoint: "Endpoint",
+    applying: "Applying",
+    modelSwitchSaved: "Model selection saved",
+    noModelChoices: "No saved models",
+    addModelProvider: "Add Model Provider",
+    addModelProviderHint:
+      "Save a third-party relay or custom model endpoint. Secrets go to .env; Base URL and model profile go to providers.",
+    providerName: "Provider name",
+    providerSlug: "Provider ID",
+    providerBaseUrl: "Base URL",
+    providerDefaultModel: "Default model",
+    providerApiMode: "API mode",
+    providerKeyEnv: "Key env var",
+    providerApiKey: "API key",
+    providerModels: "Optional model list (newline or comma separated)",
+    saveModelProvider: "Save provider",
+    modelProviderSaved: "Model provider saved",
+    modelProviderRequired: "Provider name, Base URL, and default model are required",
     categories: {
       general: "General",
       agent: "Agent",
@@ -364,7 +389,8 @@ export const en: Translations = {
   },
 
   env: {
-    changesNote: "Changes are saved to disk immediately. Active sessions pick up new keys automatically.",
+    changesNote:
+      "Changes are saved to disk immediately. Active sessions pick up new keys automatically.",
     confirmClearMessage:
       "The stored value for this variable will be removed from your .env file. This cannot be undone from the UI.",
     confirmClearTitle: "Clear this key?",
@@ -386,7 +412,8 @@ export const en: Translations = {
   oauth: {
     title: "Provider Logins (OAuth)",
     providerLogins: "Provider Logins (OAuth)",
-    description: "{connected} of {total} OAuth providers connected. Login flows currently run via the CLI; click Copy command and paste into a terminal to set up.",
+    description:
+      "{connected} of {total} OAuth providers connected. Login flows currently run via the CLI; click Copy command and paste into a terminal to set up.",
     connected: "Connected",
     expired: "Expired",
     notConnected: "Not connected. Run {command} in a terminal.",

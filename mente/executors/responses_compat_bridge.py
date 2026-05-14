@@ -140,6 +140,8 @@ class _ResponsesCompatBridge:
         request = _translate_responses_request_to_anthropic(
             request_payload,
             model=self.model_runtime.model or _string_value(request_payload.get("model")) or "",
+            provider=self.model_runtime.provider,
+            base_url=self.model_runtime.base_url,
         )
         raw_stream = client.messages.create(stream=True, **request)
         assistant_message_id = f"msg_{uuid.uuid4().hex}"
@@ -275,6 +277,8 @@ class _ResponsesCompatBridge:
         request = _translate_responses_request_to_chat_completions(
             request_payload,
             model=self.model_runtime.model or _string_value(request_payload.get("model")) or "",
+            provider=self.model_runtime.provider,
+            base_url=self.model_runtime.base_url,
         )
         stream = client.chat.completions.create(stream=True, **request)
         message_text: list[str] = []
@@ -446,8 +450,17 @@ def _translate_responses_request_to_anthropic(
     request_payload: dict[str, object],
     *,
     model: str,
+    provider: str | None = None,
+    base_url: str | None = None,
 ) -> dict[str, object]:
-    messages, embedded_system = _responses_input_to_anthropic_request_parts(request_payload.get("input"))
+    messages, embedded_system = _responses_input_to_anthropic_request_parts(
+        request_payload.get("input"),
+        needs_reasoning_replay_block=_anthropic_replay_needs_reasoning_block(
+            model=model,
+            provider=provider,
+            base_url=base_url,
+        ),
+    )
     request: dict[str, object] = {
         "model": model,
         "max_tokens": _DEFAULT_ANTHROPIC_MAX_TOKENS,
@@ -476,12 +489,20 @@ def _translate_responses_request_to_chat_completions(
     request_payload: dict[str, object],
     *,
     model: str,
+    provider: str | None = None,
+    base_url: str | None = None,
 ) -> dict[str, object]:
+    needs_reasoning_content = _chat_completions_replay_needs_reasoning_content(
+        model=model,
+        provider=provider,
+        base_url=base_url,
+    )
     request: dict[str, object] = {
         "model": model,
         "messages": _responses_input_to_chat_messages(
             request_payload.get("input"),
             instructions=_string_value(request_payload.get("instructions")),
+            needs_reasoning_content=needs_reasoning_content,
         ),
     }
     tools = _responses_tools_to_chat(request_payload.get("tools"))
@@ -497,11 +518,14 @@ def _translate_responses_request_to_chat_completions(
 
 def _responses_input_to_anthropic_request_parts(
     raw_input: object,
+    *,
+    needs_reasoning_replay_block: bool = False,
 ) -> tuple[list[dict[str, object]], str | None]:
     if not isinstance(raw_input, list):
         return [], None
     messages: list[dict[str, object]] = []
     system_parts: list[str] = []
+    pending_reasoning_text: list[str] = []
     for item in raw_input:
         if not isinstance(item, dict):
             continue
@@ -518,11 +542,31 @@ def _responses_input_to_anthropic_request_parts(
                 continue
             if role not in {"user", "assistant"}:
                 role = "user"
+            if role == "assistant":
+                reasoning_block = _consume_pending_anthropic_reasoning_block(
+                    pending_reasoning_text,
+                    as_thinking=needs_reasoning_replay_block,
+                    force_placeholder=needs_reasoning_replay_block,
+                )
+                if reasoning_block is not None:
+                    blocks = [reasoning_block, *blocks]
             _append_anthropic_message(messages, role=role, blocks=blocks)
+        elif item_type == "reasoning":
+            reasoning_text = _responses_reasoning_item_to_text(item)
+            if reasoning_text:
+                pending_reasoning_text.append(reasoning_text)
         elif item_type in {"function_call", "custom_tool_call", "local_shell_call", "tool_search_call"}:
             block = _responses_item_to_anthropic_tool_use(item)
             if block is not None:
-                _append_anthropic_message(messages, role="assistant", blocks=[block])
+                reasoning_block = _consume_pending_anthropic_reasoning_block(
+                    pending_reasoning_text,
+                    as_thinking=needs_reasoning_replay_block,
+                    force_placeholder=needs_reasoning_replay_block,
+                )
+                blocks = [block]
+                if reasoning_block is not None:
+                    blocks = [reasoning_block, *blocks]
+                _append_anthropic_message(messages, role="assistant", blocks=blocks)
         elif item_type in {"function_call_output", "custom_tool_call_output", "tool_search_output"}:
             block = _responses_item_to_anthropic_tool_result(item)
             if block is not None:
@@ -570,6 +614,44 @@ def _anthropic_blocks_to_text(blocks: list[dict[str, object]]) -> str | None:
     ]
     joined = "\n\n".join(text for text in texts if text)
     return joined or None
+
+
+def _consume_pending_anthropic_reasoning_block(
+    pending_reasoning_text: list[str],
+    *,
+    as_thinking: bool = False,
+    force_placeholder: bool = False,
+) -> dict[str, object] | None:
+    reasoning_text = _consume_pending_reasoning_content(pending_reasoning_text)
+    if as_thinking:
+        if reasoning_text or force_placeholder:
+            return {
+                "type": "thinking",
+                "thinking": reasoning_text,
+            }
+        return None
+    if not reasoning_text:
+        return None
+    return {
+        "type": "text",
+        "text": reasoning_text,
+    }
+
+
+def _anthropic_replay_needs_reasoning_block(
+    *,
+    model: str,
+    provider: str | None,
+    base_url: str | None,
+) -> bool:
+    normalized_model = (model or "").strip().lower()
+    normalized_provider = (provider or "").strip().lower()
+    normalized_base_url = (base_url or "").strip().lower()
+    return (
+        normalized_provider == "xiaomi"
+        or "mimo" in normalized_model
+        or "xiaomimimo.com" in normalized_base_url
+    )
 
 
 def _responses_item_to_anthropic_tool_use(item: dict[str, object]) -> dict[str, object] | None:
@@ -623,8 +705,10 @@ def _responses_input_to_chat_messages(
     raw_input: object,
     *,
     instructions: str | None,
+    needs_reasoning_content: bool = False,
 ) -> list[dict[str, object]]:
     messages: list[dict[str, object]] = []
+    pending_reasoning_content: list[str] = []
     if instructions:
         messages.append({"role": "system", "content": instructions})
     if not isinstance(raw_input, list):
@@ -637,18 +721,30 @@ def _responses_input_to_chat_messages(
             role = _string_value(item.get("role")) or "user"
             content = _responses_content_to_chat_content(item.get("content"))
             if content:
-                messages.append({"role": role, "content": content})
+                message = {"role": role, "content": content}
+                if role == "assistant" and needs_reasoning_content:
+                    message["reasoning_content"] = _consume_pending_reasoning_content(
+                        pending_reasoning_content
+                    )
+                messages.append(message)
+        elif item_type == "reasoning":
+            reasoning_text = _responses_reasoning_item_to_text(item)
+            if reasoning_text:
+                pending_reasoning_content.append(reasoning_text)
         elif item_type in {"function_call", "custom_tool_call", "local_shell_call", "tool_search_call"}:
             tool_call = _responses_item_to_chat_tool_call(item)
             if tool_call is None:
                 continue
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [tool_call],
-                }
-            )
+            message = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [tool_call],
+            }
+            if needs_reasoning_content:
+                message["reasoning_content"] = _consume_pending_reasoning_content(
+                    pending_reasoning_content
+                )
+            messages.append(message)
         elif item_type in {"function_call_output", "custom_tool_call_output", "tool_search_output"}:
             call_id = _string_value(item.get("call_id"))
             if not call_id:
@@ -661,6 +757,70 @@ def _responses_input_to_chat_messages(
                 }
             )
     return messages
+
+
+def _responses_reasoning_item_to_text(item: dict[str, object]) -> str | None:
+    texts: list[str] = []
+    summary = item.get("summary")
+    if isinstance(summary, list):
+        for entry in summary:
+            if not isinstance(entry, dict):
+                continue
+            text = _string_value(entry.get("text"))
+            if text:
+                texts.append(text)
+    content = item.get("content")
+    if isinstance(content, list):
+        for entry in content:
+            if not isinstance(entry, dict):
+                continue
+            text = _string_value(entry.get("text"))
+            if text:
+                texts.append(text)
+    if not texts:
+        return None
+    return "\n".join(texts)
+
+
+def _consume_pending_reasoning_content(pending_reasoning_content: list[str]) -> str:
+    if not pending_reasoning_content:
+        return ""
+    reasoning_content = "\n".join(
+        chunk.strip() for chunk in pending_reasoning_content if chunk.strip()
+    ).strip()
+    pending_reasoning_content.clear()
+    return reasoning_content
+
+
+def _chat_completions_replay_needs_reasoning_content(
+    *,
+    model: str,
+    provider: str | None,
+    base_url: str | None,
+) -> bool:
+    normalized_model = (model or "").strip().lower()
+    normalized_provider = (provider or "").strip().lower()
+    normalized_base_url = (base_url or "").strip().lower()
+    return (
+        normalized_provider
+        in {
+            "deepseek",
+            "moonshot",
+            "kimi",
+            "kimi-coding",
+            "kimi-coding-cn",
+            "xiaomi",
+        }
+        or "deepseek" in normalized_model
+        or "moonshot" in normalized_model
+        or "kimi" in normalized_model
+        or "mimo" in normalized_model
+        or "api.deepseek.com" in normalized_base_url
+        or "api.kimi.com" in normalized_base_url
+        or "moonshot.ai" in normalized_base_url
+        or "moonshot.cn" in normalized_base_url
+        or "xiaomimimo.com" in normalized_base_url
+    )
 
 
 def _responses_content_to_chat_content(raw_content: object) -> str | list[dict[str, object]]:

@@ -12,6 +12,7 @@ from mente.executors.base import Executor
 from mente.feature_flags import review_capability_gate
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import MemoryRepository
+from mente.review.llm_memory_review import build_llm_memory_review_artifact
 from mente.review.memory_review import build_memory_review_artifact
 from mente.review.session_synthesis import build_session_synthesis_artifact
 from mente.review.skill_review import build_skill_review_artifact
@@ -65,6 +66,7 @@ class Orchestrator:
         promotion_trace = self._persist_promoted_memory(task, result)
         self._persist_memory_audit(task, result, trace, promotion_trace)
         self._persist_memory_review_artifact(task, result)
+        self._persist_llm_memory_review_artifact(task, result)
         self._persist_skill_review_artifact(task, result)
         self._persist_session_synthesis_artifact(task, result)
 
@@ -226,6 +228,27 @@ class Orchestrator:
             result.metadata["memory_review_artifact"] = artifact
         except Exception:
             logger.exception("failed to serialize memory review artifact for task %s", task.task_id)
+
+    def _persist_llm_memory_review_artifact(
+        self,
+        task: Task,
+        result: ExecutionResult,
+    ) -> None:
+        source = str(task.metadata.get("source") or "").strip()
+        workflow_gate, _ = review_capability_gate(
+            source=source,
+            task_type=task.task_type,
+            metadata=task.metadata,
+            capability="llm_memory_review",
+        )
+        if workflow_gate is not True:
+            return
+        try:
+            artifact = build_llm_memory_review_artifact(task, result)
+            task.metadata["llm_memory_review_artifact"] = artifact
+            result.metadata["llm_memory_review_artifact"] = artifact
+        except Exception:
+            logger.exception("failed to serialize LLM memory review artifact for task %s", task.task_id)
 
     def _persist_skill_review_artifact(
         self,

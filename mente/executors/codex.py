@@ -9,8 +9,9 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from hermes_constants import get_skills_dir
+from hermes_constants import get_mente_home, get_skills_dir
 from kernel.codex.bridge.entrypoints import build_vendored_command
 from kernel.codex.runtime.launcher import build_private_runtime_env
 from kernel.codex.runtime.protocol import KernelExecutionPayload
@@ -208,6 +209,7 @@ class CodexExecutor(CodexKernelAdapter):
                 )
                 codex_home = execution_runtime_config.runtime_home
                 codex_home.mkdir(parents=True, exist_ok=True)
+                self._seed_canonical_memories_into_isolated_home(codex_home)
                 self._seed_user_skills_into_isolated_home(codex_home)
                 auth_source = self._seed_auth_into_isolated_home(codex_home, execution_runtime_config)
                 emit_execution_event(
@@ -533,6 +535,49 @@ class CodexExecutor(CodexKernelAdapter):
         if runtime_config.subprocess_env.get("MENTE_CODEX_API_KEY"):
             return "private_env"
         return write_private_runtime_auth(codex_home)
+
+    def _seed_canonical_memories_into_isolated_home(self, codex_home: Path) -> str:
+        """Expose the canonical Mente memory store inside the private Codex home."""
+        canonical_memories = get_mente_home() / "memories"
+        canonical_memories.mkdir(parents=True, exist_ok=True)
+
+        target_memories = codex_home / "memories"
+        try:
+            if target_memories.exists() and target_memories.resolve() == canonical_memories.resolve():
+                return "canonical"
+            if target_memories.is_symlink() and target_memories.resolve() == canonical_memories.resolve():
+                return "symlink"
+        except OSError:
+            pass
+
+        if target_memories.exists() or target_memories.is_symlink():
+            if (
+                target_memories.is_dir()
+                and not target_memories.is_symlink()
+                and not any(target_memories.iterdir())
+            ):
+                shutil.rmtree(target_memories)
+            else:
+                backup_path = self._next_runtime_backup_path(codex_home, "memories.legacy")
+                shutil.move(str(target_memories), str(backup_path))
+
+        target_memories.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target_memories.symlink_to(canonical_memories, target_is_directory=True)
+            return "symlink"
+        except OSError as exc:
+            raise RuntimeError(
+                "failed to expose canonical Mente memories inside private Codex runtime: "
+                f"{target_memories} -> {canonical_memories}"
+            ) from exc
+
+    def _next_runtime_backup_path(self, codex_home: Path, stem: str) -> Path:
+        """Return a non-existing backup path under the runtime home."""
+        for _attempt in range(100):
+            candidate = codex_home / f"{stem}-{uuid4().hex[:12]}"
+            if not candidate.exists():
+                return candidate
+        return codex_home / f"{stem}-{uuid4().hex}"
 
     def _seed_user_skills_into_isolated_home(self, codex_home: Path) -> str:
         """Expose Mente-managed user skills inside the private Codex runtime home."""

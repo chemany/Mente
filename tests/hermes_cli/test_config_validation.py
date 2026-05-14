@@ -176,6 +176,82 @@ class TestCodexNamespaceValidation:
         assert issues == []
 
 
+class TestModelConfigHygieneValidation:
+    """Model config should have one clear source of truth."""
+
+    def test_model_api_key_warns_to_keep_secrets_in_env(self):
+        issues = validate_config_structure({
+            "model": {
+                "provider": "xiaomi",
+                "default": "mimo-v2.5-pro",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_key": "sk-test",
+            },
+        })
+
+        assert any(
+            issue.severity == "warning"
+            and "model.api_key" in issue.message
+            and ".env" in issue.hint
+            for issue in issues
+        )
+
+    def test_provider_base_url_in_env_warns_to_use_config_model_base_url(self):
+        issues = validate_config_structure(
+            {
+                "model": {
+                    "provider": "xiaomi",
+                    "default": "mimo-v2.5-pro",
+                    "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                },
+            },
+            env_vars={"XIAOMI_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1"},
+        )
+
+        assert any(
+            issue.severity == "warning"
+            and "XIAOMI_BASE_URL" in issue.message
+            and "model.base_url" in issue.hint
+            for issue in issues
+        )
+
+    def test_auxiliary_main_with_non_main_model_warns(self):
+        issues = validate_config_structure({
+            "model": {
+                "provider": "xiaomi",
+                "default": "mimo-v2.5-pro",
+            },
+            "auxiliary": {
+                "compression": {
+                    "provider": "main",
+                    "model": "gpt-5.4",
+                    "timeout": 120,
+                },
+            },
+        })
+
+        assert any(
+            issue.severity == "warning"
+            and "auxiliary.compression" in issue.message
+            and "provider: auto" in issue.hint
+            for issue in issues
+        )
+
+    def test_auxiliary_auto_and_main_without_model_do_not_warn(self):
+        issues = validate_config_structure({
+            "model": {
+                "provider": "xiaomi",
+                "default": "mimo-v2.5-pro",
+            },
+            "auxiliary": {
+                "compression": {"provider": "auto", "model": "", "timeout": 120},
+                "title_generation": {"provider": "main", "model": "", "timeout": 30},
+            },
+        })
+
+        assert not any("auxiliary." in issue.message for issue in issues)
+
+
 class TestConfigIssueDataclass:
     """ConfigIssue should be a proper dataclass."""
 

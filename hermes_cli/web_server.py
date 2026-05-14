@@ -15,6 +15,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -40,11 +41,22 @@ from hermes_cli.config import (
     get_hermes_home,
     load_config,
     load_env,
+    reload_env,
     save_config,
     save_env_value,
     remove_env_value,
     check_config_version,
     redact_key,
+)
+from hermes_cli.model_provider_profiles import (
+    MODEL_PROVIDER_API_MODES,
+    MODEL_PROVIDER_ENV_RE,
+    ModelProviderProfileError,
+    as_nonempty_str,
+    default_model_provider_key_env,
+    normalize_model_provider_slug,
+    save_model_provider_profile,
+    validate_model_provider_base_url,
 )
 from gateway.status import get_running_pid, read_runtime_status
 from mente.memory.memory_query import (
@@ -363,6 +375,7 @@ _CATEGORY_MERGE: Dict[str, str] = {
     "human_delay": "display",
     "dashboard": "display",
     "code_execution": "agent",
+    "prompt_caching": "agent",
 }
 
 # Display order for tabs — unlisted categories sort alphabetically after these.
@@ -444,6 +457,23 @@ CONFIG_SCHEMA = _ordered_schema
 
 class ConfigUpdate(BaseModel):
     config: dict
+
+
+class ModelQuickSwitchUpdate(BaseModel):
+    target: str
+    provider: str
+    model: str = ""
+
+
+class ModelProviderCreate(BaseModel):
+    slug: str = ""
+    name: str
+    base_url: str
+    api_key: str = ""
+    key_env: str = ""
+    default_model: str
+    api_mode: str = "chat_completions"
+    models: List[str] = []
 
 
 class EnvVarUpdate(BaseModel):
@@ -856,6 +886,451 @@ _EMPTY_MODEL_INFO: dict = {
     "effective_context_length": 0,
     "capabilities": {},
 }
+
+
+def _as_nonempty_str(value: Any) -> str:
+    return as_nonempty_str(value)
+
+
+_MODEL_PROVIDER_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
+_MODEL_PROVIDER_ENV_RE = MODEL_PROVIDER_ENV_RE
+_MODEL_PROVIDER_API_MODES = MODEL_PROVIDER_API_MODES
+
+
+def _model_provider_slug(value: str) -> str:
+    return normalize_model_provider_slug(value)
+
+
+def _model_provider_key_env(slug: str) -> str:
+    return default_model_provider_key_env(slug)
+
+
+def _validate_model_provider_url(base_url: str) -> str:
+    try:
+        return validate_model_provider_base_url(base_url)
+    except ModelProviderProfileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _provider_option_from_config(config: Dict[str, Any], provider: str) -> Dict[str, Any]:
+    options = {p.get("slug"): p for p in _list_dashboard_model_providers(config)}
+    return options.get(provider, {})
+
+
+def _model_selection_from_config(config: Dict[str, Any]) -> Dict[str, str]:
+    model_cfg = config.get("model", "")
+    if isinstance(model_cfg, dict):
+        return {
+            "provider": _as_nonempty_str(model_cfg.get("provider")),
+            "model": _as_nonempty_str(model_cfg.get("default") or model_cfg.get("name")),
+            "base_url": _as_nonempty_str(model_cfg.get("base_url")),
+            "api_mode": _as_nonempty_str(model_cfg.get("api_mode")),
+        }
+    return {
+        "provider": "",
+        "model": _as_nonempty_str(model_cfg),
+        "base_url": "",
+        "api_mode": "",
+    }
+
+
+def _memory_model_selection_from_config(config: Dict[str, Any]) -> Dict[str, str]:
+    aux = config.get("auxiliary") if isinstance(config.get("auxiliary"), dict) else {}
+    memory_cfg = (
+        aux.get("llm_memory_review")
+        if isinstance(aux.get("llm_memory_review"), dict)
+        else {}
+    )
+    return {
+        "provider": _as_nonempty_str(memory_cfg.get("provider")) or "auto",
+        "model": _as_nonempty_str(memory_cfg.get("model")),
+        "base_url": _as_nonempty_str(memory_cfg.get("base_url")),
+        "api_mode": _as_nonempty_str(memory_cfg.get("api_mode")),
+    }
+
+
+def _provider_profile(config: Dict[str, Any], provider: str) -> Dict[str, str]:
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
+        return {}
+    entry = providers.get(provider)
+    if not isinstance(entry, dict):
+        return {}
+    return {
+        "name": _as_nonempty_str(entry.get("name")) or provider,
+        "base_url": (
+            _as_nonempty_str(entry.get("base_url"))
+            or _as_nonempty_str(entry.get("api"))
+            or _as_nonempty_str(entry.get("url"))
+        ),
+        "key_env": _as_nonempty_str(entry.get("key_env")),
+        "default_model": (
+            _as_nonempty_str(entry.get("default_model"))
+            or _as_nonempty_str(entry.get("model"))
+        ),
+        "api_mode": (
+            _as_nonempty_str(entry.get("api_mode"))
+            or _as_nonempty_str(entry.get("transport"))
+        ),
+    }
+
+
+def _provider_key_env(provider: str, config: Dict[str, Any]) -> str:
+    profile = _provider_profile(config, provider)
+    if profile.get("key_env"):
+        return profile["key_env"]
+    if provider == "openai":
+        return "OPENAI_API_KEY"
+    try:
+        from hermes_cli.config import get_compatible_custom_providers
+        from hermes_cli.providers import resolve_provider_full
+
+        pdef = resolve_provider_full(
+            provider,
+            config.get("providers") if isinstance(config.get("providers"), dict) else {},
+            get_compatible_custom_providers(config),
+        )
+        if pdef and pdef.api_key_env_vars:
+            return pdef.api_key_env_vars[0]
+    except Exception:
+        pass
+    return ""
+
+
+def _provider_display_name(provider: str, config: Dict[str, Any], option: Optional[Dict[str, Any]] = None) -> str:
+    profile = _provider_profile(config, provider)
+    if profile.get("name"):
+        return profile["name"]
+    if option and option.get("name"):
+        return str(option["name"])
+    try:
+        from hermes_cli.providers import get_label
+        return get_label(provider)
+    except Exception:
+        return provider
+
+
+def _provider_base_url(provider: str, config: Dict[str, Any], option: Optional[Dict[str, Any]] = None) -> str:
+    profile = _provider_profile(config, provider)
+    if profile.get("base_url"):
+        return profile["base_url"]
+    if option:
+        api_url = _as_nonempty_str(option.get("api_url"))
+        if api_url:
+            return api_url
+    if provider == "openai":
+        return "https://api.openai.com/v1"
+    try:
+        from hermes_cli.config import get_compatible_custom_providers
+        from hermes_cli.providers import resolve_provider_full
+
+        pdef = resolve_provider_full(
+            provider,
+            config.get("providers") if isinstance(config.get("providers"), dict) else {},
+            get_compatible_custom_providers(config),
+        )
+        return _as_nonempty_str(pdef.base_url if pdef else "")
+    except Exception:
+        return ""
+
+
+def _provider_api_mode(provider: str, base_url: str, config: Dict[str, Any]) -> str:
+    profile = _provider_profile(config, provider)
+    if profile.get("api_mode"):
+        return profile["api_mode"]
+    try:
+        from hermes_cli.providers import determine_api_mode
+        return determine_api_mode(provider, base_url)
+    except Exception:
+        return ""
+
+
+def _list_dashboard_model_providers(config: Dict[str, Any], max_models: int = 80) -> List[Dict[str, Any]]:
+    try:
+        from hermes_cli.config import get_compatible_custom_providers
+        from hermes_cli.model_switch import list_authenticated_providers
+
+        reload_env()
+        current = _model_selection_from_config(config)
+        providers = list_authenticated_providers(
+            current_provider=current.get("provider", ""),
+            current_base_url=current.get("base_url", ""),
+            user_providers=(
+                config.get("providers") if isinstance(config.get("providers"), dict) else {}
+            ),
+            custom_providers=get_compatible_custom_providers(config),
+            max_models=max_models,
+        )
+    except Exception:
+        providers = []
+
+    by_slug: Dict[str, Dict[str, Any]] = {}
+    for provider in providers:
+        slug = _as_nonempty_str(provider.get("slug"))
+        if slug:
+            by_slug[slug] = dict(provider)
+
+    current_main = _model_selection_from_config(config)
+    if current_main.get("provider"):
+        by_slug.setdefault(current_main["provider"], {
+            "slug": current_main["provider"],
+            "name": _provider_display_name(current_main["provider"], config),
+            "models": [current_main["model"]] if current_main.get("model") else [],
+            "total_models": 1 if current_main.get("model") else 0,
+            "source": "current-config",
+            "is_user_defined": False,
+            "is_current": True,
+        })
+
+    current_memory = _memory_model_selection_from_config(config)
+    if current_memory.get("provider") and current_memory["provider"] != "auto":
+        by_slug.setdefault(current_memory["provider"], {
+            "slug": current_memory["provider"],
+            "name": _provider_display_name(current_memory["provider"], config),
+            "models": [current_memory["model"]] if current_memory.get("model") else [],
+            "total_models": 1 if current_memory.get("model") else 0,
+            "source": "current-config",
+            "is_user_defined": False,
+        })
+
+    configured_providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    for slug, entry in configured_providers.items():
+        if not isinstance(entry, dict):
+            continue
+        by_slug.setdefault(str(slug), {
+            "slug": str(slug),
+            "name": entry.get("name") or str(slug),
+            "models": [],
+            "total_models": 0,
+            "source": "user-config",
+            "is_user_defined": True,
+        })
+
+    enriched: List[Dict[str, Any]] = []
+    for slug, provider in by_slug.items():
+        profile = _provider_profile(config, slug)
+        active = current_main if slug == current_main.get("provider") else {}
+        active = current_memory if not active and slug == current_memory.get("provider") else active
+        models = list(provider.get("models") or [])
+        base_url = (
+            profile.get("base_url")
+            or _as_nonempty_str(provider.get("api_url"))
+            or active.get("base_url", "")
+            or _provider_base_url(slug, config, provider)
+        )
+        default_model = profile.get("default_model") or active.get("model", "") or (models[0] if models else "")
+        api_mode = profile.get("api_mode") or _provider_api_mode(slug, base_url, config)
+        if default_model and default_model not in models:
+            models.insert(0, default_model)
+        if slug == current_main.get("provider"):
+            provider["is_current"] = True
+        provider.update({
+            "api_url": base_url,
+            "default_model": default_model,
+            "api_mode": api_mode,
+            "key_env": profile.get("key_env") or _provider_key_env(slug, config),
+            "models": models,
+            "total_models": max(int(provider.get("total_models") or 0), len(models)),
+        })
+        enriched.append(provider)
+
+    enriched.sort(key=lambda p: (not bool(p.get("is_current")), str(p.get("name") or p.get("slug"))))
+    return enriched
+
+
+def _remember_main_provider_profile(config: Dict[str, Any]) -> None:
+    current = _model_selection_from_config(config)
+    provider = current.get("provider")
+    model = current.get("model")
+    if not provider or not model:
+        return
+
+    providers = config.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
+        config["providers"] = providers
+
+    existing = providers.get(provider)
+    if not isinstance(existing, dict):
+        existing = {}
+    entry = dict(existing)
+    entry["name"] = entry.get("name") or _provider_display_name(provider, config)
+    if current.get("base_url"):
+        entry["base_url"] = current["base_url"]
+    entry["default_model"] = model
+    if current.get("api_mode"):
+        entry["api_mode"] = current["api_mode"]
+    key_env = _provider_key_env(provider, config)
+    if key_env:
+        entry["key_env"] = key_env
+    entry.pop("api_key", None)
+    providers[provider] = entry
+
+
+def _resolve_quick_switch_target(
+    config: Dict[str, Any],
+    provider: str,
+    model: str,
+) -> Dict[str, str]:
+    options = {p.get("slug"): p for p in _list_dashboard_model_providers(config)}
+    option = options.get(provider)
+    profile = _provider_profile(config, provider)
+    selected_model = _as_nonempty_str(model) or profile.get("default_model")
+    if not selected_model and option:
+        models = option.get("models") or []
+        selected_model = _as_nonempty_str(models[0]) if models else ""
+    if not provider or not selected_model:
+        raise HTTPException(status_code=400, detail="provider and model are required")
+
+    base_url = _provider_base_url(provider, config, option)
+    api_mode = _provider_api_mode(provider, base_url, config)
+    return {
+        "provider": provider,
+        "model": selected_model,
+        "base_url": base_url,
+        "api_mode": api_mode,
+        "name": _provider_display_name(provider, config, option),
+        "key_env": _provider_key_env(provider, config),
+    }
+
+
+def _save_provider_profile(config: Dict[str, Any], resolved: Dict[str, str]) -> None:
+    provider = resolved["provider"]
+    providers = config.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
+        config["providers"] = providers
+    entry = dict(providers.get(provider) or {})
+    entry["name"] = entry.get("name") or resolved.get("name") or provider
+    if resolved.get("base_url"):
+        entry["base_url"] = resolved["base_url"]
+    entry["default_model"] = resolved["model"]
+    if resolved.get("api_mode"):
+        entry["api_mode"] = resolved["api_mode"]
+    if resolved.get("key_env"):
+        entry["key_env"] = resolved["key_env"]
+    entry.pop("api_key", None)
+    providers[provider] = entry
+
+
+@app.get("/api/model/options")
+def get_model_options():
+    """Return provider/model choices plus persisted provider-specific defaults."""
+    try:
+        cfg = load_config()
+        providers = _list_dashboard_model_providers(cfg)
+        return {
+            "providers": providers,
+            "current": {
+                "main": _model_selection_from_config(cfg),
+                "memory": _memory_model_selection_from_config(cfg),
+            },
+        }
+    except Exception:
+        _log.exception("GET /api/model/options failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.post("/api/model/providers")
+def create_model_provider(body: ModelProviderCreate):
+    """Persist a user-defined model provider profile and optional API key."""
+    try:
+        saved = save_model_provider_profile(
+            slug=body.slug,
+            name=body.name,
+            base_url=body.base_url,
+            api_key=body.api_key,
+            key_env=body.key_env,
+            default_model=body.default_model,
+            api_mode=body.api_mode,
+            models=body.models,
+        )
+        cfg = load_config()
+        slug = saved["slug"]
+        return {
+            "ok": True,
+            "provider": _provider_option_from_config(cfg, slug) or {
+                "slug": slug,
+                "name": saved["name"],
+                "api_url": saved["base_url"],
+                "key_env": saved["key_env"],
+                "default_model": saved["default_model"],
+                "api_mode": saved["api_mode"],
+                "models": saved["models"],
+            },
+        }
+    except ModelProviderProfileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("POST /api/model/providers failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.put("/api/model/quick-switch")
+def quick_switch_model(body: ModelQuickSwitchUpdate):
+    """Persist a dashboard model switch without writing secrets to config.yaml."""
+    target = (body.target or "").strip().lower()
+    provider = (body.provider or "").strip()
+    model = (body.model or "").strip()
+    if target not in {"main", "memory"}:
+        raise HTTPException(status_code=400, detail="target must be 'main' or 'memory'")
+
+    try:
+        cfg = load_config()
+        if target == "memory" and provider.lower() == "auto":
+            aux = cfg.setdefault("auxiliary", {})
+            if not isinstance(aux, dict):
+                aux = {}
+                cfg["auxiliary"] = aux
+            memory_cfg = dict(aux.get("llm_memory_review") or {})
+            memory_cfg["provider"] = "auto"
+            memory_cfg["model"] = ""
+            memory_cfg["base_url"] = ""
+            memory_cfg["api_mode"] = ""
+            memory_cfg["api_key"] = memory_cfg.get("api_key", "")
+            aux["llm_memory_review"] = memory_cfg
+            save_config(cfg)
+            return {"ok": True, "target": target, "selection": _memory_model_selection_from_config(cfg)}
+
+        resolved = _resolve_quick_switch_target(cfg, provider, model)
+
+        if target == "main":
+            _remember_main_provider_profile(cfg)
+            previous_model = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+            model_cfg: Dict[str, Any] = {
+                "default": resolved["model"],
+                "provider": resolved["provider"],
+                "base_url": resolved["base_url"],
+                "api_mode": resolved["api_mode"],
+            }
+            if isinstance(previous_model, dict) and isinstance(previous_model.get("context_length"), int):
+                model_cfg["context_length"] = previous_model["context_length"]
+            cfg["model"] = model_cfg
+            _save_provider_profile(cfg, resolved)
+            save_config(cfg)
+            return {"ok": True, "target": target, "selection": _model_selection_from_config(cfg)}
+
+        aux = cfg.setdefault("auxiliary", {})
+        if not isinstance(aux, dict):
+            aux = {}
+            cfg["auxiliary"] = aux
+        memory_cfg = dict(aux.get("llm_memory_review") or {})
+        memory_cfg["provider"] = resolved["provider"]
+        memory_cfg["model"] = resolved["model"]
+        memory_cfg["base_url"] = resolved["base_url"]
+        memory_cfg["api_mode"] = resolved["api_mode"]
+        memory_cfg["api_key"] = memory_cfg.get("api_key", "")
+        aux["llm_memory_review"] = memory_cfg
+        _save_provider_profile(cfg, resolved)
+        save_config(cfg)
+        return {"ok": True, "target": target, "selection": _memory_model_selection_from_config(cfg)}
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("PUT /api/model/quick-switch failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/api/model/info")

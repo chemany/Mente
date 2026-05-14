@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import inspect
 from typing import Any, Callable
 
 from mente.memory.models import MemoryRecord
@@ -48,7 +49,8 @@ def execute_memory_query(
     repo = repository_factory()
     try:
         if query["scope"] == "recent":
-            records = repo.list_recent(
+            records = _call_memory_list_method(
+                repo.list_recent,
                 limit=fetch_limit,
                 offset=requested_offset,
                 source=query["source"],
@@ -57,7 +59,8 @@ def execute_memory_query(
                 include_inactive=query["include_superseded"],
             )
         else:
-            records = repo.list_by_session(
+            records = _call_memory_list_method(
+                repo.list_by_session,
                 query["session_id"],
                 limit=fetch_limit,
                 offset=requested_offset,
@@ -87,6 +90,19 @@ def execute_memory_query(
             "next_cursor": str(next_offset) if next_offset is not None else None,
         },
     }
+
+
+def _call_memory_list_method(method: Callable[..., list[MemoryRecord]], *args: Any, **kwargs: Any) -> list[MemoryRecord]:
+    """Call memory repositories that may predate the include_inactive debug flag."""
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "include_inactive" not in parameters and not any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    ):
+        kwargs.pop("include_inactive", None)
+    return method(*args, **kwargs)
 
 
 def serialize_memory_query(query: dict[str, Any]) -> dict[str, Any]:

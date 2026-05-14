@@ -900,7 +900,7 @@ class TestChatCompletionsEndpoint:
         stored_task = SQLiteTaskRepository(db_path=task_db_path).get(tasks_data["tasks"][0]["task_id"])
 
         assert resp.status == 200
-        assert response_data["choices"][0]["message"]["content"] == "记下了。"
+        assert response_data["choices"][0]["message"]["content"] == "已写入记忆：我喜欢简洁回答"
         assert tasks_resp.status == 200
         assert stored_task is not None
         assert stored_task.metadata["remember_intent_direct_write"]["status"] == "persisted"

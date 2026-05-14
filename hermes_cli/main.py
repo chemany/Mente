@@ -1662,8 +1662,52 @@ def cmd_setup(args):
     run_setup_wizard(args)
 
 
+def cmd_model_add_provider(args):
+    """Add a user-defined model provider profile from the CLI."""
+    from hermes_cli.model_provider_profiles import (
+        ModelProviderProfileError,
+        save_model_provider_profile,
+    )
+
+    raw_models = getattr(args, "models", None) or []
+    models = []
+    for item in raw_models:
+        for part in str(item).split(","):
+            model_name = part.strip()
+            if model_name and model_name not in models:
+                models.append(model_name)
+
+    try:
+        saved = save_model_provider_profile(
+            name=getattr(args, "name", ""),
+            slug=getattr(args, "slug", ""),
+            base_url=getattr(args, "base_url", ""),
+            api_key=getattr(args, "api_key", ""),
+            key_env=getattr(args, "key_env", ""),
+            default_model=getattr(args, "model", ""),
+            api_mode=getattr(args, "api_mode", "chat_completions"),
+            models=models,
+            activate=bool(getattr(args, "activate", False)),
+        )
+    except ModelProviderProfileError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    print(f"Saved model provider: {saved['slug']} ({saved['name']})")
+    print(f"  Base URL: {saved['base_url']}")
+    print(f"  Default model: {saved['default_model']}")
+    print(f"  API key env: {saved['key_env']}")
+    if getattr(args, "activate", False):
+        print("  Activated as the main model provider.")
+    else:
+        print("  Use `mente model` or the dashboard to activate it.")
+
+
 def cmd_model(args):
     """Select default model — starts with provider selection, then model picker."""
+    if getattr(args, "model_command", None) == "add-provider":
+        cmd_model_add_provider(args)
+        return
     _require_tty("model")
     select_provider_and_model(args=args)
 
@@ -8270,6 +8314,50 @@ For more help on a command:
         action="store_true",
         help="Disable TLS verification for Nous login (testing only)",
     )
+    model_subparsers = model_parser.add_subparsers(dest="model_command")
+    model_add_provider = model_subparsers.add_parser(
+        "add-provider",
+        help="Add a custom model provider profile",
+        description=(
+            "Save a custom model provider to config.yaml providers: and store "
+            "its API key in ~/.hermes/.env."
+        ),
+    )
+    model_add_provider.add_argument("--name", required=True, help="Display name, e.g. My Relay")
+    model_add_provider.add_argument("--slug", default="", help="Stable provider id, e.g. my-relay")
+    model_add_provider.add_argument("--base-url", required=True, help="HTTP(S) API base URL")
+    model_add_provider.add_argument("--api-key", default="", help="API key to store in .env")
+    model_add_provider.add_argument("--key-env", default="", help="Env var name for the API key")
+    model_add_provider.add_argument(
+        "--model",
+        "--default-model",
+        dest="model",
+        required=True,
+        help="Default model for this provider",
+    )
+    model_add_provider.add_argument(
+        "--api-mode",
+        default="chat_completions",
+        choices=[
+            "chat_completions",
+            "anthropic_messages",
+            "codex_responses",
+            "bedrock_converse",
+        ],
+        help="Provider API mode (default: chat_completions)",
+    )
+    model_add_provider.add_argument(
+        "--models",
+        action="append",
+        default=[],
+        help="Additional model name(s); repeat or pass comma-separated values",
+    )
+    model_add_provider.add_argument(
+        "--activate",
+        action="store_true",
+        help="Also set this provider/model as the active main model",
+    )
+    model_add_provider.set_defaults(func=cmd_model, model_command="add-provider")
     model_parser.set_defaults(func=cmd_model)
 
     # =========================================================================

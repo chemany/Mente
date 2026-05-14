@@ -1416,6 +1416,7 @@ def test_run_post_turn_memory_review_reads_persisted_task_and_writes_memory(monk
     memory_db_path = tmp_path / "memory.db"
     monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
     monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+    monkeypatch.setenv("MENTE_LLM_MEMORY_REVIEW_ENABLED", "0")
     monkeypatch.setenv("MENTE_MEMORY_REVIEW_ENABLED", "1")
 
     task_repository = SQLiteTaskRepository(db_path=task_db_path)
@@ -1793,6 +1794,7 @@ def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_pat
     memory_db_path = tmp_path / "memory.db"
     monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
     monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+    monkeypatch.setenv("MENTE_LLM_MEMORY_REVIEW_ENABLED", "0")
 
     class _FakeUuid:
         def __init__(self, value):
@@ -2269,6 +2271,325 @@ def test_run_gateway_task_direct_writes_explicit_chinese_remember_intent_when_fl
     assert memories[0].metadata["write_origin"] == "explicit_remember_intent"
     assert memories[0].metadata["tool_name"] == "mente_remember_intent_direct_write"
     assert memories[0].metadata["promotion_reason"] == "explicit_remember_intent"
+
+
+def test_run_gateway_task_fast_paths_explicit_remember_intent_without_executor_by_default(
+    tmp_path,
+    monkeypatch,
+):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+    monkeypatch.delenv("MENTE_REMEMBER_INTENT_DIRECT_WRITE_ENABLED", raising=False)
+
+    class _FakeUuid:
+        hex = "gatewayrememberfast"
+
+    def _fail_if_executor_runs(self, request):
+        raise AssertionError("explicit remember-intent should not boot the executor")
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fail_if_executor_runs)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = run_gateway_task(
+        message="你错了，记住以后回答要先说结论",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+    )
+
+    stored = SQLiteTaskRepository(db_path=task_db_path).get("mente_gateway_gatewayrememberfast")
+    memories = SQLiteMemoryRepository(db_path=memory_db_path).list_by_session("session-1", limit=10)
+
+    assert result.status == "success"
+    assert result.summary == "已写入记忆：以后回答要先说结论"
+    assert result.metadata["fast_path"]["kind"] == "remember_intent_direct_write"
+    assert result.metadata["remember_intent_direct_write"]["status"] == "persisted"
+    assert stored is not None
+    assert stored.metadata["fast_path"]["kind"] == "remember_intent_direct_write"
+    assert stored.metadata["remember_intent_direct_write"]["status"] == "persisted"
+    assert len(memories) == 1
+    assert memories[0].fact == "以后回答要先说结论"
+
+
+def test_run_gateway_task_uses_llm_classifier_for_semantic_memory_complaints(
+    tmp_path,
+    monkeypatch,
+):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+    monkeypatch.delenv("MENTE_REMEMBER_INTENT_DIRECT_WRITE_ENABLED", raising=False)
+
+    class _FakeUuid:
+        hex = "gatewaysemanticremember"
+
+    def _classify(*, message, context_facts=None, workspace=None):
+        assert message == "你怎么这么笨，啥都记不住？"
+        return ["用户希望 Mente 可靠记住纠错、偏好和长期指令"]
+
+    def _fail_if_executor_runs(self, request):
+        raise AssertionError("semantic remember-intent should not boot the executor")
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(
+        "mente.integrations.bridge._classify_semantic_remember_intent_facts",
+        _classify,
+    )
+    monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fail_if_executor_runs)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = run_gateway_task(
+        message="你怎么这么笨，啥都记不住？",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+    )
+
+    memories = SQLiteMemoryRepository(db_path=memory_db_path).list_by_session("session-1", limit=10)
+
+    assert result.status == "success"
+    assert result.metadata["fast_path"]["kind"] == "remember_intent_direct_write"
+    assert result.metadata["remember_intent_direct_write"]["status"] == "persisted"
+    assert len(memories) == 1
+    assert memories[0].fact == "用户希望 Mente 可靠记住纠错、偏好和长期指令"
+
+
+def test_run_gateway_task_summarizes_recent_context_for_bare_remember_intent(
+    tmp_path,
+    monkeypatch,
+):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+    monkeypatch.delenv("MENTE_REMEMBER_INTENT_DIRECT_WRITE_ENABLED", raising=False)
+
+    class _FakeUuid:
+        hex = "gatewaycontextremember"
+
+    def _classify(*, message, context_facts=None, workspace=None):
+        assert message == "加入记忆"
+        context_blob = "\n".join(context_facts or [])
+        assert "直接调用 rednote CLI 脚本发布小红书" in context_blob
+        return ["发布小红书内容时直接调用 rednote CLI 脚本，不走 MCP"]
+
+    def _fail_if_executor_runs(self, request):
+        raise AssertionError("contextual remember-intent should not boot the executor")
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(
+        "mente.integrations.bridge._classify_semantic_remember_intent_facts",
+        _classify,
+    )
+    monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fail_if_executor_runs)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = run_gateway_task(
+        message="加入记忆",
+        context_prompt="User corrected the agent: 直接调用 rednote CLI 脚本发布小红书，不走 MCP。",
+        history=[
+            {
+                "role": "user",
+                "content": "以后发布小红书，直接调用 rednote CLI 脚本，不走 MCP。",
+            },
+            {"role": "assistant", "content": "明白，下次直接调用脚本。"},
+        ],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+    )
+
+    stored = SQLiteTaskRepository(db_path=task_db_path).get("mente_gateway_gatewaycontextremember")
+    memories = SQLiteMemoryRepository(db_path=memory_db_path).list_by_session("session-1", limit=10)
+
+    assert result.status == "success"
+    assert result.summary == "已写入记忆：发布小红书内容时直接调用 rednote CLI 脚本，不走 MCP"
+    assert result.metadata["fast_path"]["kind"] == "remember_intent_direct_write"
+    assert result.metadata["remember_intent_direct_write"]["status"] == "persisted"
+    assert stored is not None
+    assert stored.metadata["remember_intent_direct_write"]["status"] == "persisted"
+    assert len(memories) == 1
+    assert memories[0].fact == "发布小红书内容时直接调用 rednote CLI 脚本,不走 MCP"
+
+
+def test_run_gateway_task_runs_llm_memory_review_when_enabled(
+    tmp_path,
+    monkeypatch,
+):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+    monkeypatch.setenv("MENTE_LLM_MEMORY_REVIEW_ENABLED", "1")
+
+    class _FakeUuid:
+        hex = "gatewayllmmemory"
+
+    def _fake_execute(self, request):
+        return ExecutionResult(
+            status="success",
+            summary="Confirmed future Rednote publishing should use the CLI script rather than MCP.",
+            commands_run=["rednote publish --draft article.md"],
+        )
+
+    def _fake_call_llm(**kwargs):
+        prompt = kwargs["messages"][1]["content"]
+        assert "rednote publish --draft article.md" in prompt
+
+        class _Message:
+            content = (
+                '{"should_write": true, "facts": ["发布小红书内容时直接调用 rednote CLI 脚本,不走 MCP"], '
+                '"confidence": "high", "reason": "stable workflow preference"}'
+            )
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+
+        return _Response()
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+    monkeypatch.setattr("mente.review.llm_memory_review.call_llm", _fake_call_llm)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    result = run_gateway_task(
+        message="以后发布小红书直接用脚本，不要走 MCP。",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+    )
+
+    stored = SQLiteTaskRepository(db_path=task_db_path).get("mente_gateway_gatewayllmmemory")
+    memories = SQLiteMemoryRepository(db_path=memory_db_path).list_by_session("session-1", limit=10)
+
+    assert result.status == "success"
+    assert result.metadata["llm_memory_review"]["status"] == "persisted"
+    assert result.metadata["llm_memory_review"]["confidence"] == "high"
+    assert stored is not None
+    assert stored.metadata["llm_memory_review"]["status"] == "persisted"
+    assert len(memories) == 1
+    assert memories[0].fact == "发布小红书内容时直接调用 rednote CLI 脚本,不走 MCP"
+    assert memories[0].metadata["write_origin"] == "post_turn_llm_memory_review"
+
+
+def test_remember_intent_classifier_parser_requires_write_and_confidence():
+    assert mente_bridge._parse_remember_intent_classifier_payload(
+        '{"should_write": true, "fact": " 用户希望以后直接调用脚本 ", "confidence": "high", "reason": "preference"}'
+    ) == ["用户希望以后直接调用脚本"]
+
+    assert mente_bridge._parse_remember_intent_classifier_payload(
+        '{"should_write": true, "fact": "用户临时问天气", "confidence": "low", "reason": "weak"}'
+    ) == []
+    assert mente_bridge._parse_remember_intent_classifier_payload(
+        '{"should_write": false, "fact": "不要写", "confidence": "high", "reason": "chat"}'
+    ) == []
+
+
+def test_remember_intent_resolver_skips_llm_classifier_for_ordinary_messages(monkeypatch):
+    def _fail_classifier(*, message, workspace=None):
+        raise AssertionError("ordinary messages should not call the remember-intent classifier")
+
+    monkeypatch.setattr(
+        "mente.integrations.bridge._classify_semantic_remember_intent_facts",
+        _fail_classifier,
+    )
+
+    assert mente_bridge._resolve_remember_intent_facts(
+        message="帮我写一篇产品介绍",
+        workspace=None,
+    ) == []
+
+
+def test_run_tui_task_fast_paths_semantic_remember_intent_without_executor(
+    tmp_path,
+    monkeypatch,
+):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+    monkeypatch.delenv("MENTE_REMEMBER_INTENT_DIRECT_WRITE_ENABLED", raising=False)
+
+    class _FakeUuid:
+        hex = "tuisemanticremember"
+
+    def _classify(*, message, context_facts=None, workspace=None):
+        assert message == "你怎么这么笨，啥都记不住？"
+        return ["用户希望 Mente 可靠记住纠错、偏好和长期指令"]
+
+    def _fail_if_executor_runs(self, request):
+        raise AssertionError("semantic remember-intent should not boot the TUI executor")
+
+    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(
+        "mente.integrations.bridge._classify_semantic_remember_intent_facts",
+        _classify,
+    )
+    monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fail_if_executor_runs)
+
+    result = run_tui_task(
+        user_message="你怎么这么笨，啥都记不住？",
+        conversation_history=[],
+        session_id="tui-session-1",
+        workspace=str(tmp_path),
+    )
+
+    memories = SQLiteMemoryRepository(db_path=memory_db_path).list_by_session(
+        "tui-session-1",
+        limit=10,
+        source="tui",
+    )
+
+    assert result.status == "success"
+    assert result.metadata["fast_path"]["kind"] == "remember_intent_direct_write"
+    assert result.metadata["remember_intent_direct_write"]["status"] == "persisted"
+    assert len(memories) == 1
+    assert memories[0].fact == "用户希望 Mente 可靠记住纠错、偏好和长期指令"
 
 
 def test_run_gateway_task_direct_write_flag_off_preserves_baseline_behavior(
@@ -2869,6 +3190,7 @@ def test_api_server_session_synthesis_refreshes_stable_summary_row_in_sqlite_e2e
     monkeypatch.setenv("MENTE_API_SERVER_CONVERSATION_ADOPTION_ENABLED", "1")
     monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_ENABLED", "1")
     monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_TURN_INTERVAL", "1")
+    monkeypatch.setenv("MENTE_LLM_MEMORY_REVIEW_ENABLED", "0")
 
     class _FakeUuid:
         def __init__(self, value):
@@ -2978,8 +3300,14 @@ def test_api_server_second_run_with_summary_flag_off_fails_closed_to_baseline(
 
     assert first_result.metadata["session_synthesis"]["status"] == "persisted"
     assert summary_memory is not None
-    assert second_result.metadata["memory_context"]["selected"] == []
-    assert second_result.metadata["memory_audit"]["selected"] == []
+    assert all(
+        item["kind"] != "session_summary"
+        for item in second_result.metadata["memory_context"]["selected"]
+    )
+    assert all(
+        item["kind"] != "session_summary"
+        for item in second_result.metadata["memory_audit"]["selected"]
+    )
     assert second_result.metadata["workflow_contract"]["memory_read"]["session_summary"] == {
         "enabled": False,
         "scope": "session",
@@ -2989,8 +3317,14 @@ def test_api_server_second_run_with_summary_flag_off_fails_closed_to_baseline(
         "counts_toward_existing_budgets": True,
     }
     assert stored_task is not None
-    assert stored_task.metadata["memory_context"]["selected"] == []
-    assert stored_task.metadata["memory_audit"]["selected"] == []
+    assert all(
+        item["kind"] != "session_summary"
+        for item in stored_task.metadata["memory_context"]["selected"]
+    )
+    assert all(
+        item["kind"] != "session_summary"
+        for item in stored_task.metadata["memory_audit"]["selected"]
+    )
 
 
 def test_run_api_server_task_adoption_contract_with_flag_off_skips_review_side_effects(

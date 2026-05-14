@@ -45,7 +45,8 @@ export const zh: Translations = {
     messaging: "消息平台",
     pluginLoadFailed:
       "无法加载此插件的脚本。请检查网络请求（dashboard-plugins/…）以及服务器上的插件路径。",
-    pluginNotRegistered: "插件脚本未调用 register()，或执行出错。请打开浏览器控制台查看详情。",
+    pluginNotRegistered:
+      "插件脚本未调用 register()，或执行出错。请打开浏览器控制台查看详情。",
   },
 
   app: {
@@ -341,6 +342,28 @@ export const zh: Translations = {
     failedToLoadRaw: "加载原始配置失败",
     configImported: "配置已导入 — 请检查后保存",
     invalidJson: "无效的 JSON 文件",
+    modelQuickSwitch: "模型快速切换",
+    mainModel: "主模型",
+    memoryModel: "记忆审查模型",
+    autoMemoryModel: "自动",
+    currentEndpoint: "端点",
+    applying: "应用中",
+    modelSwitchSaved: "模型选择已保存",
+    noModelChoices: "暂无已保存模型",
+    addModelProvider: "新增模型供应商",
+    addModelProviderHint:
+      "保存第三方中转站或自定义模型端点。密钥写入 .env，Base URL 和模型档案写入 providers。",
+    providerName: "供应商名称",
+    providerSlug: "供应商 ID",
+    providerBaseUrl: "Base URL",
+    providerDefaultModel: "默认模型",
+    providerApiMode: "API 模式",
+    providerKeyEnv: "密钥变量名",
+    providerApiKey: "密钥",
+    providerModels: "可选模型列表（换行或逗号分隔）",
+    saveModelProvider: "保存供应商",
+    modelProviderSaved: "模型供应商已保存",
+    modelProviderRequired: "请填写供应商名称、Base URL 和默认模型",
     categories: {
       general: "通用",
       agent: "代理",
@@ -362,7 +385,8 @@ export const zh: Translations = {
 
   env: {
     changesNote: "更改会立即保存到磁盘。活跃会话将自动获取新密钥。",
-    confirmClearMessage: "该变量的已存值将从 .env 文件中删除。无法在此界面撤销。",
+    confirmClearMessage:
+      "该变量的已存值将从 .env 文件中删除。无法在此界面撤销。",
     confirmClearTitle: "清除此密钥？",
     description: "管理存储在以下位置的 API 密钥和凭据",
     hideAdvanced: "隐藏高级选项",
@@ -382,7 +406,8 @@ export const zh: Translations = {
   oauth: {
     title: "提供商登录（OAuth）",
     providerLogins: "提供商登录（OAuth）",
-    description: "已连接 {connected}/{total} 个 OAuth 提供商。登录流程目前通过 CLI 运行；点击「复制命令」并粘贴到终端中进行设置。",
+    description:
+      "已连接 {connected}/{total} 个 OAuth 提供商。登录流程目前通过 CLI 运行；点击「复制命令」并粘贴到终端中进行设置。",
     connected: "已连接",
     expired: "已过期",
     notConnected: "未连接。在终端中运行 {command}。",

@@ -13,6 +13,7 @@ from mente.executors.runtime_config import (
     MENTE_CONTENT_BASE_INSTRUCTIONS,
     MENTE_DEFAULT_BASE_INSTRUCTIONS,
     MENTE_RESEARCH_BASE_INSTRUCTIONS,
+    MENTE_SELF_KNOWLEDGE,
     MENTE_WRITING_BASE_INSTRUCTIONS,
     adapt_runtime_config_for_request,
     resolve_runtime_config,
@@ -354,6 +355,35 @@ def test_runtime_config_detects_anthropic_mode_from_mente_model_settings_without
         'model="mimo-v2.5-pro"',
         DEFAULT_AUTO_COMPACT_OVERRIDE,
     ]
+
+
+def test_runtime_config_resolves_provider_api_key_from_mente_env_without_model_secret(
+    monkeypatch, tmp_path
+):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir(parents=True, exist_ok=True)
+    (mente_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "model:",
+                '  default: "mimo-v2.5-pro"',
+                '  provider: "xiaomi"',
+                '  base_url: "https://token-plan-cn.xiaomimimo.com/anthropic"',
+                '  api_mode: "anthropic_messages"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (mente_home / ".env").write_text("XIAOMI_API_KEY=sk-test-xiaomi\n", encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("XIAOMI_API_KEY", raising=False)
+
+    runtime_config = resolve_runtime_config(tmp_path)
+
+    assert runtime_config.model_runtime.provider == "xiaomi"
+    assert runtime_config.model_runtime.api_mode == "anthropic_messages"
+    assert runtime_config.subprocess_env["MENTE_CODEX_API_KEY"] == "sk-test-xiaomi"
 
 
 def test_adapt_runtime_config_for_content_publishing_switches_to_content_profile(tmp_path):
@@ -714,6 +744,67 @@ def test_runtime_config_seeds_agent_registry_structure_under_mente_home(monkeypa
     assert (executive_office_dir / "agent.yaml").is_file()
     assert (executive_office_dir / "soul.md").is_file()
     assert executive_office_runtime.is_dir()
+
+
+def test_runtime_config_upgrades_known_legacy_builtin_agent_soul(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    agent_dir = _agent_dir(mente_home, DEFAULT_AGENT_IDS["engineering"])
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    old_builtin_soul = (
+        "You are Mente's coding agent. Inspect only the minimum relevant workspace context before changing code. "
+        "For deterministic tasks with an explicit file, command, config key, or skill workflow, go directly to that target instead of broad exploration. "
+        "For code-logic, default-value provenance, compatibility-sensitive, or multi-file behavior changes, inspect the relevant implementation and affected files before editing. "
+        "If relevant skills are provided, read them first and follow the skill workflow before improvising. "
+        "If skills specify scripts or commands, run the most direct one first. "
+        "If that workflow is blocked, diagnose the concrete blocker, fix it, then resume the workflow. "
+        "Keep edits minimal, correct, and consistent with the existing codebase. "
+        "Do not overwrite user changes you did not make or use destructive git/file operations unless explicitly requested. "
+        "Keep responses concise, action-oriented, and focused on the task result."
+    )
+    (agent_dir / "soul.md").write_text(old_builtin_soul, encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    resolve_runtime_config(tmp_path)
+
+    upgraded = (agent_dir / "soul.md").read_text(encoding="utf-8")
+    assert MENTE_SELF_KNOWLEDGE in upgraded
+
+
+def test_runtime_config_upgrades_previous_self_knowledge_agent_soul(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    agent_dir = _agent_dir(mente_home, DEFAULT_AGENT_IDS["engineering"])
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    previous_self_knowledge_soul = (
+        "You are Mente's coding agent. "
+        "Mente is a self-hosted multi-agent assistant. "
+        "The coordinator owns user turns, clarification, delegation, status, and worker control; "
+        "background workers execute lane work such as engineering, research, writing, config_admin, and publishing. "
+        "Worker jobs record task/job metadata, progress, terminal checkpoints, and controls in persisted state. "
+        "Explicit skills route through skill ownership; unknown or cross-lane skill requests should clarify instead of guessing. "
+        "Model switching uses config.yaml provider profiles plus .env secrets, shared by dashboard and CLI. "
+        "Memory uses the unified Mente memory store with optional LLM memory review; do not create private per-runtime memories unless explicitly scoped. "
+        "Inspect only the minimum relevant workspace context before changing code."
+    )
+    (agent_dir / "soul.md").write_text(previous_self_knowledge_soul, encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    resolve_runtime_config(tmp_path)
+
+    upgraded = (agent_dir / "soul.md").read_text(encoding="utf-8")
+    assert "It is safe to tell users that API keys are stored" in upgraded
+
+
+def test_runtime_config_does_not_overwrite_custom_agent_soul(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    agent_dir = _agent_dir(mente_home, DEFAULT_AGENT_IDS["engineering"])
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    custom_soul = "Custom engineering soul that intentionally owns its own context."
+    (agent_dir / "soul.md").write_text(custom_soul, encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    resolve_runtime_config(tmp_path)
+
+    assert (agent_dir / "soul.md").read_text(encoding="utf-8") == custom_soul
 
 
 def test_runtime_config_coordinator_registry_keeps_director_compatibility(monkeypatch, tmp_path):
@@ -1152,7 +1243,7 @@ def test_runtime_config_resolves_launcher_flags_from_codex_runtime_yaml(monkeypa
 
 
 def test_default_runtime_base_instructions_stay_small_but_keep_engineering_guards():
-    assert len(MENTE_DEFAULT_BASE_INSTRUCTIONS) < 1000
+    assert len(MENTE_DEFAULT_BASE_INSTRUCTIONS) < 1700
     assert "coding agent" in MENTE_DEFAULT_BASE_INSTRUCTIONS
     assert "minimum relevant workspace context" in MENTE_DEFAULT_BASE_INSTRUCTIONS
     assert "explicit file, command, config key, or skill workflow" in MENTE_DEFAULT_BASE_INSTRUCTIONS
@@ -1165,3 +1256,25 @@ def test_default_runtime_base_instructions_stay_small_but_keep_engineering_guard
     assert "run the most direct one first" in MENTE_DEFAULT_BASE_INSTRUCTIONS
     assert "Do not overwrite user changes" in MENTE_DEFAULT_BASE_INSTRUCTIONS
     assert "Keep responses concise" in MENTE_DEFAULT_BASE_INSTRUCTIONS
+
+
+def test_runtime_base_instructions_include_current_mente_self_knowledge():
+    assert len(MENTE_SELF_KNOWLEDGE) < 1100
+    for phrase in [
+        "coordinator",
+        "background workers",
+        "skill ownership",
+        "provider profiles",
+        "API keys are stored",
+        "not secret values",
+        "LLM memory review",
+    ]:
+        assert phrase in MENTE_SELF_KNOWLEDGE
+
+    for instructions in [
+        MENTE_COORDINATOR_BASE_INSTRUCTIONS,
+        MENTE_DEFAULT_BASE_INSTRUCTIONS,
+        MENTE_CONFIG_ADMIN_BASE_INSTRUCTIONS,
+        MENTE_CONTENT_BASE_INSTRUCTIONS,
+    ]:
+        assert MENTE_SELF_KNOWLEDGE in instructions

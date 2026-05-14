@@ -161,6 +161,10 @@ export function SelectOption(_props: SelectOptionProps) {
 function flattenChildren(children: React.ReactNode, out: SelectOptionData[]) {
   const arr = Array.isArray(children) ? children : [children];
   for (const child of arr) {
+    if (Array.isArray(child)) {
+      flattenChildren(child, out);
+      continue;
+    }
     if (!child || typeof child !== "object" || !("props" in child)) continue;
     const props = child.props as Record<string, unknown>;
     if (props.value !== undefined) {

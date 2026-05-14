@@ -39,12 +39,14 @@ from mente.feature_flags import (
     review_capability_gate,
 )
 from mente.memory.context import persist_explicit_memory_write
+from mente.memory.fact_normalization import normalize_memory_fact_text
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import SQLiteMemoryRepository
 from mente.orchestrator.service import Orchestrator
-from mente.review.memory_review import MemoryReviewWorker
+from mente.review.llm_memory_review import LLMMemoryReviewWorker
+from mente.review.memory_review import MemoryReviewWorker, build_memory_review_artifact
 from mente.review.remember_intent import extract_explicit_remember_intent_facts
-from mente.review.session_synthesis import SessionSynthesisWorker
+from mente.review.session_synthesis import SessionSynthesisWorker, build_session_synthesis_artifact
 from mente.review.skill_review import SkillReviewWorker
 from mente.task_core.models import (
     DispatchMode,
@@ -285,6 +287,53 @@ _LANE_CLASSIFIER_SYSTEM_PROMPT = """你是 Mente 的轻量分流器，只负责�
 - 不要输出 markdown，不要解释
 """
 _LANE_CLASSIFIER_CONFIDENCE_VALUES = frozenset({"low", "medium", "high"})
+_REMEMBER_INTENT_CLASSIFIER_TASK = "remember_intent_routing"
+_REMEMBER_INTENT_CLASSIFIER_TIMEOUT_SECONDS = 6.0
+_REMEMBER_INTENT_CLASSIFIER_MAX_TOKENS = 180
+_REMEMBER_INTENT_CLASSIFIER_SYSTEM_PROMPT = """你是 Mente 的轻量记忆意图分类器，只负责判断用户这一轮是否要求保存长期记忆或纠错偏好。
+
+需要写入记忆的情况：
+- 用户明确说记住、加入记忆、保存到记忆
+- 用户纠正 Mente，并表达以后应该如何做
+- 用户抱怨 Mente 记不住、忘了、没有遵守既有偏好，且可以抽取出一条稳定偏好/要求
+- 用户只说“加入记忆/记住这个/保存一下”等省略表达时，应根据提供的近期上下文归纳要保存的长期事实
+
+不要写入记忆的情况：
+- 普通闲聊、一次性任务、状态查询
+- 没有可持久化事实的情绪表达
+- 密钥、密码、token 等敏感内容
+
+输出要求：
+- 只输出一个 JSON object
+- 字段：should_write(boolean), fact(string), confidence("low"|"medium"|"high"), reason(string)
+- fact 必须是可长期保存的一条简洁事实，不要包含“用户说/他骂/这句话”等转述外壳
+- 如果只是“你怎么这么笨，啥都记不住？”这类记忆能力抱怨，fact 可归纳为“用户希望 Mente 可靠记住纠错、偏好和长期指令”
+- 如果用户省略了事实，只能从 recent_context 中抽取或归纳；上下文不足时 should_write=false
+- 不要输出 markdown，不要解释
+"""
+_REMEMBER_INTENT_CLASSIFIER_HINTS: tuple[str, ...] = (
+    "记忆",
+    "记住",
+    "记不住",
+    "记性",
+    "忘",
+    "忘了",
+    "纠正",
+    "纠错",
+    "你错了",
+    "不对",
+    "以后",
+    "下次",
+    "别再",
+    "应该",
+    "偏好",
+    "习惯",
+    "remember",
+    "memory",
+    "forget",
+    "forgot",
+    "preference",
+)
 _LANE_CLASSIFIER_REQUEST_HINTS: tuple[str, ...] = (
     "帮我",
     "请",
@@ -798,6 +847,88 @@ def _parse_lane_classifier_payload(content: object) -> dict[str, str] | None:
     if reason:
         result["reason"] = reason
     return result
+
+
+def _parse_remember_intent_classifier_payload(content: object) -> list[str]:
+    text = str(content or "").strip()
+    if not text:
+        return []
+    match = _FIRST_JSON_OBJECT_PATTERN.search(text)
+    if match is None:
+        return []
+    try:
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict) or not bool(payload.get("should_write")):
+        return []
+    confidence = str(payload.get("confidence") or "").strip().lower()
+    if confidence not in {"medium", "high"}:
+        return []
+    fact = normalize_memory_fact_text(str(payload.get("fact") or ""))
+    return [fact] if fact else []
+
+
+def _classify_semantic_remember_intent_facts(
+    *,
+    message: str,
+    context_facts: list[str] | tuple[str, ...] | None = None,
+    workspace: str | None = None,
+) -> list[str]:
+    normalized_message = str(message or "").strip()
+    if not normalized_message:
+        return []
+    normalized_context_facts = [
+        str(item).strip()
+        for item in (context_facts or [])
+        if str(item).strip()
+    ]
+    user_prompt_lines = [f"message: {normalized_message}"]
+    if normalized_context_facts:
+        context_blob = "\n\n".join(normalized_context_facts[-5:])
+        user_prompt_lines.append(f"recent_context:\n{context_blob[:4000]}")
+    response = call_llm(
+        task=_REMEMBER_INTENT_CLASSIFIER_TASK,
+        messages=[
+            {"role": "system", "content": _REMEMBER_INTENT_CLASSIFIER_SYSTEM_PROMPT},
+            {"role": "user", "content": "\n\n".join(user_prompt_lines)},
+        ],
+        temperature=0.0,
+        max_tokens=_REMEMBER_INTENT_CLASSIFIER_MAX_TOKENS,
+        timeout=_REMEMBER_INTENT_CLASSIFIER_TIMEOUT_SECONDS,
+        main_runtime=_resolve_lane_classifier_main_runtime(workspace=workspace),
+    )
+    content = response.choices[0].message.content
+    return _parse_remember_intent_classifier_payload(content)
+
+
+def _looks_like_semantic_remember_intent_candidate(message: str) -> bool:
+    haystack = _normalize_text_haystack(message)
+    if not haystack:
+        return False
+    return any(hint in haystack for hint in _REMEMBER_INTENT_CLASSIFIER_HINTS)
+
+
+def _resolve_remember_intent_facts(
+    *,
+    message: str,
+    context_facts: list[str] | tuple[str, ...] | None = None,
+    workspace: str | None = None,
+) -> list[str]:
+    explicit_facts = extract_explicit_remember_intent_facts(message)
+    if explicit_facts:
+        return explicit_facts
+    if not _looks_like_semantic_remember_intent_candidate(message):
+        return []
+    try:
+        return _classify_semantic_remember_intent_facts(
+            message=message,
+            context_facts=context_facts,
+            workspace=workspace,
+        )
+    except Exception:
+        logger.debug("Remember-intent classifier fallback failed", exc_info=True)
+        return []
 
 
 def _classify_ambiguous_conversation_lane(
@@ -1741,12 +1872,33 @@ def _build_fast_path_result(task: Task) -> ExecutionResult | None:
 
     if task.task_type != "conversation":
         return None
+    if (
+        task.execution_mode is not ExecutionMode.STATELESS
+        or task.skill_refs
+        or task.worker_skill_refs
+    ):
+        return None
 
     fast_path_kind = ""
     summary = ""
     model_name = ""
+    remember_facts = _resolve_remember_intent_facts(
+        message=task.user_request,
+        context_facts=task.memory_facts,
+        workspace=task.workspace,
+    )
 
-    if _looks_like_fast_model_identity_request(task.user_request):
+    if remember_facts:
+        enabled, _reason = _remember_intent_direct_write_enabled(task)
+        if not enabled:
+            return None
+        fast_path_kind = "remember_intent_direct_write"
+        summary = f"已写入记忆：{remember_facts[0]}"
+        task.metadata["remember_intent_direct_write"] = {
+            "facts": remember_facts,
+            "source": "fast_path",
+        }
+    elif _looks_like_fast_model_identity_request(task.user_request):
         try:
             runtime_config = _resolve_runtime_config_for_workspace(task.workspace or ".")
         except Exception:
@@ -1766,9 +1918,11 @@ def _build_fast_path_result(task: Task) -> ExecutionResult | None:
     }
     if model_name:
         metadata["model"] = model_name
+    memory_candidates = remember_facts if fast_path_kind == "remember_intent_direct_write" else []
     return ExecutionResult(
         status="success",
         summary=summary,
+        memory_candidates=memory_candidates,
         metadata={"fast_path": metadata},
     )
 
@@ -1777,18 +1931,51 @@ def _persist_fast_path_task_result(task: Task, result: ExecutionResult) -> Execu
     """Persist one fast-path conversation turn without booting the full runtime."""
 
     repository = _build_task_repository()
+    memory_repository = _build_memory_repository()
     try:
         fast_path_metadata = result.metadata.get("fast_path")
         if isinstance(fast_path_metadata, dict):
             task.metadata["fast_path"] = dict(fast_path_metadata)
+            if fast_path_metadata.get("kind") == "remember_intent_direct_write":
+                memory_review_artifact = build_memory_review_artifact(task, result)
+                task.metadata["memory_review_artifact"] = memory_review_artifact
+                result.metadata["memory_review_artifact"] = memory_review_artifact
+                _persist_remember_intent_direct_write(
+                    task=task,
+                    result=result,
+                    repository=repository,
+                    memory_repository=memory_repository,
+                )
+                source = str(task.metadata.get("source") or "").strip()
+                workflow_gate, _ = review_capability_gate(
+                    source=source,
+                    task_type=task.task_type,
+                    metadata=task.metadata,
+                    capability="session_synthesis",
+                )
+                if workflow_gate is True:
+                    session_synthesis_artifact = build_session_synthesis_artifact(task, result)
+                    task.metadata["session_synthesis_artifact"] = session_synthesis_artifact
+                    result.metadata["session_synthesis_artifact"] = session_synthesis_artifact
+                    repository.save(task)
+                _apply_post_turn_conversation_workflow_contract(
+                    task=task,
+                    result=result,
+                    repository=repository,
+                    memory_repository=memory_repository,
+                )
+                memory_review = result.metadata.get("memory_review")
+                if isinstance(memory_review, dict):
+                    task.metadata["memory_review"] = dict(memory_review)
         task.metadata["assistant_summary"] = result.summary
         task.status = TaskStatus.SUCCEEDED
         repository.save(task)
         return result
     finally:
-        close = getattr(repository, "close", None)
-        if callable(close):
-            close()
+        for repo in (memory_repository, repository):
+            close = getattr(repo, "close", None)
+            if callable(close):
+                close()
 
 
 def _resolve_final_task_status(result: ExecutionResult) -> TaskStatus:
@@ -2362,6 +2549,11 @@ def build_worker_task_from_dispatch(
         decision=decision,
         task_id=task_id,
     )
+    # Background workers report progress and lifecycle through persisted job/task state.
+    # They do not need gateway runtime continuity, and fail-closed to stateless execution
+    # to avoid session-mode replay hazards in tool-heavy specialist runs.
+    task.execution_mode = ExecutionMode.STATELESS
+    task.execution_session = None
     task.role = TaskRole.WORKER
     task.parent_task_id = coordinator_task.task_id
     task.job_id = coordinator_task.job_id
@@ -3078,7 +3270,14 @@ def _persist_remember_intent_direct_write(
             metadata_value=outcome,
         )
 
-    candidates = extract_explicit_remember_intent_facts(task.user_request)
+    preset_facts = existing.get("facts") if isinstance(existing, dict) else None
+    candidates = [
+        normalize_memory_fact_text(str(item))
+        for item in (preset_facts or [])
+        if normalize_memory_fact_text(str(item))
+    ]
+    if not candidates:
+        candidates = extract_explicit_remember_intent_facts(task.user_request)
     outcome["candidate_count"] = len(candidates)
     if not candidates:
         return _persist_task_result_metadata(
@@ -3152,6 +3351,15 @@ def _apply_post_turn_conversation_workflow_contract(
             repository=repository,
             memory_repository=memory_repository,
         )
+    llm_memory_review_contract = workflow_contract.get("llm_memory_review")
+    if isinstance(llm_memory_review_contract, dict) and bool(
+        llm_memory_review_contract.get("enabled")
+    ):
+        result.metadata["llm_memory_review"] = run_post_turn_llm_memory_review(
+            task_id=task.task_id,
+            repository=repository,
+            memory_repository=memory_repository,
+        )
     skill_review_contract = workflow_contract.get("skill_review")
     if isinstance(skill_review_contract, dict) and bool(skill_review_contract.get("enabled")):
         result.metadata["skill_review"] = run_post_turn_skill_review(
@@ -3180,6 +3388,12 @@ def _remember_intent_direct_write_enabled(task: Task) -> tuple[bool, str | None]
         return False, "missing_source"
     if task.task_type != "conversation":
         return False, "unsupported_task_type"
+    if (
+        task.execution_mode is not ExecutionMode.STATELESS
+        or task.skill_refs
+        or task.worker_skill_refs
+    ):
+        return False, "executor_review_required"
     if source == "api_server":
         workflow_gate, workflow_reason = review_capability_gate(
             source=source,
@@ -3189,7 +3403,7 @@ def _remember_intent_direct_write_enabled(task: Task) -> tuple[bool, str | None]
         )
         if workflow_gate is not None:
             return workflow_gate, workflow_reason
-    if source not in {"gateway", "api_server"}:
+    if source not in {"gateway", "api_server", "tui"}:
         return False, "unsupported_source"
     return True, None
 
@@ -3224,6 +3438,35 @@ def run_post_turn_memory_review(
     memory_repository = memory_repository or _build_memory_repository()
     try:
         outcome = MemoryReviewWorker(
+            task_repository=repository,
+            memory_repository=memory_repository,
+        ).review_task(task_id)
+        return outcome.model_dump(mode="json")
+    finally:
+        for repo, owned in (
+            (memory_repository, owned_memory_repository),
+            (repository, owned_repository),
+        ):
+            if not owned:
+                continue
+            close = getattr(repo, "close", None)
+            if callable(close):
+                close()
+
+
+def run_post_turn_llm_memory_review(
+    *,
+    task_id: str,
+    repository: SQLiteTaskRepository | None = None,
+    memory_repository: SQLiteMemoryRepository | None = None,
+) -> dict[str, Any]:
+    """Run the persisted LLM-assisted post-turn memory review worker for one task."""
+    owned_repository = repository is None
+    owned_memory_repository = memory_repository is None
+    repository = repository or _build_task_repository()
+    memory_repository = memory_repository or _build_memory_repository()
+    try:
+        outcome = LLMMemoryReviewWorker(
             task_repository=repository,
             memory_repository=memory_repository,
         ).review_task(task_id)

@@ -23,6 +23,7 @@ def config_home(tmp_path, monkeypatch):
     env_file = home / ".env"
     env_file.write_text("")
     monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("MENTE_HOME", str(home))
     # Clear env vars that could interfere
     monkeypatch.delenv("HERMES_MODEL", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)

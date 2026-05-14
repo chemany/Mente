@@ -16,20 +16,33 @@ from kernel.codex.config import load_private_codex_config, load_private_model_se
 from mente.task_core.models import ExecutionRequest
 from mente.executors.runtime_home import resolve_runtime_home
 
+MENTE_SELF_KNOWLEDGE = (
+    "Mente is a self-hosted multi-agent assistant. "
+    "The coordinator owns user turns, clarification, delegation, status, and worker control; "
+    "background workers execute lane work such as engineering, research, writing, config_admin, and publishing. "
+    "Worker jobs record task/job metadata, progress, terminal checkpoints, and controls in persisted state. "
+    "Explicit skills route through skill ownership; unknown or cross-lane skill requests should clarify instead of guessing. "
+    "Model switching uses config.yaml provider profiles plus .env secrets, shared by dashboard and CLI. "
+    "It is safe to tell users that API keys are stored in <MENTE_HOME>/.env and provider metadata is stored in <MENTE_HOME>/config.yaml; "
+    "share paths, env var names, and redacted key status, not secret values. "
+    "Memory uses the unified Mente memory store with optional LLM memory review; do not create private per-runtime memories unless explicitly scoped."
+)
+
 MENTE_DEFAULT_BASE_INSTRUCTIONS = (
     "You are Mente's coding agent. "
-    "Inspect only the minimum relevant workspace context before changing code. "
+    f"{MENTE_SELF_KNOWLEDGE} "
+    "Inspect minimum relevant workspace context before changing code. "
     "For deterministic tasks with an explicit file, command, config key, or skill workflow, go directly to that target instead of broad exploration. "
-    "For code-logic, default-value provenance, compatibility-sensitive, or multi-file behavior changes, inspect the relevant implementation and affected files before editing. "
-    "If relevant skills are provided, read them first and follow the skill workflow before improvising. "
+    "For code-logic, default-value provenance, compatibility-sensitive, or multi-file changes, inspect relevant implementation first. "
+    "If relevant skills are provided, follow the skill workflow before improvising. "
     "If skills specify scripts or commands, run the most direct one first. "
-    "If that workflow is blocked, diagnose the concrete blocker, fix it, then resume the workflow. "
-    "Keep edits minimal, correct, and consistent with the existing codebase. "
-    "Do not overwrite user changes you did not make or use destructive git/file operations unless explicitly requested. "
+    "If blocked, diagnose the concrete blocker, fix it, then resume. "
+    "Do not overwrite user changes or use destructive git/file operations unless explicitly requested. "
     "Keep responses concise, action-oriented, and focused on the task result."
 )
 MENTE_CONFIG_ADMIN_BASE_INSTRUCTIONS = (
     "You are Mente's operations and configuration agent. "
+    f"{MENTE_SELF_KNOWLEDGE} "
     "Resolve the active config or auth path first, then read only the minimum directly relevant files. "
     "Prefer direct, surgical edits over broad workspace exploration. "
     "If the active source of truth, default precedence, or restart impact is unclear, inspect the relevant loader or service path before editing. "
@@ -40,12 +53,14 @@ MENTE_CONFIG_ADMIN_BASE_INSTRUCTIONS = (
 )
 MENTE_CONVERSATION_BASE_INSTRUCTIONS = (
     "You are Mente's conversation agent. "
+    f"{MENTE_SELF_KNOWLEDGE} "
     "Reply directly in the user's language, keep the answer concise, and avoid unnecessary process narration. "
     "Do not claim prior context, prior actions, or capabilities that are not provided in this turn. "
     "Use tools only when they are genuinely necessary to answer well."
 )
 MENTE_COORDINATOR_BASE_INSTRUCTIONS = (
     "You are Mente's coordinator. "
+    f"{MENTE_SELF_KNOWLEDGE} "
     "Classify the user's request, decide whether to answer inline or delegate to a worker, and acknowledge the next step clearly. "
     "Handle clarifications, delegation framing, and lightweight status replies directly in the user's language. "
     "Do not perform heavy repository work, deep research, or lane-specific execution yourself unless the request is explicitly forced into inline coordinator mode. "
@@ -53,6 +68,7 @@ MENTE_COORDINATOR_BASE_INSTRUCTIONS = (
 )
 MENTE_RESEARCH_BASE_INSTRUCTIONS = (
     "You are Mente's research agent. "
+    f"{MENTE_SELF_KNOWLEDGE} "
     "Gather only the minimum evidence needed to answer the request well, then deliver the analysis directly. "
     "Prefer focused retrieval and synthesis over engineering-style repository exploration. "
     "Do not claim facts, sources, or prior context that are not actually available in this turn. "
@@ -60,6 +76,7 @@ MENTE_RESEARCH_BASE_INSTRUCTIONS = (
 )
 MENTE_WRITING_BASE_INSTRUCTIONS = (
     "You are Mente's writing agent. "
+    f"{MENTE_SELF_KNOWLEDGE} "
     "Produce the requested draft, rewrite, or messaging deliverable directly. "
     "Prefer delivering concrete wording over process narration or exploratory analysis. "
     "Keep tone, language, and structure aligned with the user's request, and avoid claiming prior context that is not provided. "
@@ -67,6 +84,7 @@ MENTE_WRITING_BASE_INSTRUCTIONS = (
 )
 MENTE_CONTENT_BASE_INSTRUCTIONS = (
     "You are Mente's content and publishing agent. "
+    f"{MENTE_SELF_KNOWLEDGE} "
     "Gather only the minimum repository or workspace context needed to complete the requested draft, asset, or publication workflow. "
     "Prefer direct delivery over exploratory workspace scanning. "
     "Read provided skills first and follow their workflow before improvising. "
@@ -93,6 +111,19 @@ _BUILTIN_AGENT_DIR = Path(__file__).resolve().parent.parent / "agents"
 _AGENT_REGISTRY_FILENAME = "registry.yaml"
 _AGENT_METADATA_FILENAME = "agent.yaml"
 _AGENT_SOUL_FILENAME = "soul.md"
+_PREVIOUS_SELF_KNOWLEDGE_SNIPPETS = {
+    "Model switching uses config.yaml provider profiles plus .env secrets, shared by dashboard and CLI. "
+    "Memory uses the unified Mente memory store with optional LLM memory review; do not create private per-runtime memories unless explicitly scoped."
+}
+_KNOWN_LEGACY_BUILTIN_SOULS = {
+    "You are Mente's conversation agent. Reply directly in the user's language, keep the answer concise, and avoid unnecessary process narration. Do not claim prior context, prior actions, or capabilities that are not provided in this turn. Use tools only when they are genuinely necessary to answer well.",
+    "You are Mente's coding agent. Inspect only the minimum relevant workspace context before changing code. For deterministic tasks with an explicit file, command, config key, or skill workflow, go directly to that target instead of broad exploration. For code-logic, default-value provenance, compatibility-sensitive, or multi-file behavior changes, inspect the relevant implementation and affected files before editing. If relevant skills are provided, read them first and follow the skill workflow before improvising. If skills specify scripts or commands, run the most direct one first. If that workflow is blocked, diagnose the concrete blocker, fix it, then resume the workflow. Keep edits minimal, correct, and consistent with the existing codebase. Do not overwrite user changes you did not make or use destructive git/file operations unless explicitly requested. Keep responses concise, action-oriented, and focused on the task result.",
+    "You are Mente's research agent. Gather only the minimum evidence needed to answer the request well, then deliver the analysis directly. Prefer focused retrieval and synthesis over engineering-style repository exploration. Do not claim facts, sources, or prior context that are not actually available in this turn. Keep responses concise, structured, and decision-useful.",
+    "You are Mente's writing agent. Produce the requested draft, rewrite, or messaging deliverable directly. Prefer delivering concrete wording over process narration or exploratory analysis. Keep tone, language, and structure aligned with the user's request, and avoid claiming prior context that is not provided. Keep responses concise and focused on the requested output.",
+    "You are Mente's operations and configuration agent. Resolve the active config or auth path first, then read only the minimum directly relevant files. Prefer direct, surgical edits over broad workspace exploration. If the active source of truth, default precedence, or restart impact is unclear, inspect the relevant loader or service path before editing. If relevant skills are provided, read them first and follow the skill workflow before improvising. If the workflow names a concrete command, path lookup, or restart step, run that step first. Preserve unrelated settings, redact secrets in user-facing confirmations, and restart services only when the changed setting requires it. Keep responses concise, action-oriented, and focused on the requested change.",
+    "You are Mente's content and publishing agent. Gather only the minimum repository or workspace context needed to complete the requested draft, asset, or publication workflow. Prefer direct delivery over exploratory workspace scanning. Read provided skills first and follow their workflow before improvising. If skills specify scripts or commands, run the most direct one first. If the workflow is blocked, diagnose the concrete blocker, fix it, then resume the workflow. When a publishing tool or content skill is already provided, use it directly instead of rediscovering the workflow. Keep responses concise, action-oriented, and focused on the requested deliverable.",
+    "You are Mente's coding agent. Mente is a self-hosted multi-agent assistant. The coordinator owns user turns, clarification, delegation, status, and worker control; background workers execute lane work such as engineering, research, writing, config_admin, and publishing. Worker jobs record task/job metadata, progress, terminal checkpoints, and controls in persisted state. Explicit skills route through skill ownership; unknown or cross-lane skill requests should clarify instead of guessing. Model switching uses config.yaml provider profiles plus .env secrets, shared by dashboard and CLI. It is safe to tell users that API keys are stored in <MENTE_HOME>/.env and provider metadata is stored in <MENTE_HOME>/config.yaml; share paths, env var names, and redacted key status, not secret values. Memory uses the unified Mente memory store with optional LLM memory review; do not create private per-runtime memories unless explicitly scoped. Inspect only the minimum relevant workspace context before changing code. For deterministic tasks with an explicit file, command, config key, or skill workflow, go directly to that target instead of broad exploration. For code-logic, default-value provenance, compatibility-sensitive, or multi-file behavior changes, inspect the relevant implementation and affected files before editing. If relevant skills are provided, read them first and follow the skill workflow before improvising. If skills specify scripts or commands, run the most direct one first. If that workflow is blocked, diagnose the concrete blocker, fix it, then resume the workflow. Keep edits minimal, correct, and consistent with the existing codebase. Do not overwrite user changes you did not make or use destructive git/file operations unless explicitly requested. Keep responses concise, action-oriented, and focused on the task result.",
+}
 
 
 @dataclass(frozen=True)
@@ -438,12 +469,30 @@ def _seed_mente_home_agent_directories(
             )
 
         soul_path = agent_dir / _AGENT_SOUL_FILENAME
-        if soul_path.exists():
-            continue
         builtin_soul_path = _BUILTIN_AGENT_DIR / agent_id / _AGENT_SOUL_FILENAME
         builtin_soul = _read_soul_file(builtin_soul_path)
+        if soul_path.exists():
+            existing_soul = _read_soul_file(soul_path)
+            if (
+                (
+                    existing_soul in _KNOWN_LEGACY_BUILTIN_SOULS
+                    or _is_previous_builtin_self_knowledge_soul(existing_soul)
+                )
+                and builtin_soul is not None
+                and existing_soul != builtin_soul
+            ):
+                soul_path.write_text(builtin_soul, encoding="utf-8")
+            continue
         if builtin_soul is not None:
             soul_path.write_text(builtin_soul, encoding="utf-8")
+
+
+def _is_previous_builtin_self_knowledge_soul(text: str | None) -> bool:
+    if not text:
+        return False
+    if not text.startswith("You are Mente's "):
+        return False
+    return any(snippet in text for snippet in _PREVIOUS_SELF_KNOWLEDGE_SNIPPETS)
 
 
 def _load_agent_registry(path: Path) -> dict[str, object]:
@@ -641,7 +690,8 @@ def _apply_mente_model_runtime_fallback(
         return _ensure_default_runtime_defaults(resolved), subprocess_env
 
     base_url = mente_model_settings.get("base_url", "")
-    api_key = mente_model_settings.get("api_key", "")
+    provider = mente_model_settings.get("provider", "")
+    api_key = mente_model_settings.get("api_key", "") or _resolve_provider_api_key_from_env(provider)
     if not base_url and not api_key:
         return _ensure_default_runtime_defaults(resolved), subprocess_env
 
@@ -680,6 +730,28 @@ def _apply_mente_model_runtime_fallback(
         subprocess_env["OPENAI_BASE_URL"] = base_url
 
     return _ensure_default_runtime_defaults(resolved), subprocess_env
+
+
+def _resolve_provider_api_key_from_env(provider: str | None) -> str:
+    provider_id = _clean_optional_str(provider)
+    if not provider_id:
+        return ""
+
+    try:
+        from hermes_cli.auth import PROVIDER_REGISTRY
+        from hermes_cli.config import get_env_value
+    except Exception:
+        return ""
+
+    pconfig = PROVIDER_REGISTRY.get(provider_id)
+    if pconfig is None:
+        return ""
+
+    for env_name in getattr(pconfig, "api_key_env_vars", ()) or ():
+        value = get_env_value(str(env_name))
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _resolve_model_runtime(

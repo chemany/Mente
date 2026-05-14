@@ -705,6 +705,14 @@ DEFAULT_CONFIG = {
             "timeout": 30,
             "extra_body": {},
         },
+        "llm_memory_review": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 8,
+            "extra_body": {},
+        },
     },
     
     "display": {
@@ -833,6 +841,13 @@ DEFAULT_CONFIG = {
         # "hindsight", "holographic", "retaindb", "byterover".
         # Only ONE external provider is allowed at a time.
         "provider": "",
+        # Mente post-turn LLM memory review. The lightweight reviewer proposes
+        # durable facts after each turn; existing repository policy still owns
+        # persistence, dedupe, and supersede behavior.
+        "llm_review": {
+            "enabled": True,
+            "sources": ["api_server", "gateway", "tui"],
+        },
     },
 
     # Subagent delegation — override the provider:model used by delegate_task
@@ -2516,7 +2531,11 @@ class ConfigIssue:
     hint: str
 
 
-def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["ConfigIssue"]:
+def validate_config_structure(
+    config: Optional[Dict[str, Any]] = None,
+    *,
+    env_vars: Optional[Dict[str, str]] = None,
+) -> List["ConfigIssue"]:
     """Validate config.yaml structure and return a list of detected issues.
 
     Catches common YAML formatting mistakes that produce confusing runtime
@@ -2623,6 +2642,57 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
             "    default: your-model-name\n"
             "    base_url: https://...",
         ))
+
+    # ── Model config hygiene: keep one clear source of truth ─────────────
+    if isinstance(model_cfg, dict):
+        if str(model_cfg.get("api_key") or "").strip():
+            issues.append(ConfigIssue(
+                "warning",
+                "model.api_key is set in config.yaml — secrets should live in .env",
+                "Move the provider key to .env (for example XIAOMI_API_KEY=...) and remove model.api_key",
+            ))
+        main_model = str(model_cfg.get("default") or model_cfg.get("model") or "").strip()
+    else:
+        main_model = str(model_cfg or "").strip() if isinstance(model_cfg, str) else ""
+
+    if env_vars is None:
+        try:
+            env_vars = load_env()
+        except Exception:
+            env_vars = {}
+
+    provider_base_url_vars: set[str] = {"OPENAI_BASE_URL", "CUSTOM_BASE_URL"}
+    try:
+        from hermes_cli.auth import PROVIDER_REGISTRY
+        provider_base_url_vars.update(
+            str(pconfig.base_url_env_var)
+            for pconfig in PROVIDER_REGISTRY.values()
+            if getattr(pconfig, "base_url_env_var", None)
+        )
+    except Exception:
+        pass
+
+    for env_name in sorted(provider_base_url_vars):
+        if str((env_vars or {}).get(env_name) or "").strip():
+            issues.append(ConfigIssue(
+                "warning",
+                f"{env_name} is set in .env — provider endpoint URLs belong in config.yaml",
+                "Move the endpoint to model.base_url for the main model, or to auxiliary.<task>.base_url only for an intentional per-task override",
+            ))
+
+    auxiliary_cfg = config.get("auxiliary")
+    if isinstance(auxiliary_cfg, dict):
+        for task_name, task_cfg in sorted(auxiliary_cfg.items()):
+            if not isinstance(task_cfg, dict):
+                continue
+            provider = str(task_cfg.get("provider") or "").strip().lower()
+            aux_model = str(task_cfg.get("model") or "").strip()
+            if provider == "main" and aux_model and aux_model != main_model:
+                issues.append(ConfigIssue(
+                    "warning",
+                    f"auxiliary.{task_name} uses provider=main with model={aux_model!r}, which differs from the main model",
+                    "Use provider: auto with model: '' for the default auxiliary path, or set an explicit provider/base_url when this task must use a different model",
+                ))
 
     # ── Root-level keys that look misplaced ──────────────────────────────
     for key in config:

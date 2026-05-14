@@ -9,7 +9,11 @@ import unicodedata
 from pydantic import BaseModel
 
 _REMEMBER_RE = re.compile(r"^\s*remember(?:\s+that|\s+this|:)?\s+(.+?)\s*$", re.IGNORECASE)
-_CHINESE_REMEMBER_RE = re.compile(r"^(?:请)?(?:帮我)?(?:记住|加入记忆|记一下)(?:[:：]|\s+)?(.+?)\s*$")
+_CHINESE_REMEMBER_RE = re.compile(
+    r"^(?:(?:那就|就|请)\s*)?(?:帮我)?"
+    r"(?:记住|记一下|加入(?:你的|我的|到)?记忆|写入记忆|保存(?:到)?记忆)"
+    r"(?:[:：，,]|\s+)?(.+?)\s*$"
+)
 _ENGLISH_NAME_RE = re.compile(r"^my name is\s+.+$", re.IGNORECASE)
 _CHINESE_NAME_RE = re.compile(r"^(?:我叫|我的名字是).+$")
 _ENGLISH_RESPONSE_LANGUAGE_RE = re.compile(

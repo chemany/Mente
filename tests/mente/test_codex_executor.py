@@ -1265,6 +1265,76 @@ def test_codex_executor_exposes_bundled_mente_superpowers_inside_private_runtime
     assert "brainstorming" in captured["bundled_skill_contents"]
 
 
+def test_codex_executor_links_private_runtime_memories_to_canonical_mente_memory(
+    monkeypatch, tmp_path
+):
+    mente_home = tmp_path / ".mente"
+    canonical_memories = mente_home / "memories"
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    runtime_config = RuntimeConfig(runtime_home=tmp_path / "private-codex-home")
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            runtime_memories = runtime_config.runtime_home / "memories"
+            captured["runtime_memories_is_symlink"] = runtime_memories.is_symlink()
+            captured["runtime_memories_target"] = runtime_memories.resolve()
+            (runtime_memories / "USER.md").write_text("User prefers unified memory.", encoding="utf-8")
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner(), runtime_config=runtime_config)
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert captured["runtime_memories_is_symlink"] is True
+    assert captured["runtime_memories_target"] == canonical_memories.resolve()
+    assert (canonical_memories / "USER.md").read_text(encoding="utf-8") == "User prefers unified memory."
+
+
+def test_codex_executor_preserves_existing_private_runtime_memories_before_linking(
+    monkeypatch, tmp_path
+):
+    mente_home = tmp_path / ".mente"
+    runtime_home = tmp_path / "private-codex-home"
+    legacy_memories = runtime_home / "memories"
+    legacy_memories.mkdir(parents=True)
+    (legacy_memories / "user-preferences.md").write_text("legacy private note", encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    runtime_config = RuntimeConfig(runtime_home=runtime_home)
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            assert (runtime_config.runtime_home / "memories").is_symlink()
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner(), runtime_config=runtime_config)
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    backups = list(runtime_home.glob("memories.legacy-*"))
+    assert len(backups) == 1
+    assert (backups[0] / "user-preferences.md").read_text(encoding="utf-8") == "legacy private note"
+    assert (runtime_home / "memories").resolve() == (mente_home / "memories").resolve()
+
+
 def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypatch, tmp_path):
     from hermes_cli.auth import resolve_codex_runtime_credentials as _real_resolve_codex_runtime_credentials
 

@@ -637,6 +637,7 @@ class TestWebServerEndpoints:
             "source": "gateway",
             "task_type": "conversation",
             "memory_scope": "session",
+            "include_superseded": False,
             "limit": 1,
             "offset": 0,
         }
@@ -1428,6 +1429,413 @@ class TestModelInfoEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["auto_context_length"] == 0
+
+
+class TestModelQuickSwitchEndpoint:
+    """Tests for dashboard model quick-switch persistence."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self):
+        try:
+            from starlette.testclient import TestClient
+        except ImportError:
+            pytest.skip("fastapi/starlette not installed")
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        self.client = TestClient(app)
+        self.client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+    def test_quick_switch_main_remembers_provider_specific_endpoint(self, monkeypatch):
+        """Switching away from a provider should remember its model/base_url tuple."""
+        from hermes_cli.config import load_config, save_config
+
+        save_config({
+            "model": {
+                "default": "mimo-v2.5-pro",
+                "provider": "xiaomi",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_mode": "anthropic_messages",
+            },
+            "providers": {
+                "openai": {
+                    "name": "OpenAI",
+                    "base_url": "https://api.openai.com/v1",
+                    "key_env": "OPENAI_API_KEY",
+                    "default_model": "gpt-5.4",
+                    "api_mode": "codex_responses",
+                },
+            },
+        })
+
+        def fake_list_authenticated_providers(**_kwargs):
+            return [
+                {
+                    "slug": "xiaomi",
+                    "name": "Xiaomi MiMo",
+                    "models": ["mimo-v2.5-pro"],
+                    "total_models": 1,
+                    "source": "built-in",
+                },
+                {
+                    "slug": "openai",
+                    "name": "OpenAI",
+                    "models": ["gpt-5.4"],
+                    "total_models": 1,
+                    "source": "built-in",
+                },
+            ]
+
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.list_authenticated_providers",
+            fake_list_authenticated_providers,
+        )
+
+        resp = self.client.put(
+            "/api/model/quick-switch",
+            json={"target": "main", "provider": "openai", "model": "gpt-5.4"},
+        )
+
+        assert resp.status_code == 200
+        cfg = load_config()
+        assert cfg["model"] == {
+            "default": "gpt-5.4",
+            "provider": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_mode": "codex_responses",
+        }
+        assert cfg["providers"]["xiaomi"]["default_model"] == "mimo-v2.5-pro"
+        assert cfg["providers"]["xiaomi"]["base_url"] == "https://token-plan-cn.xiaomimimo.com/anthropic"
+        assert cfg["providers"]["xiaomi"]["api_mode"] == "anthropic_messages"
+        assert "api_key" not in cfg["providers"]["xiaomi"]
+
+    def test_quick_switch_memory_preserves_main_model_and_timeout(self, monkeypatch):
+        from hermes_cli.config import load_config, save_config
+
+        save_config({
+            "model": {
+                "default": "mimo-v2.5-pro",
+                "provider": "xiaomi",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_mode": "anthropic_messages",
+            },
+            "providers": {
+                "openai": {
+                    "name": "OpenAI",
+                    "base_url": "https://api.openai.com/v1",
+                    "key_env": "OPENAI_API_KEY",
+                    "default_model": "gpt-5.4-mini",
+                    "api_mode": "codex_responses",
+                },
+            },
+            "auxiliary": {
+                "llm_memory_review": {
+                    "provider": "auto",
+                    "model": "",
+                    "base_url": "",
+                    "api_key": "",
+                    "timeout": 8,
+                    "extra_body": {},
+                },
+            },
+        })
+
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.list_authenticated_providers",
+            lambda **_kwargs: [
+                {
+                    "slug": "openai",
+                    "name": "OpenAI",
+                    "models": ["gpt-5.4-mini"],
+                    "total_models": 1,
+                    "source": "built-in",
+                },
+            ],
+        )
+
+        resp = self.client.put(
+            "/api/model/quick-switch",
+            json={"target": "memory", "provider": "openai", "model": "gpt-5.4-mini"},
+        )
+
+        assert resp.status_code == 200
+        cfg = load_config()
+        assert cfg["model"]["provider"] == "xiaomi"
+        memory_cfg = cfg["auxiliary"]["llm_memory_review"]
+        assert memory_cfg["provider"] == "openai"
+        assert memory_cfg["model"] == "gpt-5.4-mini"
+        assert memory_cfg["base_url"] == "https://api.openai.com/v1"
+        assert memory_cfg["api_mode"] == "codex_responses"
+        assert memory_cfg["timeout"] == 8
+        assert memory_cfg["api_key"] == ""
+
+    def test_quick_switch_unsaved_openai_provider_persists_official_profile(self, monkeypatch):
+        from hermes_cli.config import load_config, save_config
+
+        save_config({
+            "model": {
+                "default": "mimo-v2.5-pro",
+                "provider": "xiaomi",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_mode": "anthropic_messages",
+            },
+            "providers": {},
+        })
+
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.list_authenticated_providers",
+            lambda **_kwargs: [
+                {
+                    "slug": "openai",
+                    "name": "OpenAI",
+                    "models": ["gpt-5.4-mini"],
+                    "total_models": 1,
+                    "source": "built-in",
+                },
+            ],
+        )
+
+        resp = self.client.put(
+            "/api/model/quick-switch",
+            json={"target": "main", "provider": "openai", "model": "gpt-5.4-mini"},
+        )
+
+        assert resp.status_code == 200
+        cfg = load_config()
+        assert cfg["model"]["provider"] == "openai"
+        assert cfg["model"]["base_url"] == "https://api.openai.com/v1"
+        assert cfg["model"]["api_mode"] == "codex_responses"
+        assert cfg["providers"]["openai"]["key_env"] == "OPENAI_API_KEY"
+
+    def test_model_options_surfaces_saved_provider_profiles(self, monkeypatch):
+        from hermes_cli.config import save_config
+
+        save_config({
+            "model": {
+                "default": "mimo-v2.5-pro",
+                "provider": "xiaomi",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_mode": "anthropic_messages",
+            },
+            "providers": {
+                "xiaomi": {
+                    "name": "Xiaomi MiMo",
+                    "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                    "key_env": "XIAOMI_API_KEY",
+                    "default_model": "mimo-v2.5-pro",
+                    "api_mode": "anthropic_messages",
+                },
+            },
+            "auxiliary": {
+                "llm_memory_review": {
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_mode": "codex_responses",
+                    "timeout": 8,
+                    "extra_body": {},
+                },
+            },
+        })
+
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.list_authenticated_providers",
+            lambda **_kwargs: [
+                {
+                    "slug": "xiaomi",
+                    "name": "Xiaomi MiMo",
+                    "models": [],
+                    "total_models": 0,
+                    "source": "built-in",
+                },
+            ],
+        )
+
+        resp = self.client.get("/api/model/options")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["current"]["main"]["provider"] == "xiaomi"
+        assert data["current"]["memory"]["provider"] == "openai"
+        provider = data["providers"][0]
+        assert provider["slug"] == "xiaomi"
+        assert provider["default_model"] == "mimo-v2.5-pro"
+        assert provider["api_url"] == "https://token-plan-cn.xiaomimimo.com/anthropic"
+        assert provider["api_mode"] == "anthropic_messages"
+        assert provider["models"] == ["mimo-v2.5-pro"]
+
+    def test_model_options_uses_active_model_as_provider_profile_when_unsaved(self, monkeypatch):
+        from hermes_cli.config import save_config
+
+        save_config({
+            "model": {
+                "default": "mimo-v2.5-pro",
+                "provider": "xiaomi",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_mode": "anthropic_messages",
+            },
+            "providers": {},
+        })
+
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.list_authenticated_providers",
+            lambda **_kwargs: [
+                {
+                    "slug": "xiaomi",
+                    "name": "Xiaomi MiMo",
+                    "models": [],
+                    "total_models": 0,
+                    "source": "built-in",
+                },
+            ],
+        )
+
+        resp = self.client.get("/api/model/options")
+
+        assert resp.status_code == 200
+        provider = resp.json()["providers"][0]
+        assert provider["slug"] == "xiaomi"
+        assert provider["default_model"] == "mimo-v2.5-pro"
+        assert provider["api_url"] == "https://token-plan-cn.xiaomimimo.com/anthropic"
+        assert provider["models"] == ["mimo-v2.5-pro"]
+
+    def test_model_options_reloads_env_file_before_provider_discovery(self, monkeypatch):
+        """Dashboard choices should include providers whose keys only exist in .env."""
+        from hermes_cli.config import get_env_path, save_config
+
+        save_config({
+            "model": {
+                "default": "mimo-v2.5-pro",
+                "provider": "xiaomi",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_mode": "anthropic_messages",
+            },
+            "providers": {},
+        })
+        get_env_path().write_text("OPENAI_API_KEY=sk-test-openai\n", encoding="utf-8")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        def fake_list_authenticated_providers(**_kwargs):
+            if os.environ.get("OPENAI_API_KEY") != "sk-test-openai":
+                return []
+            return [
+                {
+                    "slug": "openai",
+                    "name": "OpenAI",
+                    "models": ["gpt-5.4-mini"],
+                    "total_models": 1,
+                    "source": "built-in",
+                },
+            ]
+
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.list_authenticated_providers",
+            fake_list_authenticated_providers,
+        )
+
+        resp = self.client.get("/api/model/options")
+
+        assert resp.status_code == 200
+        slugs = {provider["slug"] for provider in resp.json()["providers"]}
+        assert "openai" in slugs
+
+    def test_model_options_enriches_discovered_provider_with_endpoint_metadata(self, monkeypatch):
+        from hermes_cli.config import save_config
+
+        save_config({
+            "model": {
+                "default": "mimo-v2.5-pro",
+                "provider": "xiaomi",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_mode": "anthropic_messages",
+            },
+            "providers": {},
+        })
+
+        monkeypatch.setattr(
+            "hermes_cli.model_switch.list_authenticated_providers",
+            lambda **_kwargs: [
+                {
+                    "slug": "deepseek",
+                    "name": "DeepSeek",
+                    "models": ["deepseek-chat"],
+                    "total_models": 1,
+                    "source": "built-in",
+                },
+            ],
+        )
+
+        resp = self.client.get("/api/model/options")
+
+        assert resp.status_code == 200
+        providers = {provider["slug"]: provider for provider in resp.json()["providers"]}
+        deepseek = providers["deepseek"]
+        assert deepseek["api_url"]
+        assert deepseek["api_mode"] == "chat_completions"
+        assert deepseek["key_env"] == "DEEPSEEK_API_KEY"
+        assert deepseek["default_model"] == "deepseek-chat"
+
+    def test_create_model_provider_stores_profile_and_secret_separately(self):
+        from hermes_cli.config import load_config, load_env, save_config
+
+        save_config({
+            "model": {
+                "default": "mimo-v2.5-pro",
+                "provider": "xiaomi",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "api_mode": "anthropic_messages",
+            },
+            "providers": {},
+        })
+
+        resp = self.client.post(
+            "/api/model/providers",
+            json={
+                "slug": "my-relay",
+                "name": "My Relay",
+                "base_url": "https://relay.example.com/v1",
+                "api_key": "sk-relay-secret",
+                "key_env": "MY_RELAY_API_KEY",
+                "default_model": "gpt-5.4-mini",
+                "api_mode": "chat_completions",
+                "models": ["gpt-5.4-mini", "deepseek-chat"],
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["provider"]["slug"] == "my-relay"
+        cfg = load_config()
+        provider_cfg = cfg["providers"]["my-relay"]
+        assert provider_cfg == {
+            "name": "My Relay",
+            "base_url": "https://relay.example.com/v1",
+            "key_env": "MY_RELAY_API_KEY",
+            "default_model": "gpt-5.4-mini",
+            "api_mode": "chat_completions",
+            "models": ["gpt-5.4-mini", "deepseek-chat"],
+        }
+        assert "api_key" not in provider_cfg
+        assert load_env()["MY_RELAY_API_KEY"] == "sk-relay-secret"
+
+        options_resp = self.client.get("/api/model/options")
+        assert options_resp.status_code == 200
+        providers = {provider["slug"]: provider for provider in options_resp.json()["providers"]}
+        assert providers["my-relay"]["api_url"] == "https://relay.example.com/v1"
+        assert providers["my-relay"]["models"] == ["gpt-5.4-mini", "deepseek-chat"]
+
+    def test_create_model_provider_rejects_invalid_base_url(self):
+        resp = self.client.post(
+            "/api/model/providers",
+            json={
+                "name": "Bad Relay",
+                "base_url": "relay.example.com/v1",
+                "api_key": "sk-relay-secret",
+                "default_model": "gpt-5.4-mini",
+            },
+        )
+
+        assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------

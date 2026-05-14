@@ -18,7 +18,10 @@ function setSessionHeader(headers: Headers, token: string): void {
   }
 }
 
-export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+export async function fetchJSON<T>(
+  url: string,
+  init?: RequestInit,
+): Promise<T> {
   // Inject the session token into all /api/ requests.
   const headers = new Headers(init?.headers);
   const token = window.__HERMES_SESSION_TOKEN__;
@@ -40,13 +43,17 @@ async function getSessionToken(): Promise<string> {
     _sessionToken = injected;
     return _sessionToken;
   }
-  throw new Error("Session token not available — page must be served by the Mente dashboard server");
+  throw new Error(
+    "Session token not available — page must be served by the Mente dashboard server",
+  );
 }
 
 export const api = {
   getStatus: () => fetchJSON<StatusResponse>("/api/status"),
   getSessions: (limit = 20, offset = 0) =>
-    fetchJSON<PaginatedSessions>(`/api/sessions?limit=${limit}&offset=${offset}`),
+    fetchJSON<PaginatedSessions>(
+      `/api/sessions?limit=${limit}&offset=${offset}`,
+    ),
   getAgents: () => fetchJSON<AgentInventoryListResponse>("/api/agents"),
   getAgentDetail: (id: string) =>
     fetchJSON<AgentInventory>(`/api/agents/${encodeURIComponent(id)}`),
@@ -61,17 +68,25 @@ export const api = {
       { method: "POST" },
     ),
   getSessionMessages: (id: string) =>
-    fetchJSON<SessionMessagesResponse>(`/api/sessions/${encodeURIComponent(id)}/messages`),
+    fetchJSON<SessionMessagesResponse>(
+      `/api/sessions/${encodeURIComponent(id)}/messages`,
+    ),
   deleteSession: (id: string) =>
     fetchJSON<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
-  getLogs: (params: { file?: string; lines?: number; level?: string; component?: string }) => {
+  getLogs: (params: {
+    file?: string;
+    lines?: number;
+    level?: string;
+    component?: string;
+  }) => {
     const qs = new URLSearchParams();
     if (params.file) qs.set("file", params.file);
     if (params.lines) qs.set("lines", String(params.lines));
     if (params.level && params.level !== "ALL") qs.set("level", params.level);
-    if (params.component && params.component !== "all") qs.set("component", params.component);
+    if (params.component && params.component !== "all")
+      qs.set("component", params.component);
     return fetchJSON<LogsResponse>(`/api/logs?${qs.toString()}`);
   },
   getDebugTasks: (params: DebugTasksParams = {}) => {
@@ -96,14 +111,32 @@ export const api = {
     if (params.limit) qs.set("limit", String(params.limit));
     if (params.offset !== undefined) qs.set("offset", String(params.offset));
     if (params.cursor !== undefined) qs.set("cursor", String(params.cursor));
-    return fetchJSON<DebugMemoriesResponse>(`/api/debug/memories?${qs.toString()}`);
+    return fetchJSON<DebugMemoriesResponse>(
+      `/api/debug/memories?${qs.toString()}`,
+    );
   },
   getAnalytics: (days: number) =>
     fetchJSON<AnalyticsResponse>(`/api/analytics/usage?days=${days}`),
   getConfig: () => fetchJSON<Record<string, unknown>>("/api/config"),
   getDefaults: () => fetchJSON<Record<string, unknown>>("/api/config/defaults"),
-  getSchema: () => fetchJSON<{ fields: Record<string, unknown>; category_order: string[] }>("/api/config/schema"),
+  getSchema: () =>
+    fetchJSON<{ fields: Record<string, unknown>; category_order: string[] }>(
+      "/api/config/schema",
+    ),
   getModelInfo: () => fetchJSON<ModelInfoResponse>("/api/model/info"),
+  getModelOptions: () => fetchJSON<ModelOptionsResponse>("/api/model/options"),
+  createModelProvider: (payload: ModelProviderCreateRequest) =>
+    fetchJSON<ModelProviderCreateResponse>("/api/model/providers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  quickSwitchModel: (payload: ModelQuickSwitchRequest) =>
+    fetchJSON<ModelQuickSwitchResponse>("/api/model/quick-switch", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
   saveConfig: (config: Record<string, unknown>) =>
     fetchJSON<{ ok: boolean }>("/api/config", {
       method: "PUT",
@@ -144,18 +177,29 @@ export const api = {
 
   // Cron jobs
   getCronJobs: () => fetchJSON<CronJob[]>("/api/cron/jobs"),
-  createCronJob: (job: { prompt: string; schedule: string; name?: string; deliver?: string }) =>
+  createCronJob: (job: {
+    prompt: string;
+    schedule: string;
+    name?: string;
+    deliver?: string;
+  }) =>
     fetchJSON<CronJob>("/api/cron/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(job),
     }),
   pauseCronJob: (id: string) =>
-    fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${id}/pause`, { method: "POST" }),
+    fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${id}/pause`, {
+      method: "POST",
+    }),
   resumeCronJob: (id: string) =>
-    fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${id}/resume`, { method: "POST" }),
+    fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${id}/resume`, {
+      method: "POST",
+    }),
   triggerCronJob: (id: string) =>
-    fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${id}/trigger`, { method: "POST" }),
+    fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${id}/trigger`, {
+      method: "POST",
+    }),
   deleteCronJob: (id: string) =>
     fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${id}`, { method: "DELETE" }),
 
@@ -171,7 +215,9 @@ export const api = {
 
   // Session search (FTS5)
   searchSessions: (q: string) =>
-    fetchJSON<SessionSearchResponse>(`/api/sessions/search?q=${encodeURIComponent(q)}`),
+    fetchJSON<SessionSearchResponse>(
+      `/api/sessions/search?q=${encodeURIComponent(q)}`,
+    ),
 
   // OAuth provider management
   getOAuthProviders: () =>
@@ -200,7 +246,11 @@ export const api = {
       },
     );
   },
-  submitOAuthCode: async (providerId: string, sessionId: string, code: string) => {
+  submitOAuthCode: async (
+    providerId: string,
+    sessionId: string,
+    code: string,
+  ) => {
     const token = await getSessionToken();
     return fetchJSON<OAuthSubmitResponse>(
       `/api/providers/oauth/${encodeURIComponent(providerId)}/submit`,
@@ -246,8 +296,7 @@ export const api = {
     fetchJSON<{ ok: boolean; count: number }>("/api/dashboard/plugins/rescan"),
 
   // Dashboard themes
-  getThemes: () =>
-    fetchJSON<DashboardThemesResponse>("/api/dashboard/themes"),
+  getThemes: () => fetchJSON<DashboardThemesResponse>("/api/dashboard/themes"),
   setTheme: (name: string) =>
     fetchJSON<{ ok: boolean; theme: string }>("/api/dashboard/theme", {
       method: "PUT",
@@ -609,6 +658,63 @@ export interface ModelInfoResponse {
     max_output_tokens?: number;
     model_family?: string;
   };
+}
+
+export interface ModelProviderOption {
+  slug: string;
+  name: string;
+  models: string[];
+  total_models: number;
+  source: string;
+  is_current?: boolean;
+  is_user_defined?: boolean;
+  api_url?: string;
+  default_model?: string;
+  api_mode?: string;
+  key_env?: string;
+}
+
+export interface ModelSelection {
+  provider: string;
+  model: string;
+  base_url: string;
+  api_mode: string;
+}
+
+export interface ModelOptionsResponse {
+  providers: ModelProviderOption[];
+  current: {
+    main: ModelSelection;
+    memory: ModelSelection;
+  };
+}
+
+export interface ModelProviderCreateRequest {
+  slug?: string;
+  name: string;
+  base_url: string;
+  api_key?: string;
+  key_env?: string;
+  default_model: string;
+  api_mode: string;
+  models?: string[];
+}
+
+export interface ModelProviderCreateResponse {
+  ok: boolean;
+  provider: ModelProviderOption;
+}
+
+export interface ModelQuickSwitchRequest {
+  target: "main" | "memory";
+  provider: string;
+  model?: string;
+}
+
+export interface ModelQuickSwitchResponse {
+  ok: boolean;
+  target: "main" | "memory";
+  selection: ModelSelection;
 }
 
 // ── OAuth provider types ────────────────────────────────────────────────

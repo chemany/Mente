@@ -8,6 +8,7 @@ from typing import Any
 
 
 _FALSE_VALUES = {"0", "false", "off", "no"}
+_CONFIG_MISSING = object()
 API_SERVER_CONVERSATION_WORKFLOW_ID = "api_server_conversation"
 API_SERVER_CONVERSATION_ADOPTION_ID = "api_server_conversation_memory_and_skill_v1"
 _BRIDGE_TOOL_FLAGS = {
@@ -33,6 +34,55 @@ def is_env_flag_enabled(
     if raw_value is None:
         return default
     return raw_value.strip().lower() not in _FALSE_VALUES
+
+
+def _read_raw_config() -> Mapping[str, Any]:
+    try:
+        from hermes_cli.config import read_raw_config
+
+        config = read_raw_config()
+    except Exception:
+        return {}
+    return config if isinstance(config, Mapping) else {}
+
+
+def _read_config_path(path: Sequence[str]) -> Any:
+    current: Any = _read_raw_config()
+    for key in path:
+        if not isinstance(current, Mapping):
+            return _CONFIG_MISSING
+        current = current.get(key, _CONFIG_MISSING)
+        if current is _CONFIG_MISSING:
+            return _CONFIG_MISSING
+    return current
+
+
+def _coerce_config_bool(value: Any, *, default: bool) -> bool:
+    if value is _CONFIG_MISSING:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSE_VALUES
+    if value is None:
+        return default
+    return bool(value)
+
+
+def _config_backed_env_flag_enabled(
+    name: str,
+    *,
+    config_path: Sequence[str],
+    default: bool = False,
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    """Return env override first, then live config.yaml value, then default."""
+
+    env = environment or os.environ
+    raw_value = env.get(name)
+    if raw_value is not None:
+        return raw_value.strip().lower() not in _FALSE_VALUES
+    if environment is not None:
+        return default
+    return _coerce_config_bool(_read_config_path(config_path), default=default)
 
 
 def filter_enabled_bridge_tools(
@@ -94,6 +144,20 @@ def is_memory_review_enabled(
     )
 
 
+def is_llm_memory_review_enabled(
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    """Return whether LLM post-turn memory review is enabled for rollout."""
+
+    return _config_backed_env_flag_enabled(
+        "MENTE_LLM_MEMORY_REVIEW_ENABLED",
+        config_path=("memory", "llm_review", "enabled"),
+        default=True,
+        environment=environment,
+    )
+
+
 def is_remember_intent_direct_write_enabled(
     *,
     environment: Mapping[str, str] | None = None,
@@ -102,7 +166,7 @@ def is_remember_intent_direct_write_enabled(
 
     return is_env_flag_enabled(
         "MENTE_REMEMBER_INTENT_DIRECT_WRITE_ENABLED",
-        default=False,
+        default=True,
         environment=environment,
     )
 
@@ -238,6 +302,31 @@ def session_synthesis_sources(
     )
 
 
+def llm_memory_review_sources(
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> set[str]:
+    """Return the bounded source allowlist for LLM memory review."""
+
+    default_sources = ("api_server", "gateway", "tui")
+    env = environment or os.environ
+    if env.get("MENTE_LLM_MEMORY_REVIEW_SOURCES") is not None or environment is not None:
+        return parse_allowed_sources(
+            "MENTE_LLM_MEMORY_REVIEW_SOURCES",
+            default_sources=default_sources,
+            environment=environment,
+        )
+
+    configured = _read_config_path(("memory", "llm_review", "sources"))
+    if isinstance(configured, str):
+        values = {item.strip() for item in configured.split(",") if item.strip()}
+        return values or set(default_sources)
+    if isinstance(configured, Sequence) and not isinstance(configured, (str, bytes)):
+        values = {str(item).strip() for item in configured if str(item).strip()}
+        return values or set(default_sources)
+    return set(default_sources)
+
+
 def session_synthesis_turn_interval(
     *,
     environment: Mapping[str, str] | None = None,
@@ -288,6 +377,11 @@ def build_conversation_workflow_contract(
         and is_session_synthesis_enabled(environment=environment)
         and normalized_source in session_synthesis_sources(environment=environment)
     )
+    llm_memory_review_enabled = (
+        adoption_enabled
+        and is_llm_memory_review_enabled(environment=environment)
+        and normalized_source in llm_memory_review_sources(environment=environment)
+    )
     review_enabled = normalized_source == "api_server" and adoption_enabled
     normalized_lane = str(lane).strip() or "director"
 
@@ -330,6 +424,11 @@ def build_conversation_workflow_contract(
         "memory_review": {
             "mode": "post_turn",
             "enabled": review_enabled,
+        },
+        "llm_memory_review": {
+            "mode": "post_turn_llm",
+            "enabled": llm_memory_review_enabled,
+            "output_schema": "should_write_facts_confidence_reason_v1",
         },
         "remember_intent_direct_write": {
             "mode": "post_turn_direct_write",

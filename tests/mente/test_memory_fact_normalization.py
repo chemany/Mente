@@ -10,6 +10,13 @@ def test_build_fact_identity_normalizes_fullwidth_colons_and_space_variants():
     assert identity.fact_key == hashlib.sha256("我喜欢中文回答".encode("utf-8")).hexdigest()
 
 
+def test_build_fact_identity_normalizes_possessive_memory_commands():
+    identity = build_fact_identity("那就加入你的记忆，直接调用脚本")
+
+    assert identity.normalized_fact == "直接调用脚本"
+    assert identity.fact_key == hashlib.sha256("直接调用脚本".encode("utf-8")).hexdigest()
+
+
 def test_build_fact_identity_classifies_supported_preference_slot():
     identity = build_fact_identity("我更喜欢中文回答")
 

@@ -9,7 +9,9 @@ from mente.memory.fact_normalization import normalize_memory_fact_text
 
 _REMEMBER_RE = re.compile(r"^\s*remember(?:\s+that|\s+this|:)?\s+(.+?)\s*$", re.IGNORECASE)
 _CHINESE_REMEMBER_RE = re.compile(
-    r"(?:^|[，,。；;!！?？\s])(?:请)?(?:帮我)?(?:记住|加入记忆|记一下)(?:[:：]|\s+)?(.+?)\s*$"
+    r"(?:^|[，,。；;!！?？\s])(?:(?:那就|就|请)\s*)?(?:帮我)?"
+    r"(?:记住|记一下|加入(?:你的|我的|到)?记忆|写入记忆|保存(?:到)?记忆)"
+    r"(?:[:：，,]|\s+)?(.+?)\s*$"
 )
 
 
