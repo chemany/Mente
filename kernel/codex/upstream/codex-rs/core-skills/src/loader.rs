@@ -104,6 +104,7 @@ struct DependencyTool {
 
 const SKILLS_FILENAME: &str = "SKILL.md";
 const AGENTS_DIR_NAME: &str = ".agents";
+const MENTE_SKILLS_DIR_ENV: &str = "MENTE_SKILLS_DIR";
 const SKILLS_METADATA_DIR: &str = "agents";
 const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
 const SKILLS_DIR_NAME: &str = "skills";
@@ -243,6 +244,15 @@ async fn skill_roots_with_home_dir(
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
+    let mente_skills_dir = mente_skills_dir_from_env();
+    if let Some(mente_skills_dir) = mente_skills_dir {
+        return vec![SkillRoot {
+            path: mente_skills_dir,
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+        }];
+    }
+
     let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir, fs.clone());
     roots.extend(plugin_skill_roots.into_iter().map(|path| SkillRoot {
         path,
@@ -322,6 +332,20 @@ fn skill_roots_from_layer_stack_inner(
     }
 
     roots
+}
+
+fn mente_skills_dir_from_env() -> Option<AbsolutePathBuf> {
+    let value = std::env::var_os(MENTE_SKILLS_DIR_ENV)?;
+    if value.is_empty() {
+        return None;
+    }
+    match AbsolutePathBuf::from_absolute_path_checked(PathBuf::from(value)) {
+        Ok(path) => Some(path),
+        Err(err) => {
+            tracing::warn!("ignoring {MENTE_SKILLS_DIR_ENV}: {err}");
+            None
+        }
+    }
 }
 
 async fn repo_agents_skill_roots(
@@ -964,7 +988,31 @@ pub(crate) async fn skill_roots_from_layer_stack(
     cwd: &AbsolutePathBuf,
     home_dir: Option<&AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
-    skill_roots_with_home_dir(Some(fs), config_layer_stack, cwd, home_dir, Vec::new()).await
+    skill_roots_from_layer_stack_with_mente_skills_dir(fs, config_layer_stack, cwd, home_dir, None)
+        .await
+}
+
+#[cfg(test)]
+pub(crate) async fn skill_roots_from_layer_stack_with_mente_skills_dir(
+    fs: Arc<dyn ExecutorFileSystem>,
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &AbsolutePathBuf,
+    home_dir: Option<&AbsolutePathBuf>,
+    mente_skills_dir: Option<&AbsolutePathBuf>,
+) -> Vec<SkillRoot> {
+    if let Some(mente_skills_dir) = mente_skills_dir {
+        return vec![SkillRoot {
+            path: mente_skills_dir.clone(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+        }];
+    }
+
+    let mut roots =
+        skill_roots_from_layer_stack_inner(config_layer_stack, home_dir, Some(fs.clone()));
+    roots.extend(repo_agents_skill_roots(Some(fs), config_layer_stack, cwd).await);
+    dedupe_skill_roots_by_path(&mut roots);
+    roots
 }
 
 #[cfg(test)]

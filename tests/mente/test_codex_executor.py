@@ -1186,7 +1186,10 @@ def test_codex_executor_keeps_memory_injection_mente_owned_in_sessionful_mode(
     assert captured["session"].mode is KernelSessionMode.SESSION
 
 
-def test_codex_executor_exposes_mente_user_skills_inside_private_runtime(monkeypatch, tmp_path):
+def test_codex_executor_uses_canonical_mente_skills_without_private_runtime_mirror(
+    monkeypatch,
+    tmp_path,
+):
     mente_home = tmp_path / ".mente"
     skills_root = mente_home / "skills" / "media" / "wechat-publisher"
     skills_root.mkdir(parents=True, exist_ok=True)
@@ -1199,16 +1202,13 @@ def test_codex_executor_exposes_mente_user_skills_inside_private_runtime(monkeyp
 
     class _Runner:
         def run(self, *, payload, session, runtime_config):
-            linked_skill = (
-                runtime_config.runtime_home
-                / ".agents"
-                / "skills"
-                / "media"
-                / "wechat-publisher"
-                / "SKILL.md"
+            private_skills = runtime_config.runtime_home / ".agents" / "skills"
+            canonical_skill = skills_root / "SKILL.md"
+            captured["private_skills_exists"] = (
+                private_skills.exists() or private_skills.is_symlink()
             )
-            captured["linked_skill_exists"] = linked_skill.exists()
-            captured["linked_skill_contents"] = linked_skill.read_text(encoding="utf-8")
+            captured["canonical_skill_exists"] = canonical_skill.exists()
+            captured["canonical_skill_contents"] = canonical_skill.read_text(encoding="utf-8")
             return KernelExecutionResult(status="success", assistant_summary="ok")
 
     executor = CodexExecutor(codex_binary="codex", runner=_Runner())
@@ -1224,11 +1224,59 @@ def test_codex_executor_exposes_mente_user_skills_inside_private_runtime(monkeyp
     result = executor.execute(request)
 
     assert result.status == "success"
-    assert captured["linked_skill_exists"] is True
-    assert "wechat-publisher" in captured["linked_skill_contents"]
+    assert captured["private_skills_exists"] is False
+    assert captured["canonical_skill_exists"] is True
+    assert "wechat-publisher" in captured["canonical_skill_contents"]
 
 
-def test_codex_executor_exposes_bundled_mente_superpowers_inside_private_runtime(monkeypatch, tmp_path):
+def test_codex_executor_removes_private_skill_mirrors_without_symlinking(
+    monkeypatch,
+    tmp_path,
+):
+    mente_home = tmp_path / ".mente"
+    canonical_skills = mente_home / "skills"
+    skill_root = canonical_skills / "media" / "wechat-publisher"
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: wechat-publisher\ndescription: Publish to WeChat drafts.\n---\n",
+        encoding="utf-8",
+    )
+    runtime_home = mente_home / "codex"
+    stale_agents_skills = runtime_home / ".agents" / "skills"
+    stale_agents_skills.mkdir(parents=True, exist_ok=True)
+    (stale_agents_skills / "stale.txt").write_text("old copy", encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            target = runtime_config.runtime_home / ".agents" / "skills"
+            captured["target_exists"] = target.exists() or target.is_symlink()
+            captured["target_is_symlink"] = target.is_symlink()
+            captured["canonical_skill_exists"] = (
+                canonical_skills / "media" / "wechat-publisher" / "SKILL.md"
+            ).exists()
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert captured["target_exists"] is False
+    assert captured["target_is_symlink"] is False
+    assert captured["canonical_skill_exists"] is True
+
+
+def test_codex_executor_does_not_copy_bundled_skills_into_private_runtime(monkeypatch, tmp_path):
     mente_home = tmp_path / ".mente"
     mente_home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("MENTE_HOME", str(mente_home))
@@ -1236,16 +1284,10 @@ def test_codex_executor_exposes_bundled_mente_superpowers_inside_private_runtime
 
     class _Runner:
         def run(self, *, payload, session, runtime_config):
-            bundled_skill = (
-                runtime_config.runtime_home
-                / ".agents"
-                / "skills"
-                / "software-development"
-                / "brainstorming"
-                / "SKILL.md"
+            private_skills = runtime_config.runtime_home / ".agents" / "skills"
+            captured["private_skills_exists"] = (
+                private_skills.exists() or private_skills.is_symlink()
             )
-            captured["bundled_skill_exists"] = bundled_skill.exists()
-            captured["bundled_skill_contents"] = bundled_skill.read_text(encoding="utf-8")
             return KernelExecutionResult(status="success", assistant_summary="ok")
 
     executor = CodexExecutor(codex_binary="codex", runner=_Runner())
@@ -1261,8 +1303,7 @@ def test_codex_executor_exposes_bundled_mente_superpowers_inside_private_runtime
     result = executor.execute(request)
 
     assert result.status == "success"
-    assert captured["bundled_skill_exists"] is True
-    assert "brainstorming" in captured["bundled_skill_contents"]
+    assert captured["private_skills_exists"] is False
 
 
 def test_codex_executor_links_private_runtime_memories_to_canonical_mente_memory(

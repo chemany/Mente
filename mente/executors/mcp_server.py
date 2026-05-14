@@ -147,11 +147,7 @@ def _register_local_skill_resources(mcp: "FastMCP") -> None:
 def _iter_local_skill_resource_files() -> list[Path]:
     """Return a de-duplicated list of local skill files safe to expose as resources."""
 
-    roots: list[Path] = []
-    runtime_home = Path(os.environ.get("CODEX_HOME") or Path.home()).expanduser()
-    roots.append(runtime_home / ".agents" / "skills")
-    roots.append(get_skills_dir())
-    roots.append(Path(__file__).resolve().parents[2] / "skills")
+    roots: list[Path] = [get_skills_dir()]
 
     seen_roots: set[Path] = set()
     resource_files: list[Path] = []

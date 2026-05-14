@@ -44,6 +44,7 @@ def test_build_stateless_command_shapes_codex_exec_for_private_runtime():
     assert "--full-auto" in command
     assert "-c" in command
     assert 'sandbox_workspace_write.network_access=true' in command
+    assert "skills.bundled.enabled=false" in command
     assert command[command.index("--cd") + 1] == "/tmp/mente-codex-workdir-123"
     assert command[command.index("--add-dir") + 1] == "/workspace/repo"
     assert command[command.index("--output-last-message") + 1] == "/tmp/out.txt"
@@ -73,6 +74,31 @@ def test_build_stateless_command_respects_explicit_workspace_network_override():
 
     assert 'sandbox_workspace_write.network_access=false' in command
     assert 'sandbox_workspace_write.network_access=true' not in command
+
+
+def test_build_stateless_command_forces_private_bundled_skills_off():
+    payload = KernelExecutionPayload(
+        prompt="Inspect repository",
+        workspace="/workspace/repo",
+        tool_policy=None,
+    )
+    runtime_config = RuntimeConfig(
+        runtime_home=Path("/private/codex-home"),
+        codex_config={"skills": {"bundled": {"enabled": True}}},
+    )
+
+    command = build_stateless_command(
+        codex_binary="codex",
+        payload=payload,
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        sandbox="workspace-write",
+        approval_policy="never",
+        runtime_config=runtime_config,
+    )
+
+    assert command.index("skills.bundled.enabled=false") > command.index(
+        "skills.bundled.enabled=true"
+    )
 
 
 def test_build_stateless_command_respects_runtime_launch_flags():
@@ -113,6 +139,19 @@ def test_build_private_runtime_env_sets_private_home_and_preserves_safe_vars(mon
     assert env["OPENAI_BASE_URL"] == "https://env.example/v1"
     assert env["HOME"] == "/private/codex-home"
     assert env["CODEX_HOME"] == "/private/codex-home"
+
+
+def test_build_private_runtime_env_preserves_canonical_mente_home(monkeypatch):
+    monkeypatch.setenv("MENTE_HOME", "/canonical/mente-home")
+    monkeypatch.setenv("HERMES_HOME", "/legacy/wrong-home")
+
+    env = build_private_runtime_env(Path("/private/codex-home"))
+
+    assert env["HOME"] == "/private/codex-home"
+    assert env["CODEX_HOME"] == "/private/codex-home"
+    assert env["MENTE_HOME"] == "/canonical/mente-home"
+    assert env["HERMES_HOME"] == "/canonical/mente-home"
+    assert env["MENTE_SKILLS_DIR"] == "/canonical/mente-home/skills"
 
 
 def test_build_private_runtime_env_applies_private_overrides(monkeypatch):

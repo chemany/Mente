@@ -206,6 +206,47 @@ async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_sys
 }
 
 #[tokio::test]
+async fn skill_roots_from_layer_stack_prefers_mente_skills_dir_for_user_scope() -> anyhow::Result<()>
+{
+    let tmp = tempfile::tempdir()?;
+
+    let home_folder = tmp.path().join("home");
+    let user_folder = home_folder.join("codex");
+    let mente_skills = tmp.path().join("mente").join("skills");
+    fs::create_dir_all(&user_folder)?;
+    fs::create_dir_all(&mente_skills)?;
+
+    let user_file = user_folder.join("config.toml").abs();
+    let layers = vec![ConfigLayerEntry::new(
+        ConfigLayerSource::User { file: user_file },
+        TomlValue::Table(toml::map::Map::new()),
+    )];
+    let stack = ConfigLayerStack::new(
+        layers,
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?;
+
+    let home_folder_abs = home_folder.abs();
+    let mente_skills_abs = mente_skills.abs();
+    let got = skill_roots_from_layer_stack_with_mente_skills_dir(
+        Arc::clone(&LOCAL_FS),
+        &stack,
+        &home_folder_abs,
+        Some(&home_folder_abs),
+        Some(&mente_skills_abs),
+    )
+    .await
+    .into_iter()
+    .map(|root| (root.scope, root.path.to_path_buf()))
+    .collect::<Vec<_>>();
+
+    assert_eq!(got, vec![(SkillScope::User, mente_skills)]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
 

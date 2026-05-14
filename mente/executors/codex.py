@@ -580,36 +580,19 @@ class CodexExecutor(CodexKernelAdapter):
         return codex_home / f"{stem}-{uuid4().hex}"
 
     def _seed_user_skills_into_isolated_home(self, codex_home: Path) -> str:
-        """Expose Mente-managed user skills inside the private Codex runtime home."""
-        user_skills = get_skills_dir()
-        bundled_skills = Path(__file__).resolve().parents[2] / "skills"
-        target_skills = codex_home / ".agents" / "skills"
-        has_user_skills = user_skills.is_dir()
-        has_bundled_skills = bundled_skills.is_dir()
-        if not has_user_skills and not has_bundled_skills:
-            self._remove_runtime_path(target_skills)
-            return "missing"
-        if has_user_skills and has_bundled_skills:
-            self._remove_runtime_path(target_skills)
-            target_skills.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(bundled_skills, target_skills, symlinks=True)
-            shutil.copytree(user_skills, target_skills, symlinks=True, dirs_exist_ok=True)
-            return "merged_copy"
-        source_skills = user_skills if has_user_skills else bundled_skills
-        if target_skills.is_symlink():
-            try:
-                if target_skills.resolve() == source_skills.resolve():
-                    return "symlink"
-            except OSError:
-                pass
-        self._remove_runtime_path(target_skills)
-        target_skills.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            target_skills.symlink_to(source_skills, target_is_directory=True)
-            return "symlink"
-        except OSError:
-            shutil.copytree(source_skills, target_skills, symlinks=True)
-            return "copy"
+        """Remove legacy private skill mirrors; Codex reads MENTE_SKILLS_DIR directly."""
+        canonical_skills = get_skills_dir()
+        removed = False
+        for target_skills in (
+            codex_home / ".agents" / "skills",
+            codex_home / ".mente" / "skills",
+        ):
+            if target_skills.exists() or target_skills.is_symlink():
+                self._remove_runtime_path(target_skills)
+                removed = True
+        if canonical_skills.is_dir():
+            return "removed_private_mirror" if removed else "canonical_env"
+        return "missing"
 
     def _remove_runtime_path(self, path: Path) -> None:
         """Remove a Mente-managed file, symlink, or directory under the runtime home."""

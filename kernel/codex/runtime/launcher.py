@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from hermes_constants import get_mente_home
 from kernel.codex.runtime.protocol import KernelExecutionPayload
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
 
@@ -44,6 +45,9 @@ def build_exec_command(
         command.extend(["-c", override])
     for override in runtime_config.to_codex_overrides():
         command.extend(["-c", override])
+    # Mente owns the canonical skills root via MENTE_SKILLS_DIR. Disable Codex's
+    # embedded system-skill cache so no private CODEX_HOME/skills tree is created.
+    command.extend(["-c", "skills.bundled.enabled=false"])
     command.extend(_build_execution_mode_args(sandbox=sandbox, approval_policy=approval_policy))
     if runtime_config.skip_git_repo_check is not False:
         command.append("--skip-git-repo-check")
@@ -145,8 +149,12 @@ def build_private_runtime_env(
         env["PATH"] = str(runtime_path_dir) + (
             path_sep + existing_path if existing_path else ""
         )
+    canonical_mente_home = str(get_mente_home())
     env["HOME"] = str(codex_home)
     env["CODEX_HOME"] = str(codex_home)
+    env["MENTE_HOME"] = canonical_mente_home
+    env["HERMES_HOME"] = canonical_mente_home
+    env["MENTE_SKILLS_DIR"] = str(get_mente_home() / "skills")
     return env
 
 

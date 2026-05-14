@@ -335,7 +335,7 @@ def test_create_mcp_server_registers_memory_query_tool(monkeypatch):
     assert isinstance(registered_resources, dict)
 
 
-def test_create_mcp_server_registers_runtime_skill_files_as_resources(monkeypatch, tmp_path):
+def test_create_mcp_server_registers_canonical_skill_files_as_resources(monkeypatch, tmp_path):
     registered_resources = {}
 
     class FakeMCP:
@@ -356,22 +356,23 @@ def test_create_mcp_server_registers_runtime_skill_files_as_resources(monkeypatc
 
             return decorator
 
+    mente_home = tmp_path / ".mente"
     runtime_home = tmp_path / "runtime-home"
-    skill_md = runtime_home / ".agents" / "skills" / "media" / "wechat-publisher" / "SKILL.md"
+    skill_md = mente_home / "skills" / "media" / "wechat-publisher" / "SKILL.md"
     skill_md.parent.mkdir(parents=True, exist_ok=True)
-    skill_md.write_text("# runtime skill\n", encoding="utf-8")
+    skill_md.write_text("# canonical skill\n", encoding="utf-8")
 
     monkeypatch.setattr("mente.executors.mcp_server.FastMCP", FakeMCP)
     monkeypatch.setattr("mente.executors.mcp_server._MCP_SERVER_AVAILABLE", True)
     monkeypatch.setenv("HOME", str(runtime_home))
     monkeypatch.setenv("CODEX_HOME", str(runtime_home))
-    monkeypatch.setenv("MENTE_HOME", str(tmp_path / ".mente"))
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
 
     create_mcp_server()
 
     resource_uri = skill_md.resolve().as_uri()
     assert resource_uri in registered_resources
-    assert registered_resources[resource_uri]() == "# runtime skill\n"
+    assert registered_resources[resource_uri]() == "# canonical skill\n"
 
 
 def test_save_mente_memory_persists_gateway_conversation_write_with_attribution():
