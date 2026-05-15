@@ -213,6 +213,11 @@ _FIRST_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _ENGINEERING_FILE_PATTERN = re.compile(
     r"\b[\w./-]+\.(py|js|jsx|ts|tsx|go|rs|java|rb|php|sh|yml|yaml|json|toml)\b"
 )
+_ARTIFACT_PATH_PATTERN = re.compile(
+    r"(?P<path>(?:~|/)[^\s<>()\[\]{}\"'`]+?\.(?:md|markdown|html|docx|doc|pdf|txt|csv|tsv|xlsx|xls|pptx|json|yaml|yml))",
+    re.IGNORECASE,
+)
+_ARTIFACT_PATH_TRAILING_PUNCTUATION = ".,，。!！?？:：;；)]}>\"'"
 _ENGINEERING_STRONG_HINTS: tuple[str, ...] = (
     "pytest",
     "traceback",
@@ -684,6 +689,24 @@ def _resolve_workspace(workspace: str | None) -> str:
 
 def _normalize_text_haystack(*parts: str | None) -> str:
     return " ".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+
+
+def extract_artifact_paths_from_text(*parts: str | None) -> list[str]:
+    """Extract likely artifact file paths from free-form assistant text."""
+
+    extracted: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        text = str(part or "")
+        if not text:
+            continue
+        for match in _ARTIFACT_PATH_PATTERN.finditer(text):
+            candidate = match.group("path").rstrip(_ARTIFACT_PATH_TRAILING_PUNCTUATION)
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            extracted.append(candidate)
+    return extracted
 
 
 def _compact_simple_conversation_request(message: str | None) -> str:
@@ -1248,6 +1271,30 @@ def resolve_dispatch_decision(
                 target_job_lane=continuation_lane,
                 reason=f"continue_active_job:{continuation_lane}",
             )
+
+    owner_lane = _resolve_skill_owner_lane(
+        skill_refs=inferred_skill_refs,
+        task_profile=task_profile,
+        recent_task_snapshot=recent_task_snapshot,
+    )
+    if owner_lane and owner_lane != DIRECTOR_LANE:
+        return _build_background_dispatch_decision(
+            lane=owner_lane,
+            task_profile=task_profile,
+            skill_refs=inferred_skill_refs,
+            reason=f"deterministic:owner_lane:{owner_lane}",
+        )
+
+    if _looks_like_engineering_request(
+        message=message,
+        channel_prompt=channel_prompt,
+    ):
+        return _build_background_dispatch_decision(
+            lane=ENGINEERING_LANE,
+            task_profile=task_profile,
+            skill_refs=inferred_skill_refs,
+            reason="deterministic:engineering",
+        )
 
     try:
         classified_route = _classify_ambiguous_conversation_lane(

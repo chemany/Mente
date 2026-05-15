@@ -426,6 +426,42 @@ def test_mente_tui_agent_keeps_director_and_engineering_continuity_separate(monk
     assert set(agent._continuity_payloads) == {"director", "engineering"}
 
 
+def test_mente_tui_agent_keeps_recent_snapshot_when_success_creates_artifacts():
+    inner = types.SimpleNamespace(
+        model="gpt-5.4",
+        provider="openai",
+        base_url="https://api.example.test/v1",
+        api_key="sk-test",
+        session_id="tui-session-1",
+    )
+    agent = server.MenteTuiAgent(inner, sid="sid-1", session_key="tui-session-1")
+
+    agent._update_recent_task_snapshot(
+        result=ExecutionResult(
+            status="success",
+            summary="已生成 Markdown、HTML、DOCX 三份报告。",
+            artifacts_out=[
+                "/home/jason/clawd/deep-research/verapamil/report.md",
+                "/home/jason/clawd/deep-research/verapamil/report.html",
+                "/home/jason/clawd/deep-research/verapamil/report.docx",
+            ],
+            metadata={"lane": "research", "task_profile": "deep_research"},
+        ),
+        message="深度研究维拉帕米",
+        lane="research",
+    )
+
+    snapshot = agent._recent_task_snapshots["research"]
+    assert snapshot["status"] == "needs_follow_up"
+    assert snapshot["metadata"]["lane"] == "research"
+    assert snapshot["metadata"]["task_profile"] == "deep_research"
+    assert snapshot["metadata"]["artifacts_out"] == [
+        "/home/jason/clawd/deep-research/verapamil/report.md",
+        "/home/jason/clawd/deep-research/verapamil/report.html",
+        "/home/jason/clawd/deep-research/verapamil/report.docx",
+    ]
+
+
 def test_mente_tui_agent_interrupt_cancels_active_turn():
     cancelled = []
     inner = types.SimpleNamespace(

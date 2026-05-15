@@ -656,6 +656,8 @@ def _finalize_gateway_recent_task_snapshot(
     previous_snapshot: Dict[str, Any] | None,
 ) -> None:
     """Update or clear the short-term task snapshot after one gateway turn."""
+    from mente.integrations.bridge import extract_artifact_paths_from_text
+
     if session_store is None:
         return
     follow_up_tasks = [
@@ -663,11 +665,19 @@ def _finalize_gateway_recent_task_snapshot(
         for item in result.get("follow_up_tasks") or []
         if str(item).strip()
     ]
+    assistant_summary = str(
+        result.get("assistant_summary")
+        or result.get("final_response")
+        or ""
+    ).strip()
     artifact_outputs = [
         str(item).strip()
         for item in result.get("artifacts_out") or []
         if str(item).strip()
     ]
+    for item in extract_artifact_paths_from_text(assistant_summary):
+        if item not in artifact_outputs:
+            artifact_outputs.append(item)
     if not result.get("failed", False) and not follow_up_tasks and not artifact_outputs:
         if hasattr(session_store, "clear_recent_task_snapshot"):
             session_store.clear_recent_task_snapshot(session_id, lane=lane)
@@ -684,11 +694,6 @@ def _finalize_gateway_recent_task_snapshot(
     if result.get("failed", False):
         snapshot_status = str(result.get("failure_reason") or "failed").strip() or "failed"
 
-    assistant_summary = str(
-        result.get("assistant_summary")
-        or result.get("final_response")
-        or ""
-    ).strip()
     snapshot_metadata = {
         "task_id": result.get("mente_task_id"),
         "lane": result.get("lane"),

@@ -2727,12 +2727,27 @@ class MenteTuiAgent:
                 cancel_event=controller.cancel_event,
             )
 
+        planned_result_lane = None
+        if inspected_task is not None:
+            planned_result_lane = (
+                str(
+                    getattr(inspected_task, "worker_lane", None)
+                    or dict(getattr(inspected_task, "metadata", {}) or {}).get("lane")
+                    or ""
+                ).strip().lower()
+                or None
+            )
+        effective_result_lane = self._resolve_result_lane(
+            result=result,
+            fallback_lane=lane,
+            planned_lane=planned_result_lane,
+        )
         handoff = extract_execution_session_handoff(result)
-        self._update_continuity_state(handoff, lane=lane)
+        self._update_continuity_state(handoff, lane=effective_result_lane)
         self._update_recent_task_snapshot(
             result=result,
             message=prompt,
-            lane=lane,
+            lane=effective_result_lane,
         )
         terminal_event_type, terminal_payload = build_lane_terminal_event(
             result,
@@ -2811,8 +2826,6 @@ class MenteTuiAgent:
 
     def _resolve_active_continuity_lane(self) -> str | None:
         latest_snapshot_lane = self._resolve_active_snapshot_lane()
-        if latest_snapshot_lane:
-            return latest_snapshot_lane
         latest_lane = None
         latest_sort_key = ""
         latest_non_director_lane = None
@@ -2832,6 +2845,13 @@ class MenteTuiAgent:
             ):
                 latest_non_director_lane = lane
                 latest_non_director_sort_key = sort_key
+        if latest_snapshot_lane:
+            if (
+                latest_snapshot_lane == _MENTE_TUI_DEFAULT_CONTINUITY_LANE
+                and latest_non_director_lane is not None
+            ):
+                return latest_non_director_lane
+            return latest_snapshot_lane
         return latest_non_director_lane or latest_lane
 
     def _resolve_active_snapshot_lane(self) -> str | None:
@@ -2873,6 +2893,22 @@ class MenteTuiAgent:
         if continuity_status == "fallback_stateless":
             self._continuity_payloads.pop(lane, None)
 
+    def _resolve_result_lane(
+        self,
+        *,
+        result: ExecutionResult,
+        fallback_lane: str,
+        planned_lane: str | None = None,
+    ) -> str:
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        preferred_raw = str(metadata.get("worker_lane") or metadata.get("lane") or "").strip().lower()
+        if preferred_raw:
+            return _normalize_background_worker_lane(preferred_raw)
+        planned_raw = str(planned_lane or "").strip().lower()
+        if planned_raw:
+            return _normalize_background_worker_lane(planned_raw)
+        return _normalize_background_worker_lane(fallback_lane)
+
     def _update_recent_task_snapshot(
         self,
         *,
@@ -2880,12 +2916,22 @@ class MenteTuiAgent:
         message: str,
         lane: str,
     ) -> None:
+        from mente.integrations.bridge import extract_artifact_paths_from_text
+
         follow_up_tasks = [
             str(item).strip()
             for item in result.follow_up_tasks
             if str(item).strip()
         ]
-        if result.status == "success" and not follow_up_tasks:
+        artifact_outputs = [
+            str(item).strip()
+            for item in result.artifacts_out
+            if str(item).strip()
+        ]
+        for item in extract_artifact_paths_from_text(result.summary):
+            if item not in artifact_outputs:
+                artifact_outputs.append(item)
+        if result.status == "success" and not follow_up_tasks and not artifact_outputs:
             self._recent_task_snapshots.pop(lane, None)
             return
 
@@ -2924,11 +2970,7 @@ class MenteTuiAgent:
             "lane": str(metadata.get("lane") or lane).strip().lower() or lane,
             "task_profile": metadata.get("task_profile") or existing_metadata.get("task_profile"),
             "skill_refs": list(metadata.get("skill_refs") or existing_metadata.get("skill_refs") or []),
-            "artifacts_out": [
-                str(item).strip()
-                for item in result.artifacts_out
-                if str(item).strip()
-            ],
+            "artifacts_out": artifact_outputs,
         }
         if preserve_pending_control and pending_worker_control is not None:
             snapshot_metadata["pending_worker_control"] = pending_worker_control

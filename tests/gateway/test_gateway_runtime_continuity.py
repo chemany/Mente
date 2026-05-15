@@ -367,6 +367,41 @@ def test_finalize_recent_task_snapshot_keeps_successful_artifact_outputs_for_fol
     ]
 
 
+def test_finalize_recent_task_snapshot_extracts_artifact_paths_from_summary_when_outputs_missing():
+    session_store = MagicMock()
+
+    gateway_run._finalize_gateway_recent_task_snapshot(
+        session_store=session_store,
+        session_id="sess-1",
+        message="维拉帕米（Verapamil）的深度研究完成了么？",
+        lane="research",
+        result={
+            "failed": False,
+            "lane": "research",
+            "task_profile": "deep_research",
+            "assistant_summary": (
+                "研究完成。\n"
+                "Markdown: /home/jason/clawd/deep-research/verapamil/report.md\n"
+                "HTML: /home/jason/clawd/deep-research/verapamil/report.html\n"
+                "DOCX: /home/jason/clawd/deep-research/verapamil/report.docx"
+            ),
+            "artifacts_out": [],
+            "follow_up_tasks": [],
+        },
+        previous_snapshot=None,
+    )
+
+    session_store.clear_recent_task_snapshot.assert_not_called()
+    session_store.bind_recent_task_snapshot.assert_called_once()
+    bind_kwargs = session_store.bind_recent_task_snapshot.call_args.kwargs
+    assert bind_kwargs["status"] == "needs_follow_up"
+    assert bind_kwargs["metadata"]["artifacts_out"] == [
+        "/home/jason/clawd/deep-research/verapamil/report.md",
+        "/home/jason/clawd/deep-research/verapamil/report.html",
+        "/home/jason/clawd/deep-research/verapamil/report.docx",
+    ]
+
+
 def test_resolve_gateway_runtime_continuity_plan_ignores_active_other_runtime():
     plan = gateway_run._resolve_gateway_runtime_continuity_plan(
         session_entry=MagicMock(session_id="sess-1"),
