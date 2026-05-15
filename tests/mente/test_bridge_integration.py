@@ -787,6 +787,84 @@ def test_build_gateway_task_recent_snapshot_includes_artifact_paths_for_follow_u
     )
 
 
+def test_build_gateway_task_routes_operator_follow_up_to_recent_lane_and_reuses_capsule(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "director", "confidence": "low", "reason": "fallback"},
+    )
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    report_paths = [
+        "/home/jason/clawd/deep-research/维拉帕米_20260515/维拉帕米_20260515.md",
+        "/home/jason/clawd/deep-research/维拉帕米_20260515/维拉帕米_20260515.html",
+        "/home/jason/clawd/deep-research/维拉帕米_20260515/维拉帕米_20260515.docx",
+    ]
+    skill_entrypoint = str(
+        mente_bridge.get_skills_dir() / "research" / "deep-research-pro" / "deep_research_pro.py"
+    )
+
+    task = build_gateway_task(
+        message="把本地深度调研报告改成 维拉帕米_20260515.md/html/docx 这种命名，然后重新上传到飞书",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "深度研究维拉帕米并生成完整报告，再上传到飞书云文档",
+            "status": "needs_follow_up",
+            "assistant_summary": "已生成三份报告，但命名规则需要调整后再上传。",
+            "follow_up_tasks": ["按命名模板重新生成报告", "重新上传到飞书云文档"],
+            "metadata": {
+                "lane": "research",
+                "task_profile": "deep_research",
+                "skill_refs": ["research/deep-research-pro"],
+                "artifacts_out": report_paths,
+                "operator_capsule": {
+                    "skill_entrypoint": skill_entrypoint,
+                    "allowed_roots": [
+                        str(tmp_path),
+                        str(mente_bridge.get_skills_dir() / "research" / "deep-research-pro"),
+                    ],
+                    "naming_template": "<product>_<YYYYMMDD>.(md|html|docx)",
+                    "artifact_paths": report_paths,
+                    "next_actions": ["按命名模板重新生成报告", "重新上传到飞书云文档"],
+                },
+            },
+        },
+    )
+
+    assert task.dispatch_mode == DispatchMode.DELEGATE_BACKGROUND
+    assert task.metadata["lane"] == "research"
+    assert task.metadata["task_profile"] == "deep_research"
+    assert task.metadata["dispatch_decision"]["reason"] == "deterministic:operator_follow_up:research"
+    assert task.skill_refs == ["research/deep-research-pro"]
+    snapshot_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Recent active task snapshot:")
+    )
+    assert "<product>_<YYYYMMDD>.(md|html|docx)" in snapshot_fact
+    assert skill_entrypoint in snapshot_fact
+    assert "重新上传到飞书云文档" in snapshot_fact
+    assert any(
+        "use the recent task capsule entrypoints and artifact paths directly" in constraint.lower()
+        for constraint in task.constraints
+    )
+    assert any(
+        "follow the recent task capsule naming template" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+
+
 def test_build_gateway_task_skips_recent_task_snapshot_for_new_unrelated_request(tmp_path):
     source = SessionSource(
         platform=Platform.LOCAL,

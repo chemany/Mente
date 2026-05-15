@@ -402,6 +402,53 @@ def test_finalize_recent_task_snapshot_extracts_artifact_paths_from_summary_when
     ]
 
 
+def test_finalize_recent_task_snapshot_persists_recent_task_operator_capsule():
+    session_store = MagicMock()
+    artifact_paths = [
+        "/home/jason/.mente/deep-research/维拉帕米_20260515.md",
+        "/home/jason/.mente/deep-research/维拉帕米_20260515.html",
+        "/home/jason/.mente/deep-research/维拉帕米_20260515.docx",
+    ]
+
+    gateway_run._finalize_gateway_recent_task_snapshot(
+        session_store=session_store,
+        session_id="sess-1",
+        message="把命名规则改成 产品_日期 然后重新上传",
+        lane="research",
+        result={
+            "failed": False,
+            "assistant_summary": "已按新模板重命名并重新上传。",
+            "lane": "research",
+            "task_profile": "deep_research",
+            "skill_refs": ["research/deep-research-pro"],
+            "artifacts_out": artifact_paths,
+            "follow_up_tasks": ["核对飞书中的旧文件是否需要删除"],
+            "operator_capsule": {
+                "skill_entrypoint": "/skills/research/deep-research-pro/deep_research_pro.py",
+                "allowed_roots": [
+                    "/home/jason/.mente/deep-research",
+                    "/home/jason/.hermes/skills/research/deep-research-pro",
+                ],
+                "naming_template": "<product>_<YYYYMMDD>.(md|html|docx)",
+            },
+        },
+        previous_snapshot=None,
+    )
+
+    bind_kwargs = session_store.bind_recent_task_snapshot.call_args.kwargs
+    assert bind_kwargs["metadata"]["skill_refs"] == ["research/deep-research-pro"]
+    assert bind_kwargs["metadata"]["operator_capsule"] == {
+        "skill_entrypoint": "/skills/research/deep-research-pro/deep_research_pro.py",
+        "allowed_roots": [
+            "/home/jason/.mente/deep-research",
+            "/home/jason/.hermes/skills/research/deep-research-pro",
+        ],
+        "naming_template": "<product>_<YYYYMMDD>.(md|html|docx)",
+        "artifact_paths": artifact_paths,
+        "next_actions": ["核对飞书中的旧文件是否需要删除"],
+    }
+
+
 def test_resolve_gateway_runtime_continuity_plan_ignores_active_other_runtime():
     plan = gateway_run._resolve_gateway_runtime_continuity_plan(
         session_entry=MagicMock(session_id="sess-1"),

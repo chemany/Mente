@@ -2916,7 +2916,10 @@ class MenteTuiAgent:
         message: str,
         lane: str,
     ) -> None:
-        from mente.integrations.bridge import extract_artifact_paths_from_text
+        from mente.integrations.bridge import (
+            _normalize_recent_task_operator_capsule,
+            extract_artifact_paths_from_text,
+        )
 
         follow_up_tasks = [
             str(item).strip()
@@ -2972,6 +2975,15 @@ class MenteTuiAgent:
             "skill_refs": list(metadata.get("skill_refs") or existing_metadata.get("skill_refs") or []),
             "artifacts_out": artifact_outputs,
         }
+        operator_capsule = _normalize_recent_task_operator_capsule(
+            metadata.get("operator_capsule") or existing_metadata.get("operator_capsule"),
+            artifact_paths=artifact_outputs,
+            next_actions=follow_up_tasks,
+            task_profile=str(snapshot_metadata.get("task_profile") or "").strip() or None,
+            skill_refs=snapshot_metadata["skill_refs"],
+        )
+        if operator_capsule:
+            snapshot_metadata["operator_capsule"] = operator_capsule
         if preserve_pending_control and pending_worker_control is not None:
             snapshot_metadata["pending_worker_control"] = pending_worker_control
         self._recent_task_snapshots[lane] = {

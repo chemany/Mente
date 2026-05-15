@@ -172,6 +172,69 @@ _ARTIFACT_DELIVERY_TARGET_HINTS: tuple[str, ...] = (
     "drive",
     "docs",
 )
+_OPERATOR_FOLLOW_UP_ACTION_HINTS: tuple[str, ...] = (
+    "改",
+    "修改",
+    "重命名",
+    "命名",
+    "重新上传",
+    "上传",
+    "删除",
+    "删掉",
+    "移除",
+    "更新",
+    "重新生成",
+    "重跑",
+    "合并",
+    "转换",
+    "rename",
+    "upload",
+    "delete",
+    "remove",
+    "update",
+    "regenerate",
+    "rerun",
+    "merge",
+    "convert",
+)
+_OPERATOR_FOLLOW_UP_TARGET_HINTS: tuple[str, ...] = (
+    "报告",
+    "文件",
+    "命名",
+    "规则",
+    "模板",
+    "html",
+    "docx",
+    "md",
+    "markdown",
+    "飞书",
+    "feishu",
+    "lark",
+    "云文档",
+    "skill",
+    "技能",
+    "脚本",
+)
+_OPERATOR_FOLLOW_UP_MUTATION_HINTS: tuple[str, ...] = (
+    "命名",
+    "重命名",
+    "规则",
+    "模板",
+    "删除",
+    "删掉",
+    "移除",
+    "重新生成",
+    "重跑",
+    "合并",
+    "转换",
+    "脚本",
+    "skill",
+    "技能",
+    "html",
+    "docx",
+    "md",
+    "markdown",
+)
 _WECHAT_PUBLISH_BRIDGE_TOOL = "mente_wechat_publish_draft"
 _WECHAT_PUBLISH_VISIBLE_TOOL = model_visible_mcp_tool_name("mente", _WECHAT_PUBLISH_BRIDGE_TOOL)
 _FAST_PATH_GREETING_PREFIXES: tuple[str, ...] = (
@@ -601,6 +664,134 @@ def _recent_snapshot_artifacts(snapshot: Mapping[str, Any] | None) -> list[str]:
     return normalized
 
 
+def _recent_snapshot_follow_up_tasks(snapshot: Mapping[str, Any] | None) -> list[str]:
+    if not isinstance(snapshot, Mapping):
+        return []
+    return [
+        str(item).strip()
+        for item in snapshot.get("follow_up_tasks") or []
+        if str(item).strip()
+    ]
+
+
+def _recent_snapshot_metadata(
+    snapshot: Mapping[str, Any] | None,
+) -> Mapping[str, Any]:
+    metadata = snapshot.get("metadata") if isinstance(snapshot, Mapping) else None
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _recent_snapshot_task_profile(snapshot: Mapping[str, Any] | None) -> str | None:
+    metadata = _recent_snapshot_metadata(snapshot)
+    task_profile = str(metadata.get("task_profile") or "").strip().lower()
+    return task_profile or None
+
+
+def _normalize_recent_task_operator_capsule(
+    value: Mapping[str, Any] | None,
+    *,
+    artifact_paths: list[str] | None = None,
+    next_actions: list[str] | None = None,
+    task_profile: str | None = None,
+    skill_refs: list[str] | tuple[str, ...] | None = None,
+    workspace: str | None = None,
+) -> dict[str, Any] | None:
+    raw = value if isinstance(value, Mapping) else {}
+    capsule: dict[str, Any] = {}
+
+    skill_entrypoint = str(raw.get("skill_entrypoint") or "").strip()
+    if not skill_entrypoint:
+        normalized_task_profile = str(task_profile or "").strip().lower()
+        normalized_skill_refs = _normalize_skill_refs(skill_refs or [])
+        if (
+            normalized_task_profile == _DEEP_RESEARCH_TASK_PROFILE
+            or _DEEP_RESEARCH_SKILL_REF in normalized_skill_refs
+        ):
+            skill_entrypoint = str(
+                get_skills_dir() / "research" / "deep-research-pro" / "deep_research_pro.py"
+            )
+    if skill_entrypoint:
+        capsule["skill_entrypoint"] = skill_entrypoint
+
+    allowed_roots = [
+        str(item).strip()
+        for item in raw.get("allowed_roots") or []
+        if str(item).strip()
+    ]
+    if not allowed_roots:
+        normalized_task_profile = str(task_profile or "").strip().lower()
+        normalized_skill_refs = _normalize_skill_refs(skill_refs or [])
+        inferred_roots: list[str] = []
+        if workspace:
+            inferred_roots.append(str(Path(workspace).expanduser()))
+        if (
+            normalized_task_profile == _DEEP_RESEARCH_TASK_PROFILE
+            or _DEEP_RESEARCH_SKILL_REF in normalized_skill_refs
+        ):
+            inferred_roots.append(str(get_skills_dir() / "research" / "deep-research-pro"))
+            inferred_roots.append(str(resolve_deep_research_output_root()))
+        allowed_roots = inferred_roots
+    if allowed_roots:
+        capsule["allowed_roots"] = list(dict.fromkeys(allowed_roots))
+
+    naming_template = str(raw.get("naming_template") or "").strip()
+    if not naming_template and str(task_profile or "").strip().lower() == _DEEP_RESEARCH_TASK_PROFILE:
+        naming_template = "<product>_<YYYYMMDD>.(md|html|docx)"
+    if naming_template:
+        capsule["naming_template"] = naming_template
+
+    normalized_artifacts = [
+        str(item).strip()
+        for item in (artifact_paths or raw.get("artifact_paths") or [])
+        if str(item).strip()
+    ]
+    if normalized_artifacts:
+        capsule["artifact_paths"] = normalized_artifacts
+
+    normalized_next_actions = [
+        str(item).strip()
+        for item in (next_actions or raw.get("next_actions") or [])
+        if str(item).strip()
+    ]
+    if normalized_next_actions:
+        capsule["next_actions"] = normalized_next_actions
+
+    return capsule or None
+
+
+def _recent_snapshot_operator_capsule(
+    snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    metadata = _recent_snapshot_metadata(snapshot)
+    return _normalize_recent_task_operator_capsule(
+        metadata.get("operator_capsule") if isinstance(metadata, Mapping) else None,
+        artifact_paths=_recent_snapshot_artifacts(snapshot),
+        next_actions=_recent_snapshot_follow_up_tasks(snapshot),
+        task_profile=_recent_snapshot_task_profile(snapshot),
+        skill_refs=_recent_snapshot_skill_refs(snapshot),
+    )
+
+
+def _resolve_task_operator_capsule(
+    *,
+    task_profile: str | None,
+    skill_refs: list[str] | tuple[str, ...] | None,
+    workspace: str | None,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
+    artifact_paths: list[str] | None = None,
+    next_actions: list[str] | None = None,
+) -> dict[str, Any] | None:
+    existing = _recent_snapshot_operator_capsule(recent_task_snapshot)
+    return _normalize_recent_task_operator_capsule(
+        existing,
+        artifact_paths=artifact_paths,
+        next_actions=next_actions,
+        task_profile=task_profile or _recent_snapshot_task_profile(recent_task_snapshot),
+        skill_refs=skill_refs or _recent_snapshot_skill_refs(recent_task_snapshot),
+        workspace=workspace,
+    )
+
+
 def looks_like_gateway_recent_artifact_delivery_request(
     *,
     message: str,
@@ -618,6 +809,29 @@ def looks_like_gateway_recent_artifact_delivery_request(
     return (
         any(hint in haystack for hint in _ARTIFACT_DELIVERY_ACTION_HINTS)
         and any(hint in haystack for hint in _ARTIFACT_DELIVERY_TARGET_HINTS)
+    )
+
+
+def looks_like_gateway_recent_operator_follow_up_request(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether the latest message is a narrow operator-style follow-up on one recent task."""
+
+    if _looks_like_status_follow_up_request(message) or _looks_like_continue_task_request(message):
+        return False
+    capsule = _recent_snapshot_operator_capsule(recent_task_snapshot)
+    if not capsule:
+        return False
+    haystack = _normalize_text_haystack(message, channel_prompt)
+    if not haystack:
+        return False
+    return (
+        any(hint in haystack for hint in _OPERATOR_FOLLOW_UP_ACTION_HINTS)
+        and any(hint in haystack for hint in _OPERATOR_FOLLOW_UP_TARGET_HINTS)
+        and any(hint in haystack for hint in _OPERATOR_FOLLOW_UP_MUTATION_HINTS)
     )
 
 
@@ -808,6 +1022,29 @@ def _resolve_recent_task_snapshot_lane(
         mapped_lane = _resolve_lane_from_task_profile(snapshot_task_profile)
         if mapped_lane:
             return mapped_lane
+    return None
+
+
+def _resolve_operator_follow_up_lane(
+    *,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
+    active_lane: str | None = None,
+    task_profile: str | None = None,
+    skill_refs: tuple[str, ...] = (),
+) -> str | None:
+    snapshot_lane = _resolve_recent_task_snapshot_lane(recent_task_snapshot)
+    if snapshot_lane and snapshot_lane != DIRECTOR_LANE:
+        return snapshot_lane
+    active = _normalize_active_lane_hint(active_lane)
+    if active and active != DIRECTOR_LANE:
+        return active
+    owner_lane = _resolve_skill_owner_lane(
+        skill_refs=skill_refs,
+        task_profile=task_profile,
+        recent_task_snapshot=recent_task_snapshot,
+    )
+    if owner_lane and owner_lane != DIRECTOR_LANE:
+        return owner_lane
     return None
 
 
@@ -1219,7 +1456,16 @@ def resolve_dispatch_decision(
             [*inferred_skill_refs, *explicit_skill_resolution.requested_skill_refs]
         )
     task_profile = _resolve_gateway_task_profile(list(inferred_skill_refs))
-    if looks_like_gateway_recent_artifact_delivery_request(
+    operator_follow_up = looks_like_gateway_recent_operator_follow_up_request(
+        message=message,
+        channel_prompt=channel_prompt,
+        recent_task_snapshot=recent_task_snapshot,
+    )
+    if operator_follow_up:
+        task_profile = _recent_snapshot_task_profile(recent_task_snapshot) or task_profile
+        if not inferred_skill_refs:
+            inferred_skill_refs = tuple(_recent_snapshot_skill_refs(recent_task_snapshot))
+    elif looks_like_gateway_recent_artifact_delivery_request(
         message=message,
         channel_prompt=channel_prompt,
         recent_task_snapshot=recent_task_snapshot,
@@ -1270,6 +1516,21 @@ def resolve_dispatch_decision(
                 skill_refs=inferred_skill_refs,
                 target_job_lane=continuation_lane,
                 reason=f"continue_active_job:{continuation_lane}",
+            )
+
+    if operator_follow_up:
+        operator_lane = _resolve_operator_follow_up_lane(
+            recent_task_snapshot=recent_task_snapshot,
+            active_lane=active_lane,
+            task_profile=task_profile,
+            skill_refs=inferred_skill_refs,
+        )
+        if operator_lane and operator_lane != DIRECTOR_LANE:
+            return _build_background_dispatch_decision(
+                lane=operator_lane,
+                task_profile=task_profile,
+                skill_refs=inferred_skill_refs,
+                reason=f"deterministic:operator_follow_up:{operator_lane}",
             )
 
     owner_lane = _resolve_skill_owner_lane(
@@ -1816,6 +2077,28 @@ def _build_recent_task_snapshot_fact(snapshot: Mapping[str, Any]) -> str | None:
     artifact_paths = _recent_snapshot_artifacts(snapshot)
     if artifact_paths:
         lines.append("- Recent artifacts: " + "; ".join(artifact_paths[:5]))
+    operator_capsule = _recent_snapshot_operator_capsule(snapshot)
+    if operator_capsule:
+        skill_entrypoint = str(operator_capsule.get("skill_entrypoint") or "").strip()
+        if skill_entrypoint:
+            lines.append(f"- Preferred entrypoint: {skill_entrypoint}")
+        naming_template = str(operator_capsule.get("naming_template") or "").strip()
+        if naming_template:
+            lines.append(f"- Naming template: {naming_template}")
+        allowed_roots = [
+            str(item).strip()
+            for item in operator_capsule.get("allowed_roots") or []
+            if str(item).strip()
+        ]
+        if allowed_roots:
+            lines.append("- Allowed roots: " + "; ".join(allowed_roots[:4]))
+        next_actions = [
+            str(item).strip()
+            for item in operator_capsule.get("next_actions") or []
+            if str(item).strip()
+        ]
+        if next_actions:
+            lines.append("- Preferred next actions: " + "; ".join(next_actions[:4]))
     lines.append(
         "- If the user asks to continue or resume the previous task, continue from this snapshot instead of claiming the prior task is unavailable."
     )
@@ -2135,6 +2418,11 @@ def build_gateway_task(
     )
     memory_facts: list[str] = []
     artifact_inputs = _recent_snapshot_artifacts(recent_task_snapshot)
+    operator_follow_up = looks_like_gateway_recent_operator_follow_up_request(
+        message=message,
+        channel_prompt=channel_prompt,
+        recent_task_snapshot=recent_task_snapshot,
+    )
     normalized_execution_mode, normalized_execution_session = normalize_api_execution_continuity(
         execution_mode=execution_mode,
         execution_session=execution_session,
@@ -2158,6 +2446,7 @@ def build_gateway_task(
     elif recent_task_snapshot and (
         _looks_like_continue_task_request(message)
         or task_profile == _ARTIFACT_DELIVERY_TASK_PROFILE
+        or operator_follow_up
     ):
         snapshot_fact = _build_recent_task_snapshot_fact(recent_task_snapshot)
         if snapshot_fact:
@@ -2191,7 +2480,18 @@ def build_gateway_task(
         "chat_name": getattr(source, "chat_name", None),
         "chat_type": getattr(source, "chat_type", None),
         "thread_id": getattr(source, "thread_id", None),
+        "skill_refs": list(inferred_skill_refs),
     }
+    operator_capsule = _resolve_task_operator_capsule(
+        task_profile=task_profile,
+        skill_refs=inferred_skill_refs,
+        workspace=resolved_workspace,
+        recent_task_snapshot=recent_task_snapshot,
+        artifact_paths=artifact_inputs,
+        next_actions=_recent_snapshot_follow_up_tasks(recent_task_snapshot),
+    )
+    if operator_capsule:
+        metadata["operator_capsule"] = operator_capsule
     metadata["workflow_contract"]["dispatch"] = _build_workflow_dispatch_contract(
         decision=decision,
         worker_lane=worker_lane,
@@ -2262,6 +2562,17 @@ def build_gateway_task(
         acceptance_criteria.append(
             "Final reply must identify which artifact paths were delivered and include links or the precise blocker."
         )
+    if operator_follow_up and operator_capsule:
+        constraints.append(
+            "Use the recent task capsule entrypoints and artifact paths directly before exploring unrelated files or directories."
+        )
+        constraints.append(
+            "Keep any verification, rename, regenerate, or upload work scoped to the allowed roots captured in the recent task capsule unless a concrete blocker requires more."
+        )
+        if str(operator_capsule.get("naming_template") or "").strip():
+            acceptance_criteria.append(
+                "Follow the recent task capsule naming template when renaming or regenerating report artifacts."
+            )
     if task_profile == _CONFIG_ADMIN_TASK_PROFILE:
         memory_facts.append(_build_config_admin_workflow_brief())
         constraints.append(
@@ -2367,6 +2678,11 @@ def build_coordinator_task(
     )
 
     memory_facts: list[str] = []
+    operator_follow_up = looks_like_gateway_recent_operator_follow_up_request(
+        message=message,
+        channel_prompt=channel_prompt,
+        recent_task_snapshot=recent_task_snapshot,
+    )
     if context_prompt:
         memory_facts.append(f"Session context:\n{context_prompt}")
     if channel_prompt:
@@ -2385,6 +2701,7 @@ def build_coordinator_task(
     elif recent_task_snapshot and (
         _looks_like_continue_task_request(message)
         or task_profile == _ARTIFACT_DELIVERY_TASK_PROFILE
+        or operator_follow_up
     ):
         snapshot_fact = _build_recent_task_snapshot_fact(recent_task_snapshot)
         if snapshot_fact:
@@ -2432,7 +2749,18 @@ def build_coordinator_task(
         "chat_name": getattr(source, "chat_name", None),
         "chat_type": getattr(source, "chat_type", None),
         "thread_id": getattr(source, "thread_id", None),
+        "skill_refs": list(inferred_skill_refs),
     }
+    operator_capsule = _resolve_task_operator_capsule(
+        task_profile=task_profile,
+        skill_refs=inferred_skill_refs,
+        workspace=resolved_workspace,
+        recent_task_snapshot=recent_task_snapshot,
+        artifact_paths=_recent_snapshot_artifacts(recent_task_snapshot),
+        next_actions=_recent_snapshot_follow_up_tasks(recent_task_snapshot),
+    )
+    if operator_capsule:
+        metadata["operator_capsule"] = operator_capsule
     metadata["workflow_contract"]["dispatch"] = _build_workflow_dispatch_contract(
         decision=decision,
         worker_lane=worker_lane,
@@ -2837,6 +3165,10 @@ def build_tui_task(
         execution_session=execution_session,
     )
 
+    operator_follow_up = looks_like_gateway_recent_operator_follow_up_request(
+        message=user_message,
+        recent_task_snapshot=recent_task_snapshot,
+    )
     history_fact = _build_conversation_history_fact(conversation_history)
     if history_fact and replay_history_in_memory_facts:
         memory_facts.append(history_fact)
@@ -2848,7 +3180,9 @@ def build_tui_task(
         capsule_fact = _build_active_lane_handoff_capsule_fact(recent_task_snapshot)
         if capsule_fact:
             memory_facts.append(capsule_fact)
-    elif recent_task_snapshot and _looks_like_continue_task_request(user_message):
+    elif recent_task_snapshot and (
+        _looks_like_continue_task_request(user_message) or operator_follow_up
+    ):
         snapshot_fact = _build_recent_task_snapshot_fact(recent_task_snapshot)
         if snapshot_fact:
             memory_facts.append(snapshot_fact)
@@ -2872,7 +3206,18 @@ def build_tui_task(
             worker_lane=worker_lane,
             worker_skill_refs=worker_skill_refs,
         ),
+        "skill_refs": list(inferred_skill_refs),
     }
+    operator_capsule = _resolve_task_operator_capsule(
+        task_profile=task_profile,
+        skill_refs=inferred_skill_refs,
+        workspace=resolved_workspace,
+        recent_task_snapshot=recent_task_snapshot,
+        artifact_paths=_recent_snapshot_artifacts(recent_task_snapshot),
+        next_actions=_recent_snapshot_follow_up_tasks(recent_task_snapshot),
+    )
+    if operator_capsule:
+        metadata["operator_capsule"] = operator_capsule
     metadata["workflow_contract"]["dispatch"] = _build_workflow_dispatch_contract(
         decision=decision,
         worker_lane=worker_lane,
@@ -3049,6 +3394,11 @@ def run_gateway_task(
         task_profile = task.metadata.get("task_profile")
         if isinstance(task_profile, str) and task_profile.strip():
             result.metadata.setdefault("task_profile", task_profile.strip())
+        if task.skill_refs:
+            result.metadata.setdefault("skill_refs", list(task.skill_refs))
+        operator_capsule = task.metadata.get("operator_capsule")
+        if isinstance(operator_capsule, dict) and operator_capsule:
+            result.metadata.setdefault("operator_capsule", dict(operator_capsule))
         result.metadata.setdefault("task_id", task.task_id)
         result.metadata.setdefault(
             "dispatch_mode",
@@ -3195,6 +3545,11 @@ def run_tui_task(
         task_profile = task.metadata.get("task_profile")
         if isinstance(task_profile, str) and task_profile.strip():
             result.metadata.setdefault("task_profile", task_profile.strip())
+        if task.skill_refs:
+            result.metadata.setdefault("skill_refs", list(task.skill_refs))
+        operator_capsule = task.metadata.get("operator_capsule")
+        if isinstance(operator_capsule, dict) and operator_capsule:
+            result.metadata.setdefault("operator_capsule", dict(operator_capsule))
         result.metadata.setdefault("task_id", task.task_id)
         result.metadata.setdefault(
             "dispatch_mode",

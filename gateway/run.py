@@ -656,7 +656,10 @@ def _finalize_gateway_recent_task_snapshot(
     previous_snapshot: Dict[str, Any] | None,
 ) -> None:
     """Update or clear the short-term task snapshot after one gateway turn."""
-    from mente.integrations.bridge import extract_artifact_paths_from_text
+    from mente.integrations.bridge import (
+        _normalize_recent_task_operator_capsule,
+        extract_artifact_paths_from_text,
+    )
 
     if session_store is None:
         return
@@ -698,6 +701,11 @@ def _finalize_gateway_recent_task_snapshot(
         "task_id": result.get("mente_task_id"),
         "lane": result.get("lane"),
         "task_profile": result.get("task_profile"),
+        "skill_refs": [
+            str(item).strip()
+            for item in result.get("skill_refs") or []
+            if str(item).strip()
+        ],
         "artifacts_out": artifact_outputs,
         "memory_candidates": [
             str(item).strip()
@@ -705,6 +713,21 @@ def _finalize_gateway_recent_task_snapshot(
             if str(item).strip()
         ],
     }
+    operator_capsule = _normalize_recent_task_operator_capsule(
+        result.get("operator_capsule")
+        or (
+            previous_snapshot.get("metadata", {}).get("operator_capsule")
+            if isinstance(previous_snapshot, dict)
+            and isinstance(previous_snapshot.get("metadata"), dict)
+            else None
+        ),
+        artifact_paths=artifact_outputs,
+        next_actions=follow_up_tasks,
+        task_profile=str(result.get("task_profile") or "").strip() or None,
+        skill_refs=snapshot_metadata["skill_refs"],
+    )
+    if operator_capsule:
+        snapshot_metadata["operator_capsule"] = operator_capsule
     session_store.bind_recent_task_snapshot(
         session_id,
         lane=str(result.get("lane") or lane or "").strip().lower() or lane,
@@ -1200,6 +1223,8 @@ def _run_mente_gateway_turn(
         "execution_session": result.metadata.get("execution_session"),
         "lane": result.metadata.get("lane"),
         "task_profile": result.metadata.get("task_profile"),
+        "skill_refs": list(result.metadata.get("skill_refs") or []),
+        "operator_capsule": dict(result.metadata.get("operator_capsule") or {}),
         "job_id": result.metadata.get("job_id") or (worker_job_payload or {}).get("job_id"),
         "worker_lane": result.metadata.get("worker_lane") or (worker_job_payload or {}).get("lane"),
         "dispatch_mode": result.metadata.get("dispatch_mode"),

@@ -553,6 +553,62 @@ def test_mente_tui_agent_logs_prompt_cache_and_continuity_diagnostics(monkeypatc
     )
 
 
+def test_mente_tui_agent_recent_snapshot_persists_operator_capsule_metadata():
+    inner = types.SimpleNamespace(
+        model="gpt-5.4",
+        provider="openai",
+        base_url="https://api.example.test/v1",
+        api_key="sk-test",
+        session_id="tui-session-1",
+    )
+    agent = server.MenteTuiAgent(inner, sid="sid-1", session_key="tui-session-1")
+
+    agent._update_recent_task_snapshot(
+        result=ExecutionResult(
+            status="success",
+            summary="已按新模板重命名并重新上传。",
+            artifacts_out=[
+                "/home/jason/clawd/deep-research/维拉帕米_20260515.md",
+                "/home/jason/clawd/deep-research/维拉帕米_20260515.html",
+                "/home/jason/clawd/deep-research/维拉帕米_20260515.docx",
+            ],
+            follow_up_tasks=["核对飞书中的旧文件是否需要删除"],
+            metadata={
+                "lane": "research",
+                "task_profile": "deep_research",
+                "skill_refs": ["research/deep-research-pro"],
+                "operator_capsule": {
+                    "skill_entrypoint": "/skills/research/deep-research-pro/deep_research_pro.py",
+                    "allowed_roots": [
+                        "/home/jason/clawd/deep-research",
+                        "/home/jason/.codex/skills/research/deep-research-pro",
+                    ],
+                    "naming_template": "<product>_<YYYYMMDD>.(md|html|docx)",
+                },
+            },
+        ),
+        message="把命名规则改成 产品_日期 然后重新上传",
+        lane="research",
+    )
+
+    snapshot = agent._recent_task_snapshots["research"]
+    assert snapshot["metadata"]["skill_refs"] == ["research/deep-research-pro"]
+    assert snapshot["metadata"]["operator_capsule"] == {
+        "skill_entrypoint": "/skills/research/deep-research-pro/deep_research_pro.py",
+        "allowed_roots": [
+            "/home/jason/clawd/deep-research",
+            "/home/jason/.codex/skills/research/deep-research-pro",
+        ],
+        "naming_template": "<product>_<YYYYMMDD>.(md|html|docx)",
+        "artifact_paths": [
+            "/home/jason/clawd/deep-research/维拉帕米_20260515.md",
+            "/home/jason/clawd/deep-research/维拉帕米_20260515.html",
+            "/home/jason/clawd/deep-research/维拉帕米_20260515.docx",
+        ],
+        "next_actions": ["核对飞书中的旧文件是否需要删除"],
+    }
+
+
 def test_mente_tui_agent_emits_structured_lane_progress_events(monkeypatch):
     emitted = []
     inner = types.SimpleNamespace(
