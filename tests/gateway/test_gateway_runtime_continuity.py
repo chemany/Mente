@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import gateway.run as gateway_run
+from mente.integrations import bridge as mente_bridge
 from mente.task_core.models import ExecutionMode, ExecutionSession, SessionMode
 
 
@@ -44,7 +45,15 @@ def test_resolve_gateway_runtime_continuity_lane_routes_simple_chat_to_director(
     assert lane == "director"
 
 
-def test_resolve_gateway_runtime_continuity_lane_routes_obvious_coding_turn_to_engineering():
+def test_resolve_gateway_runtime_continuity_lane_routes_obvious_coding_turn_to_engineering(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "resolve_conversation_route",
+        lambda **kwargs: type("Route", (), {"lane": "engineering"})(),
+    )
+
     lane = gateway_run._resolve_gateway_runtime_continuity_lane(
         message="帮我修复 tests/gateway/test_session.py 的失败并跑 pytest",
         channel_prompt=None,
@@ -319,6 +328,43 @@ def test_resolve_gateway_runtime_continuity_plan_prefers_session_summary_over_hi
     assert plan["execution_session"] == ExecutionSession(mode=SessionMode.START)
     assert plan["fallback_history_fact"] is None
     assert plan["replay_history_in_memory_facts"] is False
+
+
+def test_finalize_recent_task_snapshot_keeps_successful_artifact_outputs_for_follow_up():
+    session_store = MagicMock()
+
+    gateway_run._finalize_gateway_recent_task_snapshot(
+        session_store=session_store,
+        session_id="sess-1",
+        message="深度研究藜芦醛市场，形成详细报告",
+        lane="research",
+        result={
+            "failed": False,
+            "lane": "research",
+            "task_profile": "deep_research",
+            "assistant_summary": "已生成 Markdown、HTML、DOCX 三份报告。",
+            "artifacts_out": [
+                "/home/jason/clawd/deep-research/report.md",
+                "/home/jason/clawd/deep-research/report.html",
+                "/home/jason/clawd/deep-research/report.docx",
+            ],
+            "follow_up_tasks": [],
+        },
+        previous_snapshot=None,
+    )
+
+    session_store.clear_recent_task_snapshot.assert_not_called()
+    session_store.bind_recent_task_snapshot.assert_called_once()
+    bind_kwargs = session_store.bind_recent_task_snapshot.call_args.kwargs
+    assert bind_kwargs["lane"] == "research"
+    assert bind_kwargs["status"] == "needs_follow_up"
+    assert bind_kwargs["follow_up_tasks"] == []
+    assert bind_kwargs["metadata"]["task_profile"] == "deep_research"
+    assert bind_kwargs["metadata"]["artifacts_out"] == [
+        "/home/jason/clawd/deep-research/report.md",
+        "/home/jason/clawd/deep-research/report.html",
+        "/home/jason/clawd/deep-research/report.docx",
+    ]
 
 
 def test_resolve_gateway_runtime_continuity_plan_ignores_active_other_runtime():

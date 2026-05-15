@@ -391,6 +391,32 @@ def _background_worker_explicit_summary(job: Mapping[str, Any]) -> str:
     return summary
 
 
+def _sanitize_completed_worker_summary(summary: str) -> str:
+    text = str(summary or "").strip()
+    if not text:
+        return ""
+
+    continuation_markers = (
+        "我继续",
+        "继续做",
+        "继续补充",
+        "继续扩写",
+        "继续完善",
+        "下一步继续",
+        "后续继续",
+        "将继续",
+    )
+    for marker in continuation_markers:
+        marker_index = text.find(marker)
+        if marker_index < 0:
+            continue
+        completed_part = text[:marker_index].rstrip("，,；;。!！?？ ")
+        if completed_part:
+            return f"{completed_part}。当前没有继续执行中的后台动作。"
+        return "当前没有继续执行中的后台动作。"
+    return text
+
+
 def _render_background_worker_coordinator_reply(
     job: Mapping[str, Any],
     *,
@@ -431,7 +457,9 @@ def _render_background_worker_coordinator_reply(
             f"建议下一步：{next_action}"
         )
     if normalized_status == "completed":
-        completed_summary = _background_worker_explicit_summary(job) or summary or "任务已完成。"
+        completed_summary = _sanitize_completed_worker_summary(
+            _background_worker_explicit_summary(job) or summary or "任务已完成。"
+        )
         artifact_names = _background_worker_artifact_names(job)
         prefix = f"{lane} worker"
         if job_id:
@@ -635,7 +663,12 @@ def _finalize_gateway_recent_task_snapshot(
         for item in result.get("follow_up_tasks") or []
         if str(item).strip()
     ]
-    if not result.get("failed", False) and not follow_up_tasks:
+    artifact_outputs = [
+        str(item).strip()
+        for item in result.get("artifacts_out") or []
+        if str(item).strip()
+    ]
+    if not result.get("failed", False) and not follow_up_tasks and not artifact_outputs:
         if hasattr(session_store, "clear_recent_task_snapshot"):
             session_store.clear_recent_task_snapshot(session_id, lane=lane)
         return
@@ -660,11 +693,7 @@ def _finalize_gateway_recent_task_snapshot(
         "task_id": result.get("mente_task_id"),
         "lane": result.get("lane"),
         "task_profile": result.get("task_profile"),
-        "artifacts_out": [
-            str(item).strip()
-            for item in result.get("artifacts_out") or []
-            if str(item).strip()
-        ],
+        "artifacts_out": artifact_outputs,
         "memory_candidates": [
             str(item).strip()
             for item in result.get("memory_candidates") or []

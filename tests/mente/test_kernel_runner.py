@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from hermes_constants import get_mente_home
 from kernel.codex.runtime.protocol import KernelExecutionPayload
 from kernel.codex.runtime.result import KernelExecutionResult
 from kernel.codex.runtime.transport import (
@@ -190,7 +191,11 @@ def test_kernel_runner_normalizes_stateless_transport_output(monkeypatch, tmp_pa
     request = captured["request"]
     assert isinstance(request, KernelTransportRequest)
     assert request.workdir == str(runtime_workdir)
-    assert request.add_dirs == [str(tmp_path.resolve())]
+    assert request.add_dirs == [
+        str(tmp_path.resolve()),
+        str(get_mente_home().resolve()),
+        str((get_mente_home() / "deep-research").resolve()),
+    ]
     assert result.status == "success"
     assert result.assistant_summary == "vendored summary"
     assert result.memory_candidates == ["remember this"]
@@ -200,6 +205,61 @@ def test_kernel_runner_normalizes_stateless_transport_output(monkeypatch, tmp_pa
     assert result.follow_up_tasks == []
     assert result.commands_run == ["codex exec --ephemeral"]
     assert result.debug["returncode"] == 0
+
+
+def test_kernel_runner_allows_mente_home_and_configured_deep_research_root(monkeypatch, tmp_path):
+    runtime_workdir = tmp_path / "isolated-workdir"
+    runtime_workdir.mkdir()
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir()
+    configured_output_root = tmp_path / "clawd" / "deep-research"
+    (mente_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "mente:",
+                "  deep_research:",
+                f"    output_root: {configured_output_root}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    captured: dict[str, object] = {}
+
+    class _Transport:
+        def execute(self, request: KernelTransportRequest) -> KernelTransportResponse:
+            captured["request"] = request
+            return KernelTransportResponse(
+                command=["codex", "exec", "--ephemeral"],
+                returncode=0,
+                stdout="",
+                stderr="",
+                raw_output='{"assistant_summary":"ok","memory_candidates":[]}',
+            )
+
+    monkeypatch.setattr(
+        "kernel.codex.runtime.runner.prepare_isolated_workspace",
+        lambda: runtime_workdir,
+        raising=False,
+    )
+
+    runner = KernelRunner(transport=_Transport())
+    runner.run(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+    )
+
+    request = captured["request"]
+    assert request.add_dirs == [
+        str(tmp_path.resolve()),
+        str(mente_home.resolve()),
+        str(configured_output_root.resolve()),
+    ]
 
 
 def test_kernel_runner_uses_runtime_launch_settings_when_configured(monkeypatch, tmp_path):

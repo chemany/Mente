@@ -21,6 +21,7 @@ import yaml
 from agent.auxiliary_client import call_llm
 from mente.execution_events import ExecutionEventCallback
 from mente.context_builder.builder import ContextBuilder
+from mente.deep_research_paths import resolve_deep_research_output_root
 from mente.executors.bridge_mcp import model_visible_mcp_tool_name, publish_wechat_draft
 from mente.executors import CodexKernelAdapter, resolve_tool_exposure_policy
 from mente.executors.base import Executor
@@ -509,7 +510,7 @@ def _build_content_publishing_output_plan(*, workspace: str, session_id: str) ->
 def _build_deep_research_output_plan() -> str:
     """Return the default artifact contract for deep-research workflows."""
 
-    report_root = get_mente_home() / "deep-research"
+    report_root = resolve_deep_research_output_root()
     return "\n".join(
         [
             "Deep research output plan:",
@@ -1182,6 +1183,18 @@ def resolve_dispatch_decision(
     inferred_skill_refs = tuple(
         _infer_gateway_skill_refs(message=message, channel_prompt=channel_prompt)
     )
+    if _looks_like_explicit_skill_request(
+        message=message,
+        channel_prompt=channel_prompt,
+    ):
+        explicit_skill_resolution = _resolve_explicit_skill_request(
+            message=message,
+            channel_prompt=channel_prompt,
+            inferred_skill_refs=inferred_skill_refs,
+        )
+        inferred_skill_refs = _dedupe_skill_refs(
+            [*inferred_skill_refs, *explicit_skill_resolution.requested_skill_refs]
+        )
     task_profile = _resolve_gateway_task_profile(list(inferred_skill_refs))
     if looks_like_gateway_recent_artifact_delivery_request(
         message=message,
@@ -1189,13 +1202,6 @@ def resolve_dispatch_decision(
         recent_task_snapshot=recent_task_snapshot,
     ):
         task_profile = _ARTIFACT_DELIVERY_TASK_PROFILE
-
-    if _looks_like_fast_identity_request(message) or _looks_like_fast_model_identity_request(message):
-        return _build_inline_dispatch_decision(
-            task_profile=None,
-            skill_refs=inferred_skill_refs,
-            reason="fast_identity_or_model",
-        )
 
     status_follow_up_lane = _resolve_status_follow_up_target_lane(
         recent_task_snapshot=recent_task_snapshot,
@@ -1229,60 +1235,6 @@ def resolve_dispatch_decision(
                 reason=f"worker_control:{pending_worker_control.get('action') or 'follow_up'}:{control_lane}",
             )
 
-    explicit_skill_request = _looks_like_explicit_skill_request(
-        message=message,
-        channel_prompt=channel_prompt,
-    )
-    if explicit_skill_request:
-        explicit_skill_resolution = _resolve_explicit_skill_request(
-            message=message,
-            channel_prompt=channel_prompt,
-            inferred_skill_refs=inferred_skill_refs,
-        )
-        if explicit_skill_resolution.unknown_skill_refs:
-            return _build_inline_dispatch_decision(
-                task_profile=task_profile,
-                skill_refs=explicit_skill_resolution.requested_skill_refs,
-                needs_clarification=True,
-                reason="unknown_explicit_skill_request",
-            )
-        if len(explicit_skill_resolution.owner_lanes) > 1:
-            return _build_inline_dispatch_decision(
-                task_profile=task_profile,
-                skill_refs=explicit_skill_resolution.requested_skill_refs,
-                needs_clarification=True,
-                reason="cross_lane_explicit_skill_request",
-            )
-        if len(explicit_skill_resolution.owner_lanes) == 1:
-            owner_lane = explicit_skill_resolution.owner_lanes[0]
-            if owner_lane != DIRECTOR_LANE:
-                return _build_background_dispatch_decision(
-                    lane=owner_lane,
-                    task_profile=task_profile,
-                    skill_refs=explicit_skill_resolution.requested_skill_refs,
-                    reason=f"explicit_skill_owner:{owner_lane}",
-                )
-        return _build_inline_dispatch_decision(
-            task_profile=task_profile,
-            skill_refs=explicit_skill_resolution.requested_skill_refs,
-            needs_clarification=True,
-            reason="ambiguous_skill_request",
-        )
-
-    skill_owner_lane = _resolve_skill_owner_lane(
-        skill_refs=inferred_skill_refs,
-        task_profile=task_profile,
-        recent_task_snapshot=recent_task_snapshot,
-    )
-
-    if task_profile and skill_owner_lane and skill_owner_lane != DIRECTOR_LANE:
-        return _build_background_dispatch_decision(
-            lane=skill_owner_lane,
-            task_profile=task_profile,
-            skill_refs=inferred_skill_refs,
-            reason=f"task_profile:{task_profile}",
-        )
-
     continue_request = _looks_like_continue_task_request(message)
     if continue_request:
         continuation_lane = (
@@ -1297,46 +1249,35 @@ def resolve_dispatch_decision(
                 reason=f"continue_active_job:{continuation_lane}",
             )
 
-    if _looks_like_engineering_request(message=message, channel_prompt=channel_prompt):
-        return _build_background_dispatch_decision(
-            lane=ENGINEERING_LANE,
-            task_profile=None,
-            skill_refs=inferred_skill_refs,
-            reason="engineering_heuristic",
+    try:
+        classified_route = _classify_ambiguous_conversation_lane(
+            message=message,
+            channel_prompt=channel_prompt,
+            workspace=workspace,
         )
+    except Exception:
+        logger.debug("Lane classifier fallback failed", exc_info=True)
+        classified_route = None
 
-    if not continue_request and _looks_like_lane_classifier_candidate(
-        message=message,
-        channel_prompt=channel_prompt,
-    ):
-        try:
-            classified_route = _classify_ambiguous_conversation_lane(
-                message=message,
-                channel_prompt=channel_prompt,
-                workspace=workspace,
-            )
-        except Exception:
-            logger.debug("Lane classifier fallback failed", exc_info=True)
-        else:
-            classified_lane = None if classified_route is None else classified_route.get("lane")
-            if classified_lane == DIRECTOR_LANE:
-                return _build_inline_dispatch_decision(
-                    task_profile=task_profile,
-                    skill_refs=inferred_skill_refs,
-                    reason="llm_classifier:director",
-                )
-            if classified_lane in _KNOWN_LANES:
-                return _build_background_dispatch_decision(
-                    lane=classified_lane,
-                    task_profile=task_profile,
-                    skill_refs=inferred_skill_refs,
-                    reason=f"llm_classifier:{classified_lane}",
-                )
+    classified_lane = None if classified_route is None else classified_route.get("lane")
+    if classified_lane == DIRECTOR_LANE:
+        return _build_inline_dispatch_decision(
+            task_profile=task_profile,
+            skill_refs=inferred_skill_refs,
+            reason="llm_classifier:director",
+        )
+    if classified_lane in _KNOWN_LANES:
+        return _build_background_dispatch_decision(
+            lane=classified_lane,
+            task_profile=task_profile,
+            skill_refs=inferred_skill_refs,
+            reason=f"llm_classifier:{classified_lane}",
+        )
 
     return _build_inline_dispatch_decision(
         task_profile=task_profile,
         skill_refs=inferred_skill_refs,
-        reason="default_director",
+        reason="llm_classifier_fallback:director",
     )
 
 

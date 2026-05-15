@@ -129,6 +129,46 @@ def test_build_gateway_task_normalizes_context_and_history(tmp_path):
     assert "timestamp" not in history_fact
 
 
+def test_build_gateway_task_deep_research_uses_configured_output_root(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir()
+    (mente_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "mente:",
+                "  deep_research:",
+                "    output_root: /home/jason/clawd/deep-research",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="调用 research/deep-research-pro 技能，深度研究藜芦醛市场，输出详细报告",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+    )
+
+    assert any(
+        fact.startswith("Deep research output plan:")
+        and "/home/jason/clawd/deep-research" in fact
+        for fact in task.memory_facts
+    )
+
+
 def test_build_gateway_task_defaults_director_lane_workspace_under_mente_home(monkeypatch, tmp_path):
     mente_home = tmp_path / ".mente"
     fallback_cwd = tmp_path / "fallback-cwd"
@@ -162,6 +202,11 @@ def test_build_gateway_task_defaults_director_lane_workspace_under_mente_home(mo
 def test_build_gateway_task_defaults_engineering_lane_workspace_under_mente_home(
     monkeypatch, tmp_path
 ):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "engineering", "confidence": "high", "reason": "engineering_request"},
+    )
     mente_home = tmp_path / ".mente"
     fallback_cwd = tmp_path / "fallback-cwd"
     mente_home.mkdir()
@@ -191,6 +236,11 @@ def test_build_gateway_task_defaults_engineering_lane_workspace_under_mente_home
 
 
 def test_build_gateway_task_preserves_explicit_workspace_over_lane_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "engineering", "confidence": "high", "reason": "engineering_request"},
+    )
     mente_home = tmp_path / ".mente"
     explicit_workspace = tmp_path / "repo"
     mente_home.mkdir()
@@ -311,13 +361,18 @@ def test_resolve_conversation_route_uses_classifier_for_ambiguous_turn(monkeypat
     assert route.reason == "llm_classifier:research"
 
 
-def test_resolve_conversation_route_skips_classifier_for_obvious_engineering_turn(
+def test_resolve_conversation_route_uses_classifier_for_engineering_turn(
     monkeypatch,
 ):
-    def _fail_if_called(**kwargs):
-        raise AssertionError("classifier should not run for obvious engineering requests")
+    def _classify(**kwargs):
+        assert kwargs["message"] == "帮我修复 tests/gateway/test_session.py 的失败并跑 pytest"
+        return {
+            "lane": "engineering",
+            "confidence": "high",
+            "reason": "engineering_request",
+        }
 
-    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _fail_if_called)
+    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _classify)
 
     route = resolve_conversation_route(
         message="帮我修复 tests/gateway/test_session.py 的失败并跑 pytest",
@@ -326,7 +381,7 @@ def test_resolve_conversation_route_skips_classifier_for_obvious_engineering_tur
     )
 
     assert route.lane == "engineering"
-    assert route.reason == "engineering_heuristic"
+    assert route.reason == "llm_classifier:engineering"
 
 
 def test_resolve_conversation_route_classifier_failure_falls_back_to_director(monkeypatch):
@@ -342,14 +397,19 @@ def test_resolve_conversation_route_classifier_failure_falls_back_to_director(mo
     )
 
     assert route.lane == "director"
-    assert route.reason == "default_director"
+    assert route.reason == "llm_classifier_fallback:director"
 
 
-def test_resolve_conversation_route_skips_classifier_for_fast_identity_turn(monkeypatch):
-    def _fail_if_called(**kwargs):
-        raise AssertionError("classifier should not run for fast identity turns")
+def test_resolve_conversation_route_uses_classifier_for_fast_identity_turn(monkeypatch):
+    def _classify(**kwargs):
+        assert kwargs["message"] == "你好，你是谁？"
+        return {
+            "lane": "director",
+            "confidence": "high",
+            "reason": "identity_request",
+        }
 
-    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _fail_if_called)
+    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _classify)
 
     route = resolve_conversation_route(
         message="你好，你是谁？",
@@ -358,16 +418,21 @@ def test_resolve_conversation_route_skips_classifier_for_fast_identity_turn(monk
     )
 
     assert route.lane == "director"
-    assert route.reason == "fast_identity_or_model"
+    assert route.reason == "llm_classifier:director"
 
 
-def test_resolve_conversation_route_skips_classifier_for_generic_director_chat(
+def test_resolve_conversation_route_uses_classifier_for_generic_director_chat(
     monkeypatch,
 ):
-    def _fail_if_called(**kwargs):
-        raise AssertionError("classifier should not run for generic director chat")
+    def _classify(**kwargs):
+        assert kwargs["message"] == "first question"
+        return {
+            "lane": "director",
+            "confidence": "medium",
+            "reason": "generic_chat",
+        }
 
-    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _fail_if_called)
+    monkeypatch.setattr(mente_bridge, "_classify_ambiguous_conversation_lane", _classify)
 
     route = resolve_conversation_route(
         message="first question",
@@ -376,7 +441,7 @@ def test_resolve_conversation_route_skips_classifier_for_generic_director_chat(
     )
 
     assert route.lane == "director"
-    assert route.reason == "default_director"
+    assert route.reason == "llm_classifier:director"
 
 
 def test_build_gateway_task_routes_generic_continue_turn_to_coordinator_with_worker_target(
@@ -526,7 +591,16 @@ def test_build_gateway_task_injects_lane_handoff_capsule_for_status_follow_up(tm
     )
 
 
-def test_build_gateway_task_marks_ambiguous_skill_request_as_clarification_turn(tmp_path):
+def test_build_gateway_task_routes_ambiguous_skill_request_via_classifier(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "director", "confidence": "medium", "reason": "generic_skill_request"},
+    )
+
     source = SessionSource(
         platform=Platform.LOCAL,
         chat_id="cli",
@@ -557,21 +631,17 @@ def test_build_gateway_task_marks_ambiguous_skill_request_as_clarification_turn(
         "worker_lane": None,
         "skill_refs": [],
         "worker_skill_refs": [],
-        "needs_clarification": True,
-        "reason": "ambiguous_skill_request",
+        "needs_clarification": False,
+        "reason": "llm_classifier:director",
     }
     assert task.metadata["workflow_contract"]["dispatch"] == {
         "role": "coordinator",
         "mode": "inline",
         "target_job_lane": None,
         "worker_lane": None,
-        "needs_clarification": True,
+        "needs_clarification": False,
     }
-    assert "clarify" in task.objective.lower()
-    assert any(
-        "clarification" in criterion.lower()
-        for criterion in task.acceptance_criteria
-    )
+    assert "answer the latest user message" in task.objective.lower()
 
 
 def test_build_tui_task_preserves_continue_dispatch_metadata(tmp_path):
@@ -606,7 +676,16 @@ def test_build_tui_task_preserves_continue_dispatch_metadata(tmp_path):
     }
 
 
-def test_build_tui_task_marks_ambiguous_skill_request_as_clarification_turn(tmp_path):
+def test_build_tui_task_routes_ambiguous_skill_request_via_classifier(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "director", "confidence": "medium", "reason": "generic_skill_request"},
+    )
+
     task = build_tui_task(
         user_message="调用技能帮我处理一下这个任务",
         conversation_history=[],
@@ -626,24 +705,28 @@ def test_build_tui_task_marks_ambiguous_skill_request_as_clarification_turn(tmp_
         "worker_lane": None,
         "skill_refs": [],
         "worker_skill_refs": [],
-        "needs_clarification": True,
-        "reason": "ambiguous_skill_request",
+        "needs_clarification": False,
+        "reason": "llm_classifier:director",
     }
     assert task.metadata["workflow_contract"]["dispatch"] == {
         "role": "coordinator",
         "mode": "inline",
         "target_job_lane": None,
         "worker_lane": None,
-        "needs_clarification": True,
+        "needs_clarification": False,
     }
-    assert "clarify" in task.objective.lower()
-    assert any(
-        "clarification" in criterion.lower()
-        for criterion in task.acceptance_criteria
+    assert "answer the latest user message" in task.objective.lower()
+
+
+def test_build_gateway_task_recent_snapshot_includes_artifact_paths_for_follow_up_delivery(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "research", "confidence": "high", "reason": "artifact_delivery_follow_up"},
     )
-
-
-def test_build_gateway_task_recent_snapshot_includes_artifact_paths_for_follow_up_delivery(tmp_path):
     source = SessionSource(
         platform=Platform.FEISHU,
         chat_id="oc_test",
@@ -738,6 +821,11 @@ def test_build_gateway_task_skips_recent_task_snapshot_for_new_unrelated_request
 def test_build_gateway_task_infers_wechat_content_skills_and_prefers_repo_workspace(
     monkeypatch, tmp_path
 ):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "writing", "confidence": "high", "reason": "content_publishing"},
+    )
     project_root = tmp_path / "Mente"
     fake_home = tmp_path / "home"
     project_root.mkdir()
@@ -847,6 +935,11 @@ def test_build_gateway_task_does_not_misclassify_xhs_publish_requests_as_wechat_
 def test_build_gateway_task_infers_config_admin_skill_for_direct_mente_config_updates(
     monkeypatch, tmp_path
 ):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "config_admin", "confidence": "high", "reason": "config_update"},
+    )
     project_root = tmp_path / "Mente"
     project_root.mkdir()
     (project_root / ".git").mkdir()
@@ -894,6 +987,11 @@ def test_build_gateway_task_infers_config_admin_skill_for_direct_mente_config_up
 def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
     monkeypatch, tmp_path
 ):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "research", "confidence": "high", "reason": "deep_research"},
+    )
     mente_home = tmp_path / "mente-home"
     mente_home.mkdir()
     monkeypatch.setenv("MENTE_HOME", str(mente_home))
@@ -929,7 +1027,15 @@ def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
     assert "delegate_task" in entrypoint_fact
 
 
-def test_build_gateway_task_routes_obvious_coding_request_to_engineering_lane(tmp_path):
+def test_build_gateway_task_routes_obvious_coding_request_to_engineering_lane(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "engineering", "confidence": "high", "reason": "engineering_request"},
+    )
     source = SessionSource(
         platform=Platform.LOCAL,
         chat_id="cli",
@@ -1796,13 +1902,6 @@ def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_pat
     monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
     monkeypatch.setenv("MENTE_LLM_MEMORY_REVIEW_ENABLED", "0")
 
-    class _FakeUuid:
-        def __init__(self, value):
-            self.hex = value
-
-    uuids = iter((_FakeUuid("gatewayfirst"), _FakeUuid("gatewaysecond")))
-    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: next(uuids))
-
     def _fake_execute(self, request):
         if request.task_id.endswith("gatewayfirst"):
             return ExecutionResult(
@@ -1831,6 +1930,7 @@ def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_pat
         session_key="agent:main:local:dm",
         channel_prompt="be concise",
         workspace=str(tmp_path),
+        request_id="gatewayfirst",
     )
     second_result = run_gateway_task(
         message="second question",
@@ -1841,6 +1941,7 @@ def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_pat
         session_key="agent:main:local:dm",
         channel_prompt="be concise",
         workspace=str(tmp_path),
+        request_id="gatewaysecond",
     )
 
     repository = SQLiteTaskRepository(db_path=task_db_path)
@@ -1878,13 +1979,6 @@ def test_gateway_adopted_second_run_surfaces_session_summary_in_memory_context_a
     monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_SOURCES", "gateway")
     monkeypatch.setenv("MENTE_SESSION_SYNTHESIS_TURN_INTERVAL", "1")
 
-    class _FakeUuid:
-        def __init__(self, value):
-            self.hex = value
-
-    uuids = iter((_FakeUuid("gatewaysummaryseed"), _FakeUuid("gatewaysummaryfollowup")))
-    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: next(uuids))
-
     def _fake_execute(self, request):
         if request.task_id.endswith("gatewaysummaryseed"):
             return ExecutionResult(
@@ -1915,6 +2009,7 @@ def test_gateway_adopted_second_run_surfaces_session_summary_in_memory_context_a
         session_key="agent:main:local:dm",
         channel_prompt="be concise",
         workspace=str(tmp_path),
+        request_id="gatewaysummaryseed",
     )
     second_result = run_gateway_task(
         message="Use my prior preference.",
@@ -1925,6 +2020,7 @@ def test_gateway_adopted_second_run_surfaces_session_summary_in_memory_context_a
         session_key="agent:main:local:dm",
         channel_prompt="be concise",
         workspace=str(tmp_path),
+        request_id="gatewaysummaryfollowup",
     )
 
     summary_id = "session_summary:gateway:session-1:gateway_conversation"
@@ -2695,12 +2791,6 @@ def test_run_gateway_task_direct_write_normalizes_whitespace_and_fullwidth_punct
     monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
     monkeypatch.setenv("MENTE_REMEMBER_INTENT_DIRECT_WRITE_ENABLED", "1")
 
-    class _FakeUuid:
-        def __init__(self, value):
-            self.hex = value
-
-    uuids = iter((_FakeUuid("gatewayremembernorm1"), _FakeUuid("gatewayremembernorm2")))
-    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: next(uuids))
     monkeypatch.setattr(
         "mente.integrations.bridge.CodexExecutor.execute",
         lambda self, request: ExecutionResult(status="success", summary="记下了。"),
@@ -2722,6 +2812,7 @@ def test_run_gateway_task_direct_write_normalizes_whitespace_and_fullwidth_punct
         session_id="session-1",
         session_key="agent:main:local:dm",
         workspace=str(tmp_path),
+        request_id="gatewayremembernorm1",
     )
     run_gateway_task(
         message="加入记忆:  我更喜欢中文回答  ",
@@ -2731,6 +2822,7 @@ def test_run_gateway_task_direct_write_normalizes_whitespace_and_fullwidth_punct
         session_id="session-1",
         session_key="agent:main:local:dm",
         workspace=str(tmp_path),
+        request_id="gatewayremembernorm2",
     )
 
     memories = SQLiteMemoryRepository(db_path=memory_db_path).list_by_session(
@@ -2752,12 +2844,6 @@ def test_run_gateway_task_direct_write_supersedes_prior_active_preference_in_sam
     monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
     monkeypatch.setenv("MENTE_REMEMBER_INTENT_DIRECT_WRITE_ENABLED", "1")
 
-    class _FakeUuid:
-        def __init__(self, value):
-            self.hex = value
-
-    uuids = iter((_FakeUuid("gatewayprefold"), _FakeUuid("gatewayprefnew")))
-    monkeypatch.setattr("mente.integrations.bridge.uuid.uuid4", lambda: next(uuids))
     monkeypatch.setattr(
         "mente.integrations.bridge.CodexExecutor.execute",
         lambda self, request: ExecutionResult(status="success", summary="记下了。"),
@@ -2779,6 +2865,7 @@ def test_run_gateway_task_direct_write_supersedes_prior_active_preference_in_sam
         session_id="session-1",
         session_key="agent:main:local:dm",
         workspace=str(tmp_path),
+        request_id="gatewayprefold",
     )
     run_gateway_task(
         message="加入记忆：我更喜欢中文回答",
@@ -2788,6 +2875,7 @@ def test_run_gateway_task_direct_write_supersedes_prior_active_preference_in_sam
         session_id="session-1",
         session_key="agent:main:local:dm",
         workspace=str(tmp_path),
+        request_id="gatewayprefnew",
     )
 
     repository = SQLiteMemoryRepository(db_path=memory_db_path)

@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="./README.zh.md">中文</a>
+  <strong>中文</strong> · <a href="./README.en.md">English</a>
 </p>
 
 # Mente Agent ☤
@@ -16,202 +16,203 @@
   <a href="https://github.com/chemany/Mente"><img src="https://img.shields.io/badge/GitHub-chemany%2FMente-111827?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Repository"></a>
 </p>
 
-**Mente is a unified AI agent for coding, automation, gateway workflows, and long-term memory.** It creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
+**Mente 是一个统一的 AI agent，覆盖编码、自动化、网关工作流和长期记忆。** 它会从经验中沉淀技能，在使用过程中持续优化，主动推动自己保留有价值的知识，检索历史对话，并在跨会话中逐步形成对你的长期理解。你可以把它跑在一台每月几美元的 VPS、GPU 集群，或者几乎闲置零成本的 serverless 基础设施上。它不被绑在你的本地电脑里，你甚至可以在 Telegram 上和它对话，同时让它在云端机器上持续工作。
 
-This branch also completes a product-surface consolidation pass:
+这个分支还完成了一轮产品公开面的统一收边：
 
-- **External surface is uniformly Mente** across CLI, gateway progress, messaging, and user-facing replies.
-- **Internal execution still runs on the Codex-backed executor** — the rename is presentation-layer cleanup, not a runtime downgrade.
-- **Gateway progress is visible again** with Mente-facing step names while preserving detailed command/tool activity.
-- **Long-running gateway work now explains itself in natural language** before and during raw Bash / tool activity, so users can see intent, findings, and next steps instead of only command logs.
-- **Short-term task memory now survives gateway restarts** — if a task was in-flight, users can say "continue task" and Mente resumes from a recent active-task snapshot instead of acting like the previous task disappeared.
-- **Config/admin operations are now explicit** through a dedicated Mente skill for API keys, provider auth, `.env`, `config.yaml`, and gateway restart rules.
+- **对外统一使用 Mente**，CLI、网关进度、消息平台和用户可见回复都不再混用旧品牌。
+- **内部执行仍然使用 Codex 支撑的执行器**，这次调整是展示层收口，不是能力降级。
+- **网关执行进度重新可见**，对外显示为 Mente 的步骤名称，同时保留底层命令和工具活动明细。
+- **长任务现在会补充自然语言解释**，在原始 Bash / 工具活动之外，用户还能看到意图、当前发现和下一步，不再只能看命令日志。
+- **短期任务记忆现在可以跨网关重启保留**，如果任务执行到一半重启，用户说“继续任务”时，Mente 会基于最近活跃任务快照接着做，而不是把上一条任务当成丢失。
+- **配置和管理类操作已经明确化**，通过专门的 Mente skill 处理 API key、provider 鉴权、`.env`、`config.yaml` 与网关重启边界。
 
 <p align="center">
   <img src="assets/mente-stack.svg" alt="Mente product surface with Codex-backed core and npm bootstrap installer" width="100%">
 </p>
 
-Use any model you want — [Nous Portal](https://portal.nousresearch.com), [OpenRouter](https://openrouter.ai) (200+ models), [NVIDIA NIM](https://build.nvidia.com) (Nemotron), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, or your own endpoint. Switch with `mente model` — no code changes, no lock-in.
+你可以接任意模型和任意推理服务：[Nous Portal](https://portal.nousresearch.com)、[OpenRouter](https://openrouter.ai)（200+ 模型）、[NVIDIA NIM](https://build.nvidia.com)（Nemotron）、[Xiaomi MiMo](https://platform.xiaomimimo.com)、[z.ai/GLM](https://z.ai)、[Kimi/Moonshot](https://platform.moonshot.ai)、[MiniMax](https://www.minimax.io)、[Hugging Face](https://huggingface.co)、OpenAI，或者你自己的兼容端点。通过 `mente model` 就能切换，不需要改代码，也不会被供应商锁定。
 
 <table>
-<tr><td><b>A real terminal interface</b></td><td>Full TUI with multiline editing, slash-command autocomplete, conversation history, interrupt-and-redirect, and streaming tool output.</td></tr>
-<tr><td><b>Lives where you do</b></td><td>Telegram, Discord, Slack, WhatsApp, Signal, and CLI — all from a single gateway process. Voice memo transcription, cross-platform conversation continuity, and restart-safe recovery for in-flight gateway tasks.</td></tr>
-<tr><td><b>A closed learning loop</b></td><td>Agent-curated memory with periodic nudges. Short-term active-task snapshots for "continue task" recovery after restarts. Autonomous skill creation after complex tasks. Skills self-improve during use. FTS5 session search with LLM summarization for cross-session recall. <a href="https://github.com/plastic-labs/honcho">Honcho</a> dialectic user modeling. Compatible with the <a href="https://agentskills.io">agentskills.io</a> open standard.</td></tr>
-<tr><td><b>Scheduled automations</b></td><td>Built-in cron scheduler with delivery to any platform. Daily reports, nightly backups, weekly audits — all in natural language, running unattended.</td></tr>
-<tr><td><b>Delegates and parallelizes</b></td><td>Spawn isolated subagents for parallel workstreams. Write Python scripts that call tools via RPC, collapsing multi-step pipelines into zero-context-cost turns.</td></tr>
-<tr><td><b>Runs anywhere, not just your laptop</b></td><td>Six terminal backends — local, Docker, SSH, Daytona, Singularity, and Modal. Daytona and Modal offer serverless persistence — your agent's environment hibernates when idle and wakes on demand, costing nearly nothing between sessions. Run it on a $5 VPS or a GPU cluster.</td></tr>
-<tr><td><b>Research-ready</b></td><td>Batch trajectory generation, Atropos RL environments, trajectory compression for training the next generation of tool-calling models.</td></tr>
+<tr><td><b>真正可用的终端界面</b></td><td>完整 TUI，支持多行输入、斜杠命令补全、会话历史、打断并改向，以及实时工具输出流。</td></tr>
+<tr><td><b>跟着你工作的入口</b></td><td>Telegram、Discord、Slack、WhatsApp、Signal 和 CLI 共用同一个网关进程。支持语音转写、跨平台连续对话，也支持网关重启后的在途任务恢复。</td></tr>
+<tr><td><b>闭环学习能力</b></td><td>带周期性提醒的 agent 记忆系统；重启后可用于“继续任务”的短期活跃任务快照；复杂任务后自动产出技能；技能在使用中持续改进；基于 FTS5 的会话检索与 LLM 摘要；集成 <a href="https://github.com/plastic-labs/honcho">Honcho</a> 用户建模；兼容 <a href="https://agentskills.io">agentskills.io</a> 开放标准。</td></tr>
+<tr><td><b>定时自动化</b></td><td>内置 cron 调度，可把结果投递到任意平台。日报、夜间备份、每周审计都能用自然语言配置后无人值守执行。</td></tr>
+<tr><td><b>委派与并行</b></td><td>可以生成隔离子代理并行工作，也可以写 Python 脚本通过 RPC 调工具，把多步流程压缩成零上下文成本的单回合执行。</td></tr>
+<tr><td><b>不只跑在你的笔记本上</b></td><td>内置六种终端后端：local、Docker、SSH、Daytona、Singularity、Modal。Daytona 和 Modal 支持类 serverless 持久环境，空闲时休眠、需要时唤醒，几乎不花闲置成本。既能跑在 $5 VPS，也能跑在 GPU 集群。</td></tr>
+<tr><td><b>适合研究与训练</b></td><td>支持批量轨迹生成、Atropos RL 环境，以及用于训练下一代工具调用模型的轨迹压缩。</td></tr>
 </table>
 
 ---
 
-## Quick Install
+## 快速安装
 
-### Option 1: direct installer
+### 方案 1：直接使用安装脚本
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash
 ```
 
-Works on Linux, macOS, WSL2, and Android via Termux. The one-click installer is release-pinned by default and can also bootstrap a matching vendored Codex runtime from local/offline assets via `--runtime-artifact-manifest` and `--runtime-wheel`.
+支持 Linux、macOS、WSL2，以及 Android 的 Termux。这个一键安装器默认按 release 版本固定安装，也能通过 `--runtime-artifact-manifest` 和 `--runtime-wheel` 从本地或离线资源引导匹配的 vendored runtime。
 
-### Option 2: npm bootstrapper
+### 方案 2：npm 引导安装
 
 ```bash
 npm install -g mente-agent
 mente
 ```
 
-The npm package is intentionally **thin**. It publishes only the launcher and installer scripts, then bootstraps the full Mente runtime on first run. By default the bootstrapper installs from the repo's `main` branch, and you can force a tagged release with `MENTE_BOOTSTRAP_RELEASE=<tag> mente`. It does **not** publish your local `.env`, `auth.json`, `~/.mente`, `~/.hermes`, sessions, logs, or other machine-local state.
+这个 npm 包刻意保持 **很薄**。它只发布 launcher 和 installer 脚本，第一次运行时再自动引导完整的 Mente runtime。默认会从仓库的 `main` 分支完成 bootstrap，你也可以通过 `MENTE_BOOTSTRAP_RELEASE=<tag> mente` 强制安装某个发布版本。它 **不会** 把你本机的 `.env`、`auth.json`、`~/.mente`、`~/.hermes`、sessions、logs 或其它机器私有状态打进包里。
 
-The public package is live on npm, so `npm install -g mente-agent` is now a supported install path, not a placeholder. The bootstrapper remains intentionally minimal: the package gets you the launcher, and first run pulls the matching full runtime.
+现在这个公开 npm 包已经正式上线，所以 `npm install -g mente-agent` 已经是可用的安装路径，不再只是预留说明。包本身仍然保持极薄：你先装 launcher，第一次运行时再拉取匹配的完整 runtime。
 
-The bootstrapped private Codex runtime now defaults `model_auto_compact_token_limit` to `160000` to keep long-running sessions compacting earlier and more predictably. If you need a different threshold, override it in your Mente config:
+现在，引导出来的私有 Codex runtime 默认会把 `model_auto_compact_token_limit` 设为 `160000`，让长会话更早、更稳定地触发压缩。如果你要手动覆盖这个阈值，可以在 Mente 配置里写：
 
 ```yaml
 codex:
   model_auto_compact_token_limit: 120000
 ```
 
-Release operators can use the short npm runbook here: [docs/releasing/npm.md](docs/releasing/npm.md).
+如果你是发布操作人，最短 npm 发布说明见：[docs/releasing/npm.md](docs/releasing/npm.md)。
 
-> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://chemany.github.io/Mente/docs/getting-started/termux). On Termux, Mente installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
+> **Android / Termux：** 已验证的手动安装路径见 [Termux 指南](https://chemany.github.io/Mente/docs/getting-started/termux)。在 Termux 上，Mente 会安装精简过的 `.[termux]` 依赖集合，因为完整的 `.[all]` 目前会拉到 Android 不兼容的语音依赖。
 >
-> **Windows:** Native Windows is not supported. Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and run the command above.
+> **Windows：** 暂不支持原生 Windows。请先安装 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)，再在 WSL2 里执行上面的命令。
 >
-> **Developers / source checkouts:** use `./setup-hermes.sh` after cloning the repo manually. That path is for editable development, not the frozen end-user release install.
+> **开发者 / 源码用户：** 如果你是手动克隆仓库，请使用 `./setup-hermes.sh`。这是面向可编辑开发环境的路径，不是面向最终用户的冻结发布安装方式。
 
-After installation:
+安装完成后：
 
 ```bash
-source ~/.bashrc    # reload shell (or: source ~/.zshrc)
-mente               # start chatting!
+source ~/.bashrc    # 重新加载 shell（或 source ~/.zshrc）
+mente               # 开始对话
 ```
 
 ---
 
-## Getting Started
+## 快速开始
 
 ```bash
-mente               # Interactive CLI — start a conversation
-mente model         # Choose your LLM provider and model
-mente tools         # Configure which tools are enabled
-mente config set    # Set individual config values
-mente gateway       # Start the messaging gateway (Telegram, Discord, etc.)
-mente setup         # Run the full setup wizard (configures everything at once)
-mente claw migrate  # Migrate from OpenClaw (if coming from OpenClaw)
-mente update        # Update to the latest version
-mente doctor        # Diagnose any issues
+mente               # 启动交互式 CLI
+mente model         # 选择 LLM provider 和模型
+mente tools         # 配置启用哪些工具
+mente config set    # 设置单个配置项
+mente gateway       # 启动消息网关（Telegram、Discord 等）
+mente setup         # 跑完整初始化向导
+mente claw migrate  # 从 OpenClaw 迁移（如有）
+mente update        # 更新到最新版本
+mente doctor        # 检查并诊断问题
 ```
 
-📖 **[Full documentation →](https://chemany.github.io/Mente/docs/)**
+📖 **[完整文档 →](https://chemany.github.io/Mente/docs/)**
 
-## What This Refresh Changes
+## 这一轮刷新带来了什么
 
-This README tracks the current Mente packaging and runtime direction:
+当前 README 反映的是 Mente 最新的打包和 runtime 方向：
 
-- **One current install command for GitHub visitors:** `curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash`
-- **One live npm install command:** `npm install -g mente-agent`
-- **One visible agent identity:** user-facing replies and progress now present as `Mente`
-- **Same execution depth under the hood:** complex coding and tool work still route through the Codex-backed executor
-- **Better gateway continuity:** recent active-task snapshots let users resume interrupted work with "continue task" even after a gateway restart
-- **More readable long-task progress:** natural-language stage summaries now accompany raw command and tool activity
-- **Safer operations surface:** packaging is whitelist-based, and config/admin actions now have explicit handling for API keys, provider auth, and restart boundaries
+- **GitHub 访客当前可用的一条安装命令：** `curl -fsSL https://raw.githubusercontent.com/chemany/Mente/main/scripts/install.sh | bash`
+- **已经可用的一条 npm 安装命令：** `npm install -g mente-agent`
+- **统一的可见 agent 身份：** 对外回复和进度统一呈现为 `Mente`
+- **同样深度的底层执行能力：** 复杂编码和工具执行仍然走 Codex-backed executor
+- **更稳的网关连续性：** 最近活跃任务快照可让用户在网关重启后继续中断中的任务
+- **更易读的长任务过程：** 现在会把自然语言阶段总结和底层命令/工具活动一起呈现
+- **更安全的运维表面：** 打包采用白名单方式，配置/管理操作也有 API key、provider 鉴权和重启边界的明确处理
 
-If you are evaluating Mente from GitHub, the practical model is:
+如果你是从 GitHub 第一次接触 Mente，最实用的理解方式是：
 
-1. Install Mente with the direct installer.
-2. Launch `mente`.
-3. Let the bootstrap flow finish preparing the full runtime.
-4. Use Mente normally from CLI or gateway surfaces.
+1. 先通过直接安装脚本安装 Mente。
+2. 执行 `mente`。
+3. 让 bootstrap 流程完成完整 runtime 的准备。
+4. 再从 CLI 或消息网关里正常使用 Mente。
 
-## CLI vs Messaging Quick Reference
+## CLI 与消息网关速查
 
-Mente has two entry points: start the terminal UI with `mente`, or run the gateway and talk to it from Telegram, Discord, Slack, WhatsApp, Signal, or Email. Once you're in a conversation, many slash commands are shared across both interfaces.
+Mente 有两个主要入口：直接运行 `mente` 打开终端 UI，或者启动网关后从 Telegram、Discord、Slack、WhatsApp、Signal、Email 等入口和它对话。进入会话后，很多斜杠命令在两类入口中是共通的。
 
-| Action | CLI | Messaging platforms |
+| 操作 | CLI | 消息平台 |
 |---------|-----|---------------------|
-| Start chatting | `mente` | Run `mente gateway setup` + `mente gateway start`, then send the bot a message |
-| Start fresh conversation | `/new` or `/reset` | `/new` or `/reset` |
-| Change model | `/model [provider:model]` | `/model [provider:model]` |
-| Set a personality | `/personality [name]` | `/personality [name]` |
-| Retry or undo the last turn | `/retry`, `/undo` | `/retry`, `/undo` |
-| Compress context / check usage | `/compress`, `/usage`, `/insights [--days N]` | `/compress`, `/usage`, `/insights [days]` |
-| Browse skills | `/skills` or `/<skill-name>` | `/<skill-name>` |
-| Interrupt current work | `Ctrl+C` or send a new message | `/stop` or send a new message |
-| Platform-specific status | `/platforms` | `/status`, `/sethome` |
+| 开始聊天 | `mente` | 运行 `mente gateway setup` + `mente gateway start`，然后给机器人发消息 |
+| 开启全新会话 | `/new` 或 `/reset` | `/new` 或 `/reset` |
+| 切换模型 | `/model [provider:model]` | `/model [provider:model]` |
+| 设置人格 | `/personality [name]` | `/personality [name]` |
+| 重试或撤销上一轮 | `/retry`, `/undo` | `/retry`, `/undo` |
+| 压缩上下文 / 查看用量 | `/compress`, `/usage`, `/insights [--days N]` | `/compress`, `/usage`, `/insights [days]` |
+| 浏览技能 | `/skills` 或 `/<skill-name>` | `/<skill-name>` |
+| 打断当前工作 | `Ctrl+C` 或直接发新消息 | `/stop` 或直接发新消息 |
+| 平台侧状态 | `/platforms` | `/status`, `/sethome` |
 
-For the full command lists, see the [CLI guide](https://chemany.github.io/Mente/docs/user-guide/cli) and the [Messaging Gateway guide](https://chemany.github.io/Mente/docs/user-guide/messaging).
+完整命令列表见 [CLI 指南](https://chemany.github.io/Mente/docs/user-guide/cli) 和 [消息网关指南](https://chemany.github.io/Mente/docs/user-guide/messaging)。
 
 ---
 
-## Documentation
+## 文档导航
 
-All documentation lives at **[chemany.github.io/Mente/docs](https://chemany.github.io/Mente/docs/)**:
+所有文档都在 **[chemany.github.io/Mente/docs](https://chemany.github.io/Mente/docs/)**：
 
-| Section | What's Covered |
+| 板块 | 内容 |
 |---------|---------------|
-| [Quickstart](https://chemany.github.io/Mente/docs/getting-started/quickstart) | Install → setup → first conversation in 2 minutes |
-| [CLI Usage](https://chemany.github.io/Mente/docs/user-guide/cli) | Commands, keybindings, personalities, sessions |
-| [Configuration](https://chemany.github.io/Mente/docs/user-guide/configuration) | Config file, providers, models, all options |
-| [Messaging Gateway](https://chemany.github.io/Mente/docs/user-guide/messaging) | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant |
-| [Security](https://chemany.github.io/Mente/docs/user-guide/security) | Command approval, DM pairing, container isolation |
-| [Tools & Toolsets](https://chemany.github.io/Mente/docs/user-guide/features/tools) | 40+ tools, toolset system, terminal backends |
-| [Skills System](https://chemany.github.io/Mente/docs/user-guide/features/skills) | Procedural memory, Skills Hub, creating skills |
-| [Memory](https://chemany.github.io/Mente/docs/user-guide/features/memory) | Persistent memory, user profiles, best practices |
-| [MCP Integration](https://chemany.github.io/Mente/docs/user-guide/features/mcp) | Connect any MCP server for extended capabilities |
-| [Cron Scheduling](https://chemany.github.io/Mente/docs/user-guide/features/cron) | Scheduled tasks with platform delivery |
-| [Context Files](https://chemany.github.io/Mente/docs/user-guide/features/context-files) | Project context that shapes every conversation |
-| [Architecture](https://chemany.github.io/Mente/docs/developer-guide/architecture) | Project structure, agent loop, key classes |
-| [Contributing](https://chemany.github.io/Mente/docs/developer-guide/contributing) | Development setup, PR process, code style |
-| [CLI Reference](https://chemany.github.io/Mente/docs/reference/cli-commands) | All commands and flags |
-| [Environment Variables](https://chemany.github.io/Mente/docs/reference/environment-variables) | Complete env var reference |
+| [Quickstart](https://chemany.github.io/Mente/docs/getting-started/quickstart) | 2 分钟完成安装、配置和第一次对话 |
+| [CLI Usage](https://chemany.github.io/Mente/docs/user-guide/cli) | 命令、快捷键、人格、会话 |
+| [Configuration](https://chemany.github.io/Mente/docs/user-guide/configuration) | 配置文件、provider、模型与全部选项 |
+| [Messaging Gateway](https://chemany.github.io/Mente/docs/user-guide/messaging) | Telegram、Discord、Slack、WhatsApp、Signal、Home Assistant |
+| [Security](https://chemany.github.io/Mente/docs/user-guide/security) | 命令审批、私聊绑定、容器隔离 |
+| [Tools & Toolsets](https://chemany.github.io/Mente/docs/user-guide/features/tools) | 40+ 工具、toolset 系统、终端后端 |
+| [Skills System](https://chemany.github.io/Mente/docs/user-guide/features/skills) | 程序化记忆、Skills Hub、技能创建 |
+| [Memory](https://chemany.github.io/Mente/docs/user-guide/features/memory) | 持久记忆、用户画像、最佳实践 |
+| [MCP Integration](https://chemany.github.io/Mente/docs/user-guide/features/mcp) | 连接任意 MCP server 扩展能力 |
+| [Cron Scheduling](https://chemany.github.io/Mente/docs/user-guide/features/cron) | 支持跨平台投递的定时任务 |
+| [Context Files](https://chemany.github.io/Mente/docs/user-guide/features/context-files) | 影响每次对话的项目上下文 |
+| [Architecture](https://chemany.github.io/Mente/docs/developer-guide/architecture) | 项目结构、agent loop、关键类 |
+| [Contributing](https://chemany.github.io/Mente/docs/developer-guide/contributing) | 开发环境、PR 流程、代码风格 |
+| [CLI Reference](https://chemany.github.io/Mente/docs/reference/cli-commands) | 全量命令与参数说明 |
+| [Environment Variables](https://chemany.github.io/Mente/docs/reference/environment-variables) | 完整环境变量参考 |
 
 ---
 
-## Migrating from OpenClaw
+## 从 OpenClaw 迁移
 
-If you're coming from OpenClaw, Mente can automatically import your settings, memories, skills, and API keys.
+如果你来自 OpenClaw，Mente 可以自动导入你的配置、记忆、技能和 API key。
 
-**During first-time setup:** The setup wizard (`mente setup`) automatically detects `~/.openclaw` and offers to migrate before configuration begins.
+**第一次 setup 时：** `mente setup` 会自动检测 `~/.openclaw`，并在正式配置前询问是否迁移。
 
-**Anytime after install:**
+**任意时间手动迁移：**
 
 ```bash
-mente claw migrate              # Interactive migration (full preset)
-mente claw migrate --dry-run    # Preview what would be migrated
-mente claw migrate --preset user-data   # Migrate without secrets
-mente claw migrate --overwrite  # Overwrite existing conflicts
+mente claw migrate              # 交互式迁移（完整预设）
+mente claw migrate --dry-run    # 先预览会迁移什么
+mente claw migrate --preset user-data   # 不迁移 secrets
+mente claw migrate --overwrite  # 覆盖已有冲突项
 ```
 
-What gets imported:
-- **SOUL.md** — persona file
-- **Memories** — MEMORY.md and USER.md entries
-- **Skills** — user-created skills → `~/.hermes/skills/openclaw-imports/`
-- **Command allowlist** — approval patterns
-- **Messaging settings** — platform configs, allowed users, working directory
-- **API keys** — allowlisted secrets (Telegram, OpenRouter, OpenAI, Anthropic, ElevenLabs)
-- **TTS assets** — workspace audio files
-- **Workspace instructions** — AGENTS.md (with `--workspace-target`)
+会导入的内容包括：
 
-See `mente claw migrate --help` for all options, or use the `openclaw-migration` skill for an interactive agent-guided migration with dry-run previews.
+- **SOUL.md**：人格文件
+- **Memories**：MEMORY.md 与 USER.md 记录
+- **Skills**：用户自建技能，导入到 `~/.hermes/skills/openclaw-imports/`
+- **命令白名单**：审批模式和允许规则
+- **消息平台配置**：平台设置、允许用户、工作目录
+- **API keys**：允许迁移的 secrets（Telegram、OpenRouter、OpenAI、Anthropic、ElevenLabs）
+- **TTS 资源**：工作区音频文件
+- **工作区指令**：AGENTS.md（支持 `--workspace-target`）
+
+更多参数见 `mente claw migrate --help`，或者直接使用 `openclaw-migration` skill，让 agent 以带 dry-run 预览的方式引导你完成迁移。
 
 ---
 
-## Contributing
+## 贡献
 
-We welcome contributions! See the [Contributing Guide](https://chemany.github.io/Mente/docs/developer-guide/contributing) for development setup, code style, and PR process.
+欢迎贡献。开发环境、代码风格和 PR 流程请看 [Contributing Guide](https://chemany.github.io/Mente/docs/developer-guide/contributing)。
 
-Quick start for contributors — clone and go with `setup-hermes.sh`:
+贡献者的快速开始路径如下，克隆后直接跑 `setup-hermes.sh`：
 
 ```bash
 git clone https://github.com/chemany/Mente.git
 cd Mente
-./setup-hermes.sh     # installs uv, creates venv, installs .[all], symlinks ~/.local/bin/mente
-./mente               # auto-detects the venv, no need to `source` first
+./setup-hermes.sh     # 安装 uv、创建 venv、安装 .[all]、把 ~/.local/bin/mente 软链好
+./mente               # 会自动识别 venv，不需要先 source
 ```
 
-Manual path (equivalent to the above):
+手动安装路径如下，效果等同：
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -221,21 +222,21 @@ uv pip install -e ".[all,dev]"
 scripts/run_tests.sh
 ```
 
-> **RL Training (optional):** The RL/Atropos integration (`environments/`) ships via the `atroposlib` and `tinker` dependencies pulled in by `.[all,dev]` — no submodule setup required.
+> **RL Training（可选）：** `environments/` 下的 RL / Atropos 集成会通过 `.[all,dev]` 自动拉入 `atroposlib` 和 `tinker`，不需要额外处理 submodule。
 
 ---
 
-## Community
+## 社区
 
 - 💬 [Discord](https://discord.gg/NousResearch)
 - 📚 [Skills Hub](https://agentskills.io)
 - 🐛 [Issues](https://github.com/chemany/Mente/issues)
-- 🔌 [HermesClaw](https://github.com/AaronWong1999/hermesclaw) — Community WeChat bridge: Run Mente and OpenClaw on the same WeChat account.
+- 🔌 [HermesClaw](https://github.com/AaronWong1999/hermesclaw) — 社区维护的微信桥接工具，可让 Mente 和 OpenClaw 共用同一个微信账号。
 
 ---
 
-## License
+## 许可证
 
-MIT — see [LICENSE](LICENSE).
+MIT，见 [LICENSE](LICENSE)。
 
-Built for the Mente project.
+为 Mente 项目而构建。

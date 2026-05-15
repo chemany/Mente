@@ -18,6 +18,7 @@ from kernel.codex.runtime.result import KernelExecutionResult
 from kernel.codex.runtime.transport import KernelTransport, KernelTransportRequest, KernelTransportResponse
 from kernel.codex.sandbox.workspace import prepare_isolated_workspace
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
+from mente.deep_research_paths import resolve_private_runtime_write_roots
 from mente.execution_events import ExecutionEventCallback, emit_execution_event
 
 
@@ -283,6 +284,9 @@ class KernelRunner:
                 schema_path = Path(handle.name)
 
             runtime_workdir = prepare_isolated_workspace()
+            runtime_write_roots = [
+                str(path) for path in resolve_private_runtime_write_roots(payload.workspace)
+            ]
             emit_execution_event(
                 self.event_callback,
                 "kernel.workspace_prepared",
@@ -307,7 +311,7 @@ class KernelRunner:
                         workdir=str(runtime_workdir),
                         output_last_message=str(output_path),
                         output_schema=str(schema_path),
-                        add_dirs=[str(Path(payload.workspace).resolve())],
+                        add_dirs=runtime_write_roots,
                     )
                 )
                 emit_execution_event(
@@ -336,7 +340,7 @@ class KernelRunner:
                     workdir=str(runtime_workdir),
                     output_last_message=str(output_path),
                     output_schema=str(schema_path),
-                    add_dirs=[str(Path(payload.workspace).resolve())],
+                    add_dirs=runtime_write_roots,
                     codex_binary_override=self.codex_binary,
                     stdout_line_callback=(
                         lambda raw_line: _emit_codex_exec_jsonl_event(self.event_callback, raw_line)

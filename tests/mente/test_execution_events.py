@@ -78,3 +78,42 @@ def test_render_lane_progress_text_uses_department_voice():
     )
 
     assert text == "市场部正在执行：Bash · rg agent.log"
+
+
+def test_render_lane_progress_text_uses_mente_brand_for_director_lane():
+    text = render_lane_progress_text(
+        "lane.progress",
+        {
+            "lane": "director",
+            "headline": "正在执行",
+            "detail": "Bash · sed README.md",
+        },
+    )
+
+    assert text == "Mente 正在执行：Bash · sed README.md"
+
+
+def test_render_lane_progress_text_falls_back_to_mente_brand_for_unknown_lane():
+    text = render_lane_progress_text(
+        "lane.progress",
+        {
+            "lane": "unknown_lane",
+            "headline": "正在执行",
+            "detail": "Bash · ls output",
+        },
+    )
+
+    assert text == "Mente 正在执行：Bash · ls output"
+
+
+def test_render_lane_progress_text_uses_editorial_label_for_writing_lane():
+    text = render_lane_progress_text(
+        "lane.progress",
+        {
+            "lane": "writing",
+            "headline": "正在执行",
+            "detail": "Bash · sed draft.md",
+        },
+    )
+
+    assert text == "编辑部正在执行：Bash · sed draft.md"

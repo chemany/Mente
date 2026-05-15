@@ -250,3 +250,25 @@ def test_reply_renderer_stays_deterministic_first_when_state_is_sufficient():
 
     assert "final.md" in reply
     assert calls == []
+
+
+def test_completed_job_reply_strips_future_tense_worker_promise():
+    reply = gateway_run._render_background_worker_coordinator_reply(  # type: ignore[attr-defined]
+        {
+            "lane": "research",
+            "job_id": "job-5",
+            "status": "completed",
+            "summary": (
+                "内容已经从空模板扩展到8199字符，但还没到万字级别。"
+                "我继续做更深度的扩写，增加更多细节和子章节。"
+            ),
+            "metadata": {
+                "job_state": "completed",
+            },
+        },
+        reply_kind="completed",
+    )
+
+    assert "8199字符" in reply
+    assert "我继续做更深度的扩写" not in reply
+    assert "当前没有继续执行中的后台动作" in reply

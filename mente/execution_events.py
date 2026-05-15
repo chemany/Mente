@@ -14,10 +14,10 @@ from mente.task_core.models import ExecutionResult
 ExecutionEventCallback = Callable[[str, dict[str, Any]], None]
 
 _LANE_DISPLAY_LABELS = {
-    "director": "司礼监",
+    "director": "Mente ",
     "engineering": "工程部",
     "research": "市场部",
-    "writing": "礼部",
+    "writing": "编辑部",
     "config_admin": "内务府",
 }
 _SUMMARY_ITEM_LIMIT = 5
@@ -206,10 +206,10 @@ def render_lane_progress_text(
     event_type: str,
     payload: dict[str, Any] | None,
 ) -> str | None:
-    """Render one structured lane event into one director-voice progress line."""
+    """Render one structured lane event into one lane-branded progress line."""
     normalized_payload = payload if isinstance(payload, dict) else {}
     lane_name = str(normalized_payload.get("lane") or "").strip().lower() or "director"
-    lane_label = _LANE_DISPLAY_LABELS.get(lane_name, "司礼监")
+    lane_label = _LANE_DISPLAY_LABELS.get(lane_name, "Mente ")
     headline = str(normalized_payload.get("headline") or "").strip()
     detail = str(normalized_payload.get("detail") or "").strip()
     if not headline:
