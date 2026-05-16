@@ -215,6 +215,7 @@ class CodexExecutor(CodexKernelAdapter):
                 codex_home = execution_runtime_config.runtime_home
                 codex_home.mkdir(parents=True, exist_ok=True)
                 self._seed_canonical_memories_into_isolated_home(codex_home)
+                self._seed_canonical_memory_aliases_into_isolated_home(codex_home)
                 self._seed_user_skills_into_isolated_home(codex_home)
                 auth_source = self._seed_auth_into_isolated_home(codex_home, execution_runtime_config)
                 emit_execution_event(
@@ -551,33 +552,65 @@ class CodexExecutor(CodexKernelAdapter):
         canonical_memories.mkdir(parents=True, exist_ok=True)
 
         target_memories = codex_home / "memories"
+        return self._link_runtime_path_to_canonical_dir(
+            codex_home=codex_home,
+            runtime_path=target_memories,
+            canonical_target=canonical_memories,
+            backup_stem="memories.legacy",
+        )
+
+    def _seed_canonical_memory_aliases_into_isolated_home(self, codex_home: Path) -> None:
+        """Expose compatibility aliases for model-written ~/.mente memory paths."""
+        canonical_memories = get_mente_home() / "memories"
+        canonical_memories.mkdir(parents=True, exist_ok=True)
+
+        for relative_path, backup_stem in (
+            (Path(".mente") / "memories", "dot-mente-memories.legacy"),
+            (Path(".mente") / "memory", "dot-mente-memory.legacy"),
+        ):
+            self._link_runtime_path_to_canonical_dir(
+                codex_home=codex_home,
+                runtime_path=codex_home / relative_path,
+                canonical_target=canonical_memories,
+                backup_stem=backup_stem,
+            )
+
+    def _link_runtime_path_to_canonical_dir(
+        self,
+        *,
+        codex_home: Path,
+        runtime_path: Path,
+        canonical_target: Path,
+        backup_stem: str,
+    ) -> str:
+        """Link a runtime path to a canonical directory, preserving legacy contents."""
         try:
-            if target_memories.exists() and target_memories.resolve() == canonical_memories.resolve():
+            if runtime_path.exists() and runtime_path.resolve() == canonical_target.resolve():
                 return "canonical"
-            if target_memories.is_symlink() and target_memories.resolve() == canonical_memories.resolve():
+            if runtime_path.is_symlink() and runtime_path.resolve() == canonical_target.resolve():
                 return "symlink"
         except OSError:
             pass
 
-        if target_memories.exists() or target_memories.is_symlink():
+        if runtime_path.exists() or runtime_path.is_symlink():
             if (
-                target_memories.is_dir()
-                and not target_memories.is_symlink()
-                and not any(target_memories.iterdir())
+                runtime_path.is_dir()
+                and not runtime_path.is_symlink()
+                and not any(runtime_path.iterdir())
             ):
-                shutil.rmtree(target_memories)
+                shutil.rmtree(runtime_path)
             else:
-                backup_path = self._next_runtime_backup_path(codex_home, "memories.legacy")
-                shutil.move(str(target_memories), str(backup_path))
+                backup_path = self._next_runtime_backup_path(codex_home, backup_stem)
+                shutil.move(str(runtime_path), str(backup_path))
 
-        target_memories.parent.mkdir(parents=True, exist_ok=True)
+        runtime_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            target_memories.symlink_to(canonical_memories, target_is_directory=True)
+            runtime_path.symlink_to(canonical_target, target_is_directory=True)
             return "symlink"
         except OSError as exc:
             raise RuntimeError(
                 "failed to expose canonical Mente memories inside private Codex runtime: "
-                f"{target_memories} -> {canonical_memories}"
+                f"{runtime_path} -> {canonical_target}"
             ) from exc
 
     def _next_runtime_backup_path(self, codex_home: Path, stem: str) -> Path:

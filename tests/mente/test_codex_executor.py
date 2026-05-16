@@ -1024,6 +1024,24 @@ def test_render_execution_prompt_keeps_full_prompt_for_engineering_requests():
     assert "Rigorous engineering mode" in prompt
 
 
+def test_render_execution_prompt_directs_memory_writes_to_canonical_mente_home():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="Inspect repository",
+        user_request="Read and update the user's memory files if needed.",
+        workspace=".",
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Memory Access:" in prompt
+    assert "Use MENTE_HOME for any Mente-managed memory files or directories." in prompt
+    assert "Do not hardcode ~/.mente or $HOME/.mente when reading or writing memory files." in prompt
+    assert "The canonical file-backed memory directory is <MENTE_HOME>/memories." in prompt
+
+
 def test_codex_executor_uses_dangerous_bypass_for_full_access():
     executor = CodexExecutor(
         codex_binary="codex",
@@ -1468,6 +1486,51 @@ def test_codex_executor_preserves_existing_private_runtime_memories_before_linki
     assert len(backups) == 1
     assert (backups[0] / "user-preferences.md").read_text(encoding="utf-8") == "legacy private note"
     assert (runtime_home / "memories").resolve() == (mente_home / "memories").resolve()
+
+
+def test_codex_executor_links_private_runtime_dot_mente_memory_aliases_to_canonical_mente_memory(
+    monkeypatch, tmp_path
+):
+    mente_home = tmp_path / ".mente"
+    canonical_memories = mente_home / "memories"
+    runtime_config = RuntimeConfig(runtime_home=tmp_path / "private-codex-home")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            dot_mente_dir = runtime_config.runtime_home / ".mente"
+            alias_memories = dot_mente_dir / "memories"
+            alias_memory = dot_mente_dir / "memory"
+            captured["dot_mente_exists"] = dot_mente_dir.is_dir()
+            captured["alias_memories_is_symlink"] = alias_memories.is_symlink()
+            captured["alias_memories_target"] = alias_memories.resolve()
+            captured["alias_memory_is_symlink"] = alias_memory.is_symlink()
+            captured["alias_memory_target"] = alias_memory.resolve()
+            (alias_memories / "PROFILE.md").write_text("Unified profile memory.", encoding="utf-8")
+            (alias_memory / "TASK.md").write_text("Unified task memory.", encoding="utf-8")
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner(), runtime_config=runtime_config)
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Reply",
+        user_request="Reply to the user",
+        workspace=str(tmp_path),
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert captured["dot_mente_exists"] is True
+    assert captured["alias_memories_is_symlink"] is True
+    assert captured["alias_memories_target"] == canonical_memories.resolve()
+    assert captured["alias_memory_is_symlink"] is True
+    assert captured["alias_memory_target"] == canonical_memories.resolve()
+    assert (canonical_memories / "PROFILE.md").read_text(encoding="utf-8") == "Unified profile memory."
+    assert (canonical_memories / "TASK.md").read_text(encoding="utf-8") == "Unified task memory."
 
 
 def test_codex_executor_execute_seeds_auth_without_copying_shared_state(monkeypatch, tmp_path):

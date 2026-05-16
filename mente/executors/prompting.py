@@ -253,6 +253,9 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
     if _tool_policy_has_bridge_tool(request, "mente_memory_query"):
         lines.append("- Use mente_memory_query only when prior user or project context is needed.")
     lines.append("- Do not invent prior preferences, prior decisions, or missing history.")
+    lines.append("- Use MENTE_HOME for any Mente-managed memory files or directories.")
+    lines.append("- Do not hardcode ~/.mente or $HOME/.mente when reading or writing memory files.")
+    lines.append("- The canonical file-backed memory directory is <MENTE_HOME>/memories.")
     lines.extend(
         [
             "Output:",
