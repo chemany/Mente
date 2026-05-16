@@ -1525,7 +1525,7 @@ def _apply_default_agent_settings(config: dict):
     config["compression"]["threshold"] = 0.50
 
     config.setdefault("session_reset", {}).update({
-        "mode": "both",
+        "mode": "none",
         "idle_minutes": 1440,
         "at_hour": 4,
     })
@@ -1535,7 +1535,7 @@ def _apply_default_agent_settings(config: dict):
     print_info("  Max iterations: 90")
     print_info("  Tool progress: all")
     print_info("  Compression threshold: 0.50")
-    print_info("  Session reset: inactivity (1440 min) + daily (4:00)")
+    print_info("  Session reset: manual only (/reset or /new)")
     print_info("  Run `hermes setup agent` later to customize.")
 
 
@@ -1632,42 +1632,31 @@ def setup_agent_settings(config: dict):
     print_info("")
 
     reset_choices = [
-        "Inactivity + daily reset (recommended - reset whichever comes first)",
+        "Never auto-reset (recommended - use /reset or context compression)",
         "Inactivity only (reset after N minutes of no messages)",
         "Daily only (reset at a fixed hour each day)",
-        "Never auto-reset (context lives until /reset or context compression)",
+        "Inactivity + daily reset (reset whichever comes first)",
         "Keep current settings",
     ]
 
     current_policy = config.get("session_reset", {})
-    current_mode = current_policy.get("mode", "both")
+    current_mode = current_policy.get("mode", "none")
     current_idle = current_policy.get("idle_minutes", 1440)
     current_hour = current_policy.get("at_hour", 4)
 
-    default_reset = {"both": 0, "idle": 1, "daily": 2, "none": 3}.get(current_mode, 0)
+    default_reset = {"none": 0, "idle": 1, "daily": 2, "both": 3}.get(current_mode, 0)
 
     reset_idx = prompt_choice("Session reset mode:", reset_choices, default_reset)
 
     config.setdefault("session_reset", {})
 
-    if reset_idx == 0:  # Both
-        config["session_reset"]["mode"] = "both"
-        idle_str = prompt("  Inactivity timeout (minutes)", str(current_idle))
-        try:
-            idle_val = int(idle_str)
-            if idle_val > 0:
-                config["session_reset"]["idle_minutes"] = idle_val
-        except ValueError:
-            pass
-        hour_str = prompt("  Daily reset hour (0-23, local time)", str(current_hour))
-        try:
-            hour_val = int(hour_str)
-            if 0 <= hour_val <= 23:
-                config["session_reset"]["at_hour"] = hour_val
-        except ValueError:
-            pass
-        print_success(
-            f"Sessions reset after {config['session_reset'].get('idle_minutes', 1440)} min idle or daily at {config['session_reset'].get('at_hour', 4)}:00"
+    if reset_idx == 0:  # None
+        config["session_reset"]["mode"] = "none"
+        print_info(
+            "Sessions will never auto-reset. Context is managed only by compression."
+        )
+        print_warning(
+            "Long conversations will grow in cost. Use /reset manually when needed."
         )
     elif reset_idx == 1:  # Idle only
         config["session_reset"]["mode"] = "idle"
@@ -1693,13 +1682,24 @@ def setup_agent_settings(config: dict):
         print_success(
             f"Sessions reset daily at {config['session_reset'].get('at_hour', 4)}:00"
         )
-    elif reset_idx == 3:  # None
-        config["session_reset"]["mode"] = "none"
-        print_info(
-            "Sessions will never auto-reset. Context is managed only by compression."
-        )
-        print_warning(
-            "Long conversations will grow in cost. Use /reset manually when needed."
+    elif reset_idx == 3:  # Both
+        config["session_reset"]["mode"] = "both"
+        idle_str = prompt("  Inactivity timeout (minutes)", str(current_idle))
+        try:
+            idle_val = int(idle_str)
+            if idle_val > 0:
+                config["session_reset"]["idle_minutes"] = idle_val
+        except ValueError:
+            pass
+        hour_str = prompt("  Daily reset hour (0-23, local time)", str(current_hour))
+        try:
+            hour_val = int(hour_str)
+            if 0 <= hour_val <= 23:
+                config["session_reset"]["at_hour"] = hour_val
+        except ValueError:
+            pass
+        print_success(
+            f"Sessions reset after {config['session_reset'].get('idle_minutes', 1440)} min idle or daily at {config['session_reset'].get('at_hour', 4)}:00"
         )
     # else: keep current (idx == 4)
 

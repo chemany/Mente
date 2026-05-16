@@ -133,7 +133,7 @@ class TestSessionResetPolicy:
 
     def test_defaults(self):
         policy = SessionResetPolicy()
-        assert policy.mode == "both"
+        assert policy.mode == "none"
         assert policy.at_hour == 4
         assert policy.idle_minutes == 1440
 
@@ -141,7 +141,7 @@ class TestSessionResetPolicy:
         restored = SessionResetPolicy.from_dict(
             {"mode": None, "at_hour": None, "idle_minutes": None}
         )
-        assert restored.mode == "both"
+        assert restored.mode == "none"
         assert restored.at_hour == 4
         assert restored.idle_minutes == 1440
 
@@ -197,6 +197,17 @@ class TestGatewayConfigRoundtrip:
 
 
 class TestLoadGatewayConfig:
+    def test_defaults_to_no_auto_reset_without_session_reset_config(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text("", encoding="utf-8")
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        config = load_gateway_config()
+
+        assert config.default_reset_policy.mode == "none"
+
     def test_bridges_mente_runtime_controls_from_config_yaml(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()

@@ -546,7 +546,7 @@ async def render_html_to_image(html_content: str, output_path: str,
                                 width: int = CARD_WIDTH, height: int = CARD_HEIGHT):
     """使用 Playwright 将 HTML 渲染为图片"""
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        browser = await p.chromium.launch(executable_path="/usr/bin/google-chrome")
         page = await browser.new_page(viewport={'width': width, 'height': height})
         
         try:
@@ -573,7 +573,7 @@ async def process_and_render_cards(card_contents: List[str], output_dir: str,
     返回最终生成的所有卡片文件路径
     """
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        browser = await p.chromium.launch(executable_path="/usr/bin/google-chrome")
         page = await browser.new_page(viewport={'width': CARD_WIDTH, 'height': CARD_HEIGHT})
         
         all_cards = []
@@ -658,7 +658,7 @@ async def render_markdown_to_cards(md_file: str, output_dir: str, style_key: str
     
     # 生成正文卡片
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        browser = await p.chromium.launch(executable_path="/usr/bin/google-chrome")
         page = await browser.new_page(viewport={'width': CARD_WIDTH, 'height': CARD_HEIGHT})
         
         try:

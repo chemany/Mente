@@ -242,7 +242,7 @@ class SessionResetPolicy:
     - "both": Whichever triggers first (daily boundary OR idle timeout)
     - "none": Never auto-reset (context managed only by compression)
     """
-    mode: str = "both"  # "daily", "idle", "both", or "none"
+    mode: str = "none"  # "daily", "idle", "both", or "none"
     at_hour: int = 4  # Hour for daily reset (0-23, local time)
     idle_minutes: int = 1440  # Minutes of inactivity before reset (24 hours)
     notify: bool = True  # Send a notification to the user when auto-reset occurs
@@ -266,7 +266,7 @@ class SessionResetPolicy:
         notify = data.get("notify")
         exclude = data.get("notify_exclude_platforms")
         return cls(
-            mode=mode if mode is not None else "both",
+            mode=mode if mode is not None else "none",
             at_hour=at_hour if at_hour is not None else 4,
             idle_minutes=idle_minutes if idle_minutes is not None else 1440,
             notify=_coerce_bool(notify, True),

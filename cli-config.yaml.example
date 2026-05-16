@@ -440,16 +440,16 @@ memory:
 # Users can always manually reset with /reset or /new in chat.
 #
 # Modes:
-#   "both"  - Reset on EITHER inactivity timeout or daily boundary (recommended)
+#   "none"  - Never auto-reset; context lives until /reset or compression kicks in (recommended)
 #   "idle"  - Reset only after N minutes of inactivity
 #   "daily" - Reset only at a fixed hour each day
-#   "none"  - Never auto-reset; context lives until /reset or compression kicks in
+#   "both"  - Reset on EITHER inactivity timeout or daily boundary
 #
 # When a reset triggers, the agent gets one turn to save important memories and
 # skills before the context is wiped. Persistent memory carries across sessions.
 #
 session_reset:
-  mode: both           # "both", "idle", "daily", or "none"
+  mode: none           # "both", "idle", "daily", or "none"
   idle_minutes: 1440   # Inactivity timeout in minutes (default: 1440 = 24 hours)
   at_hour: 4           # Daily reset hour, 0-23 local time (default: 4 AM)
 

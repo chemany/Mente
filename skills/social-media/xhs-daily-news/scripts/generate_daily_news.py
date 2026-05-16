@@ -54,6 +54,19 @@ def get_tavily_api_key():
     return api_key
 
 
+def get_tavily_api_url():
+    """获取 Tavily API URL，支持从环境变量或 .env 文件读取"""
+    url = os.environ.get("TAVILY_API_URL", "").strip()
+    if not url:
+        env_file = get_agent_env_path()
+        if env_file.exists():
+            env_content = env_file.read_text()
+            match = re.search(r'TAVILY_API_URL=(.+)', env_content)
+            if match:
+                url = match.group(1).strip()
+    return url or "https://api.tavily.com/search"
+
+
 def tavily_search(query, max_results=10, topic="news", time_range="day"):
     """使用 Tavily API 搜索新闻"""
     api_key = get_tavily_api_key()
@@ -61,7 +74,7 @@ def tavily_search(query, max_results=10, topic="news", time_range="day"):
         print("❌ 未找到 TAVILY_API_KEY")
         return None
     
-    url = "https://api.tavily.com/search"
+    url = get_tavily_api_url()
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
