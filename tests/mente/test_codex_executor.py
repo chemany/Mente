@@ -1186,6 +1186,100 @@ def test_codex_executor_keeps_memory_injection_mente_owned_in_sessionful_mode(
     assert captured["session"].mode is KernelSessionMode.SESSION
 
 
+def test_codex_executor_keeps_worker_and_session_summaries_in_thin_prompt_for_worker_runs(
+    tmp_path,
+):
+    memory_repo = InMemoryMemoryRepository()
+    memory_repo.save(
+        MemoryRecord(
+            memory_id="mem_worker_summary",
+            session_id="session_1",
+            task_id="task_old_worker_summary",
+            task_type="conversation",
+            source="gateway",
+            scope="session",
+            kind="worker_lane_summary:research",
+            fact="Worker lane summary (research): current shortlist and open diligence gaps.",
+            score=1.0,
+        )
+    )
+    memory_repo.save(
+        MemoryRecord(
+            memory_id="mem_session_summary",
+            session_id="session_1",
+            task_id="task_old_session_summary",
+            task_type="conversation",
+            source="gateway",
+            scope="session",
+            kind="session_summary",
+            fact="Session summary: user wants the answer as a concise sourcing memo.",
+            score=2.0,
+        )
+    )
+    memory_repo.save(
+        MemoryRecord(
+            memory_id="mem_generic_session",
+            session_id="session_1",
+            task_id="task_old_generic_session",
+            task_type="conversation",
+            source="gateway",
+            scope="session",
+            fact="Ordinary session fact that should remain runtime-query only.",
+            score=5.0,
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            captured["payload"] = payload
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner(), memory_repository=memory_repo)
+    request = ExecutionRequest(
+        task_id="task_worker_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Continue delegated research",
+        user_request="Continue delegated research",
+        workspace=str(tmp_path),
+        role="worker",
+        worker_lane="research",
+        memory_facts=["Task brief: update the supplier memo."],
+        tool_policy={
+            "bridge_tools": ["mente_memory_query", "mente_memory_save"],
+        },
+        metadata={
+            "source": "gateway",
+            "workflow_contract": {
+                "workflow_id": "gateway_conversation",
+                "memory_read": {
+                    "mode": "runtime_on_demand_query",
+                    "enabled": True,
+                    "session_summary": {
+                        "enabled": True,
+                        "scope": "session",
+                        "kind": "session_summary",
+                        "priority": "before_generic_memories",
+                        "max_results": 1,
+                        "counts_toward_existing_budgets": True,
+                    },
+                },
+            },
+        },
+    )
+
+    result = executor.execute(request)
+    prompt = captured["payload"].prompt
+
+    assert result.status == "success"
+    assert "Worker lane summary (research): current shortlist and open diligence gaps." in prompt
+    assert "Session summary: user wants the answer as a concise sourcing memo." in prompt
+    assert "Ordinary session fact that should remain runtime-query only." not in prompt
+    assert "Task brief: update the supplier memo." in prompt
+    assert "mente_memory_query" in prompt
+
+
 def test_codex_executor_uses_canonical_mente_skills_without_private_runtime_mirror(
     monkeypatch,
     tmp_path,

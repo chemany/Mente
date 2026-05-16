@@ -7,7 +7,12 @@ from collections.abc import Mapping
 from mente.memory.models import MemoryBuildTrace
 from mente.memory.policy import MemoryPolicyResolver
 from mente.memory.repository import MemoryRepository
-from mente.memory.context import resolve_memory_context, resolve_memory_read_mode, uses_on_demand_memory
+from mente.memory.context import (
+    resolve_memory_context,
+    resolve_memory_read_mode,
+    retain_on_demand_prompt_memories,
+    uses_on_demand_memory,
+)
 from mente.task_core.models import ExecutionRequest, Task
 
 
@@ -43,15 +48,13 @@ class ContextBuilder:
         memory_read_mode = resolve_memory_read_mode(task)
         if uses_on_demand_memory(task):
             task_memory_facts = list(task.memory_facts)
-            selected_prompt_facts = memory_facts[: max(0, len(memory_facts) - len(task_memory_facts))]
-            summary_prompt_facts = [
-                prompt_fact
-                for prompt_fact, item in zip(selected_prompt_facts, trace.selected)
-                if item.reason == "session_summary_priority"
-            ]
-            request_memory_facts = [*summary_prompt_facts, *task_memory_facts]
-            trace.injected_count = len(summary_prompt_facts)
-            trace.prompt_budget_char_count = sum(len(fact) for fact in summary_prompt_facts)
+            request_memory_facts, retained_char_count = retain_on_demand_prompt_memories(
+                memory_facts=memory_facts,
+                trace=trace,
+                task_memory_facts=task_memory_facts,
+            )
+            trace.injected_count = max(0, len(request_memory_facts) - len(task_memory_facts))
+            trace.prompt_budget_char_count = retained_char_count
         metadata = dict(task.metadata)
         metadata["memory_context_prepared"] = True
         metadata["memory_read_mode"] = memory_read_mode

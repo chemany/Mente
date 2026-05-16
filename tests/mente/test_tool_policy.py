@@ -6,12 +6,18 @@ from kernel.codex.bridge.tool_surface import (
 from mente.executors import ToolExposurePolicy, resolve_tool_exposure_policy
 
 
-EXPECTED_GATEWAY_BRIDGE_TOOLS: list[str] = []
+EXPECTED_GATEWAY_BRIDGE_TOOLS = [
+    "mente_memory_query",
+    "mente_memory_save",
+]
 EXPECTED_API_SERVER_BRIDGE_TOOLS = [
     "mente_memory_query",
     "mente_memory_save",
 ]
-EXPECTED_TUI_BRIDGE_TOOLS: list[str] = []
+EXPECTED_TUI_BRIDGE_TOOLS = [
+    "mente_memory_query",
+    "mente_memory_save",
+]
 
 
 def test_tool_exposure_policy_serializes_native_and_bridge_tools_with_sources():
@@ -54,7 +60,7 @@ def test_resolve_tool_exposure_policy_filters_vendored_surface_and_keeps_bridge_
     assert all(tool not in policy.native_tools for tool in policy.bridge_tools)
 
 
-def test_resolve_tool_exposure_policy_keeps_generic_gateway_conversation_off_bridge_mcp_by_default():
+def test_resolve_tool_exposure_policy_exposes_generic_gateway_conversation_runtime_memory_bridge():
     policy = resolve_tool_exposure_policy(source="gateway", task_type="conversation")
 
     assert policy.bridge_tools == EXPECTED_GATEWAY_BRIDGE_TOOLS
@@ -85,7 +91,7 @@ def test_resolve_tool_exposure_policy_exposes_all_vendored_native_tools_for_api_
     assert all(tool not in policy.native_tools for tool in policy.bridge_tools)
 
 
-def test_resolve_tool_exposure_policy_keeps_generic_tui_conversation_off_bridge_mcp_by_default():
+def test_resolve_tool_exposure_policy_exposes_generic_tui_conversation_runtime_memory_bridge():
     policy = resolve_tool_exposure_policy(source="tui", task_type="conversation")
 
     assert policy.native_tools == get_vendored_native_tool_names()

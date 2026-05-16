@@ -17,7 +17,7 @@ _BRIDGE_TOOL_FLAGS = {
 }
 _BRIDGE_TOOL_FLAG_DEFAULTS = {
     "mente_memory_query": True,
-    "mente_memory_save": False,
+    "mente_memory_save": True,
 }
 
 
@@ -126,7 +126,7 @@ def is_memory_write_tool_enabled(
 
     return is_env_flag_enabled(
         "MENTE_MEMORY_WRITE_TOOL_ENABLED",
-        default=False,
+        default=True,
         environment=environment,
     )
 

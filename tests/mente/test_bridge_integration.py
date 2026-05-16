@@ -1969,8 +1969,84 @@ def test_second_run_receives_first_run_memory(monkeypatch, tmp_path):
 
     assert len(seen_requests) == 2
     assert "Memory: User prefers concise replies." not in seen_requests[1].memory_facts
-    assert "mente_memory_query" not in seen_requests[1].tool_policy["bridge_tools"]
-    assert seen_requests[1].tool_policy["bridge_tools"] == []
+    assert seen_requests[1].tool_policy["bridge_tools"] == [
+        "mente_memory_query",
+        "mente_memory_save",
+    ]
+
+
+def test_worker_lane_second_run_receives_persisted_worker_summary_cache(monkeypatch, tmp_path):
+    task_db_path = tmp_path / "tasks.db"
+    memory_db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MENTE_TASK_DB_PATH", str(task_db_path))
+    monkeypatch.setenv("MENTE_MEMORY_DB_PATH", str(memory_db_path))
+
+    seen_requests = []
+
+    def _fake_execute(self, request):
+        seen_requests.append(request)
+        if len(seen_requests) == 1:
+            return ExecutionResult(
+                status="success",
+                summary="Built the current supplier shortlist and captured pricing gaps.",
+                actions_taken=["Compared three suppliers", "Captured pricing gaps"],
+                follow_up_tasks=["Validate the shortlisted suppliers"],
+                changed_files=["reports/suppliers.md"],
+                artifacts_out=["reports/suppliers.md"],
+            )
+        return ExecutionResult(status="success", summary="follow-up worker run")
+
+    monkeypatch.setattr("mente.integrations.bridge.CodexExecutor.execute", _fake_execute)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+    worker_prompt = "深度研究一下采用菜籽油制备十三碳二酸的可行性，并输出完整报告"
+
+    first_result = run_gateway_task(
+        message=worker_prompt,
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+        request_id="workercacheseed",
+    )
+    memory_id = "worker_lane_summary:gateway:session-1:research"
+    seeded_memory = SQLiteMemoryRepository(db_path=memory_db_path).get(memory_id)
+    run_gateway_task(
+        message=worker_prompt,
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+        request_id="workercachefollowup",
+    )
+
+    assert len(seen_requests) == 2
+    assert first_result.metadata["worker_summary_cache"] == {
+        "status": "persisted",
+        "memory_id": memory_id,
+        "kind": "worker_lane_summary:research",
+        "lane": "research",
+    }
+    assert seeded_memory is not None
+    assert seeded_memory.kind == "worker_lane_summary:research"
+    assert seeded_memory.scope == "session"
+    assert "Built the current supplier shortlist and captured pricing gaps." in seeded_memory.fact
+    assert "Compared three suppliers" in seeded_memory.fact
+    assert "Validate the shortlisted suppliers" in seeded_memory.fact
+    assert seen_requests[1].role == TaskRole.WORKER
+    assert seen_requests[1].worker_lane == "research"
+    assert seen_requests[1].memory_facts[0].startswith("Memory: Worker lane summary (research):")
+    assert "Built the current supplier shortlist and captured pricing gaps." in seen_requests[1].memory_facts[0]
 
 
 def test_gateway_runs_persist_memory_observability_metadata(monkeypatch, tmp_path):
