@@ -11,6 +11,15 @@ from mente.memory.policy import MemoryPolicyResolver, truncate_for_policy
 from mente.memory.repository import MemoryRepository
 from mente.task_core.models import ExecutionRequest, Task
 
+WORKER_LANE_SUMMARY_REASON = "worker_lane_summary_priority"
+SESSION_SUMMARY_REASON = "session_summary_priority"
+_ON_DEMAND_PROMPT_REASONS = frozenset(
+    {
+        WORKER_LANE_SUMMARY_REASON,
+        SESSION_SUMMARY_REASON,
+    }
+)
+
 
 def resolve_memory_read_mode(task: Task | ExecutionRequest) -> str:
     """Return how the current task should receive Mente-managed memory."""
@@ -54,7 +63,44 @@ def resolve_memory_context(
     )
     existing = set(task_memory_facts)
     memory_facts: list[str] = []
-    selected_summary_ids: set[str] = set()
+    selected_priority_ids: set[str] = set()
+
+    worker_lane_summary_kind = _resolve_worker_lane_summary_kind(task)
+    if worker_lane_summary_kind is not None:
+        worker_summary_records = memory_repository.list_relevant_by_scope(
+            session_id=task.session_id,
+            task_type=task.task_type,
+            memory_scope="session",
+            limit=1,
+            source=source,
+            kind=worker_lane_summary_kind,
+        )
+        for record in worker_summary_records:
+            seen_retrieved_ids.add(record.memory_id)
+            if record.scope not in policy.allowed_injection_scopes:
+                trace.skipped.append(
+                    MemoryTraceItem(
+                        memory_id=record.memory_id,
+                        scope=record.scope,
+                        kind=record.kind,
+                        fact=record.fact,
+                        reason="scope_filtered",
+                    )
+                )
+                continue
+
+            if _try_inject_record(
+                record,
+                existing=existing,
+                memory_facts=memory_facts,
+                trace=trace,
+                memory_limit=memory_limit,
+                max_injected_memories=policy.max_injected_memories,
+                max_total_injected_chars=policy.max_total_injected_chars,
+                max_chars=policy.max_chars_per_injected_fact,
+                selected_reason=WORKER_LANE_SUMMARY_REASON,
+            ):
+                selected_priority_ids.add(record.memory_id)
 
     if policy.session_summary_retrieval_enabled:
         summary_records = memory_repository.list_relevant_by_scope(
@@ -88,15 +134,15 @@ def resolve_memory_context(
                 max_injected_memories=policy.max_injected_memories,
                 max_total_injected_chars=policy.max_total_injected_chars,
                 max_chars=policy.max_chars_per_session_summary,
-                selected_reason="session_summary_priority",
+                selected_reason=SESSION_SUMMARY_REASON,
             ):
-                selected_summary_ids.add(record.memory_id)
+                selected_priority_ids.add(record.memory_id)
 
     allowed_records = []
     filtered_records = []
     for record in retrieved:
         seen_retrieved_ids.add(record.memory_id)
-        if record.memory_id in selected_summary_ids:
+        if record.memory_id in selected_priority_ids:
             continue
         if record.kind == session_summary_kind:
             trace.skipped.append(
@@ -144,6 +190,31 @@ def resolve_memory_context(
     return memory_facts, trace
 
 
+def build_worker_lane_summary_kind(worker_lane: str) -> str:
+    """Return the canonical memory kind for one worker-lane summary cache."""
+
+    return f"worker_lane_summary:{str(worker_lane).strip().lower()}"
+
+
+def retain_on_demand_prompt_memories(
+    *,
+    memory_facts: list[str],
+    trace: MemoryBuildTrace,
+    task_memory_facts: list[str],
+) -> tuple[list[str], int]:
+    """Keep only summary-cache prompt facts for on-demand memory delivery."""
+
+    selected_prompt_facts = memory_facts[: max(0, len(memory_facts) - len(task_memory_facts))]
+    retained_prompt_facts = [
+        prompt_fact
+        for prompt_fact, item in zip(selected_prompt_facts, trace.selected)
+        if item.reason in _ON_DEMAND_PROMPT_REASONS
+    ]
+    return [*retained_prompt_facts, *task_memory_facts], sum(
+        len(fact) for fact in retained_prompt_facts
+    )
+
+
 def _has_on_demand_memory_query_tool(task: Task | ExecutionRequest) -> bool:
     if getattr(task, "task_type", None) != "conversation":
         return False
@@ -179,6 +250,18 @@ def _has_on_demand_memory_query_tool(task: Task | ExecutionRequest) -> bool:
         for item in bridge_tools
         if str(item).strip()
     }
+
+
+def _resolve_worker_lane_summary_kind(task: Task | ExecutionRequest) -> str | None:
+    if getattr(task, "task_type", None) != "conversation":
+        return None
+    worker_lane = str(getattr(task, "worker_lane", "") or "").strip().lower()
+    if not worker_lane:
+        return None
+    role = getattr(task, "role", None)
+    if str(role or "").strip().lower() != "worker":
+        return None
+    return build_worker_lane_summary_kind(worker_lane)
 
 
 def resolve_explicit_memory_read(

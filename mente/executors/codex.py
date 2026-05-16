@@ -48,7 +48,12 @@ from mente.feature_flags import (
     is_sessionful_execution_enabled,
     sessionful_execution_sources,
 )
-from mente.memory.context import resolve_memory_context, resolve_memory_read_mode, uses_on_demand_memory
+from mente.memory.context import (
+    resolve_memory_context,
+    resolve_memory_read_mode,
+    retain_on_demand_prompt_memories,
+    uses_on_demand_memory,
+)
 from mente.memory.policy import MemoryPolicyResolver
 from mente.memory.repository import MemoryRepository
 from mente.task_core.models import (
@@ -375,7 +380,11 @@ class CodexExecutor(CodexKernelAdapter):
         prepared_memory_facts = memory_facts
         memory_read_mode = resolve_memory_read_mode(request)
         if uses_on_demand_memory(request):
-            prepared_memory_facts = list(request.memory_facts)
+            prepared_memory_facts, _retained_char_count = retain_on_demand_prompt_memories(
+                memory_facts=memory_facts,
+                trace=_trace,
+                task_memory_facts=list(request.memory_facts),
+            )
         metadata = dict(request.metadata)
         metadata["memory_context_prepared"] = True
         metadata["memory_read_mode"] = memory_read_mode

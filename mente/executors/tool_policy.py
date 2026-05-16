@@ -33,7 +33,7 @@ _POLICY_PROFILES: dict[tuple[str, str], _PolicyProfile] = {
     ),
     ("gateway", "conversation"): _PolicyProfile(
         expose_all_native_tools=True,
-        bridge_tools=(),
+        bridge_tools=("mente_memory_query", "mente_memory_save"),
         session_capable=True,
     ),
     ("api_server", "conversation"): _PolicyProfile(
@@ -43,7 +43,7 @@ _POLICY_PROFILES: dict[tuple[str, str], _PolicyProfile] = {
     ),
     ("tui", "conversation"): _PolicyProfile(
         expose_all_native_tools=True,
-        bridge_tools=(),
+        bridge_tools=("mente_memory_query", "mente_memory_save"),
         session_capable=True,
     ),
 }

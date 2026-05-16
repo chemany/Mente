@@ -209,9 +209,7 @@ def test_augment_runtime_config_injects_mente_mcp_server_for_memory_query_tool(
     }
 
 
-def test_augment_runtime_config_does_not_inject_memory_save_when_flag_is_off_by_default(
-    tmp_path,
-):
+def test_augment_runtime_config_injects_memory_save_when_enabled_by_default(tmp_path):
     runtime_config = RuntimeConfig(
         runtime_home=tmp_path / "private-runtime-home",
         codex_config={"model": "gpt-5.5"},
@@ -232,8 +230,9 @@ def test_augment_runtime_config_does_not_inject_memory_save_when_flag_is_off_by_
     )
 
     augmented = augment_runtime_config_for_bridge_tools(runtime_config, request)
+    overrides = augmented.to_codex_overrides()
 
-    assert augmented == runtime_config
+    assert 'mcp_servers.mente.enabled_tools=["mente_memory_save"]' in overrides
 
 
 def test_augment_runtime_config_injects_mente_mcp_server_for_memory_save_tool(
@@ -475,24 +474,22 @@ def test_save_mente_memory_denies_non_conversation_write_when_policy_disabled():
     assert repo.list_recent() == []
 
 
-def test_save_mente_memory_denies_when_write_tool_flag_is_off_by_default():
+def test_save_mente_memory_is_enabled_when_write_tool_flag_defaults_on():
     repo = InMemoryMemoryRepository()
 
     result = save_mente_memory(
-        fact="Do not persist this while the operator flag is off.",
+        fact="Persist this while the operator flag defaults on.",
         repository=repo,
         environment=_bridge_env(
             bridge_tools=["mente_memory_save"],
         ),
     )
 
-    assert result == {
-        "ok": False,
-        "error": "memory_write_not_allowed",
-        "policy_id": "gateway:conversation",
-        "reason": "disabled",
-    }
-    assert repo.list_recent() == []
+    assert result["ok"] is True
+    assert result["policy_id"] == "gateway:conversation"
+    assert result["scope"] == "session"
+    assert result["memory_id"]
+    assert repo.list_recent()
 
 
 

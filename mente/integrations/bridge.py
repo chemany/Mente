@@ -49,6 +49,7 @@ from mente.review.memory_review import MemoryReviewWorker, build_memory_review_a
 from mente.review.remember_intent import extract_explicit_remember_intent_facts
 from mente.review.session_synthesis import SessionSynthesisWorker, build_session_synthesis_artifact
 from mente.review.skill_review import SkillReviewWorker
+from mente.review.worker_summary_cache import persist_worker_summary_cache
 from mente.task_core.models import (
     DispatchMode,
     ExecutionMode,
@@ -3708,6 +3709,19 @@ def _apply_post_turn_conversation_workflow_contract(
         result.metadata["skill_review"] = run_post_turn_skill_review(
             task_id=task.task_id,
             repository=repository,
+        )
+    worker_summary_cache = persist_worker_summary_cache(
+        task=task,
+        result=result,
+        memory_repository=memory_repository,
+    )
+    if isinstance(worker_summary_cache, dict):
+        _persist_task_result_metadata(
+            task=task,
+            result=result,
+            repository=repository,
+            metadata_key="worker_summary_cache",
+            metadata_value=worker_summary_cache,
         )
     session_synthesis_contract = workflow_contract.get("session_synthesis")
     if isinstance(session_synthesis_contract, dict) and bool(

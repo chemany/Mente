@@ -1,9 +1,12 @@
 from mente.context_builder.builder import ContextBuilder
-from mente.feature_flags import API_SERVER_CONVERSATION_WORKFLOW_ID
+from mente.feature_flags import (
+    API_SERVER_CONVERSATION_WORKFLOW_ID,
+    build_conversation_workflow_contract,
+)
 from mente.memory.models import MemoryRecord
 from mente.memory.policy import MemoryPolicy, MemoryPolicyResolver
 from mente.memory.repository import InMemoryMemoryRepository
-from mente.task_core.models import Task
+from mente.task_core.models import Task, TaskRole
 
 
 def test_context_builder_produces_execution_request():
@@ -556,6 +559,95 @@ def test_context_builder_disabling_session_summary_policy_reverts_to_generic_pre
     ]
     assert "session_summary_priority" not in baseline_reasons
     assert "session_summary_priority" not in disabled_reasons
+
+
+def test_context_builder_prioritizes_worker_lane_summary_before_session_summary_and_task_memory():
+    repo = InMemoryMemoryRepository()
+    worker_summary_fact = "Worker lane summary (research): supplier shortlist and open risks."
+    session_summary_fact = "Session summary: user wants a concise sourcing memo."
+    generic_session_fact = "Ordinary session fact that should stay out of the thin prompt."
+    task_memory_fact = "Task brief: extend the supplier comparison with pricing notes."
+
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_worker_summary",
+            session_id="gateway-session-1",
+            task_id="task_old_worker_summary",
+            task_type="conversation",
+            source="gateway",
+            scope="session",
+            kind="worker_lane_summary:research",
+            fact=worker_summary_fact,
+            score=1.0,
+        )
+    )
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_session_summary",
+            session_id="gateway-session-1",
+            task_id="task_old_session_summary",
+            task_type="conversation",
+            source="gateway",
+            scope="session",
+            kind="session_summary",
+            fact=session_summary_fact,
+            score=2.0,
+        )
+    )
+    repo.save(
+        MemoryRecord(
+            memory_id="mem_generic_session",
+            session_id="gateway-session-1",
+            task_id="task_old_generic_session",
+            task_type="conversation",
+            source="gateway",
+            scope="session",
+            fact=generic_session_fact,
+            score=5.0,
+        )
+    )
+
+    task = Task(
+        task_id="task_worker_summary_priority",
+        session_id="gateway-session-1",
+        task_type="conversation",
+        objective="Continue the delegated research worker run",
+        user_request="Continue the delegated research worker run",
+        role=TaskRole.WORKER,
+        worker_lane="research",
+        memory_facts=[task_memory_fact],
+        metadata={
+            "source": "gateway",
+            "workflow_contract": build_conversation_workflow_contract(
+                source="gateway",
+                lane="research",
+                environment={
+                    "MENTE_SESSION_SUMMARY_RETRIEVAL_ENABLED": "1",
+                },
+            ),
+        },
+    )
+
+    request, trace = ContextBuilder(
+        memory_repository=repo,
+        memory_limit=5,
+    ).build_with_trace(task)
+
+    assert request.memory_facts == [
+        f"Memory: {worker_summary_fact}",
+        f"Memory: {session_summary_fact}",
+        task_memory_fact,
+    ]
+    assert [item.memory_id for item in trace.selected[:3]] == [
+        "mem_worker_summary",
+        "mem_session_summary",
+        "mem_generic_session",
+    ]
+    assert [item.reason for item in trace.selected[:3]] == [
+        "worker_lane_summary_priority",
+        "session_summary_priority",
+        "scope_match",
+    ]
 
 
 def test_context_builder_memory_context_ignores_superseded_records():
