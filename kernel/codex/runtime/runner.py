@@ -231,6 +231,58 @@ def _extract_thread_id_from_jsonl(raw_output: str) -> str | None:
     return None
 
 
+def _iter_json_objects(text: str) -> list[dict[str, Any]]:
+    """Best-effort decode one or more concatenated JSON objects from free-form text."""
+    decoded: list[dict[str, Any]] = []
+    if not text:
+        return decoded
+    decoder = json.JSONDecoder()
+    index = 0
+    length = len(text)
+    while index < length:
+        while index < length and text[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        try:
+            candidate, next_index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            break
+        if isinstance(candidate, dict):
+            decoded.append(candidate)
+        index = next_index
+    return decoded
+
+
+def _recover_structured_output_from_stdout(stdout: str) -> dict[str, Any] | None:
+    """Recover structured output from JSONL stdout when raw_output is malformed."""
+    recovered: dict[str, Any] | None = None
+    for line in stdout.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            event = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        item = event.get("item")
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("type") or "") != "agent_message":
+            continue
+        text = str(item.get("text") or "")
+        for payload in _iter_json_objects(text):
+            try:
+                structured = parse_structured_output(json.dumps(payload, ensure_ascii=False))
+            except Exception:
+                structured = None
+            if structured is not None:
+                recovered = structured.model_dump(mode="json")
+    return recovered
+
+
 class KernelRunner:
     """Own vendored execution orchestration for kernel-backed runs."""
 
@@ -406,6 +458,13 @@ class KernelRunner:
 
     def _normalize_transport_response(self, response) -> KernelExecutionResult:
         structured_output = parse_structured_output(response.raw_output)
+        recovered_payload = None
+        if structured_output is None and response.stdout:
+            recovered_payload = _recover_structured_output_from_stdout(response.stdout)
+            if recovered_payload is not None:
+                structured_output = parse_structured_output(
+                    json.dumps(recovered_payload, ensure_ascii=False)
+                )
         memory_candidates: list[str] = []
         assistant_summary = response.raw_output
         completion_status = "success"
@@ -416,7 +475,7 @@ class KernelRunner:
         structured_payload = None
         thread_id = _extract_thread_id_from_jsonl(response.stdout or "")
         if structured_output is not None:
-            structured_payload = structured_output.model_dump(mode="json")
+            structured_payload = recovered_payload or structured_output.model_dump(mode="json")
             assistant_summary = structured_output.assistant_summary.strip()
             memory_candidates = [
                 candidate.strip()

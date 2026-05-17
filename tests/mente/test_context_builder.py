@@ -650,6 +650,56 @@ def test_context_builder_prioritizes_worker_lane_summary_before_session_summary_
     ]
 
 
+def test_context_builder_injects_mente_inventory_for_self_improvement_worker(tmp_path, monkeypatch):
+    mente_home = tmp_path / ".mente"
+    skill_root = mente_home / "skills" / "social-media" / "xhs-daily-news"
+    cron_dir = mente_home / "cron"
+    deep_research_root = tmp_path / "deep-research"
+    skill_root.mkdir(parents=True, exist_ok=True)
+    cron_dir.mkdir(parents=True, exist_ok=True)
+    deep_research_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: xhs-daily-news\ndescription: Daily news skill.\n---\n",
+        encoding="utf-8",
+    )
+    (mente_home / "config.yaml").write_text(
+        f"mente:\n  deep_research:\n    output_root: {deep_research_root}\n",
+        encoding="utf-8",
+    )
+    (cron_dir / "jobs.json").write_text(
+        '{"jobs":[{"id":"job-1","name":"Daily News","enabled":true,"schedule":"0 9 * * *"}]}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("HERMES_HOME", str(mente_home))
+
+    task = Task(
+        task_id="task_worker_inventory",
+        session_id="gateway-session-1",
+        task_type="conversation",
+        objective="Improve Mente's future behavior",
+        user_request="调用 Codex runtime 去编程修改技能和工作流，不要只记忆。",
+        role=TaskRole.WORKER,
+        worker_lane="engineering",
+        worker_skill_refs=["social-media/xhs-daily-news"],
+        metadata={
+            "source": "gateway",
+            "lane": "engineering",
+            "task_profile": "self_improvement",
+        },
+    )
+
+    request = ContextBuilder().build(task)
+
+    inventory_fact = next(
+        fact for fact in request.memory_facts if fact.startswith("Mente inventory:")
+    )
+    assert "social-media/xhs-daily-news" in inventory_fact
+    assert "jobs.json" in inventory_fact
+    assert request.metadata["mente_inventory"]["automation"]["total_jobs"] == 1
+    assert request.metadata["mente_inventory"]["routing_hint"]["selected_category"] == "skills"
+
+
 def test_context_builder_memory_context_ignores_superseded_records():
     repo = InMemoryMemoryRepository()
     # Quality contract: retrieval should only inject active rows unless an

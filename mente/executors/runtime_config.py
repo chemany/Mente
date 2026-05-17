@@ -74,6 +74,16 @@ MENTE_RESEARCH_BASE_INSTRUCTIONS = (
     "Do not claim facts, sources, or prior context that are not actually available in this turn. "
     "Keep responses concise, structured, and decision-useful."
 )
+MENTE_DEEP_RESEARCH_BASE_INSTRUCTIONS = (
+    "You are Mente's deep research execution agent. "
+    f"{MENTE_SELF_KNOWLEDGE} "
+    "Treat managed deep-research requests as delivery workflows, not lightweight synthesis replies. "
+    "Read the provided skill first, run the most direct managed entrypoint first, and keep work scoped to the active workspace, skill root, and planned artifact paths. "
+    "Generate the required report artifacts before replying when no concrete blocker prevents it. "
+    "Do not stop at intermediate findings, partial plans, or workflow summaries when the report artifacts are still missing. "
+    "If the workflow is blocked, diagnose the concrete blocker, fix it, and then resume the workflow. "
+    "Keep responses concise, action-oriented, and focused on completed deliverables."
+)
 MENTE_WRITING_BASE_INSTRUCTIONS = (
     "You are Mente's writing agent. "
     f"{MENTE_SELF_KNOWLEDGE} "
@@ -350,6 +360,9 @@ def _has_explicit_global_base_instructions(codex_config: dict[str, object]) -> b
 def _resolve_request_soul_name(request: ExecutionRequest) -> str | None:
     if _is_coordinator_request(request):
         return _COORDINATOR_PROFILE
+    task_profile = str(request.metadata.get("task_profile") or "").strip().lower()
+    if task_profile == _DEEP_RESEARCH_TASK_PROFILE:
+        return _DEEP_RESEARCH_TASK_PROFILE
     if _is_content_publishing_request(request):
         return _CONTENT_PUBLISHING_TASK_PROFILE
     if _is_config_admin_request(request):
@@ -373,7 +386,12 @@ def _should_use_request_scoped_base_instructions(
     request: ExecutionRequest,
     soul_name: str,
 ) -> bool:
-    return soul_name == _COORDINATOR_PROFILE and _is_coordinator_request(request)
+    if soul_name == _COORDINATOR_PROFILE and _is_coordinator_request(request):
+        return True
+    return (
+        soul_name == _DEEP_RESEARCH_TASK_PROFILE
+        and str(request.metadata.get("task_profile") or "").strip().lower() == _DEEP_RESEARCH_TASK_PROFILE
+    )
 
 
 def _load_mente_home_soul(name: str) -> str | None:
@@ -571,6 +589,8 @@ def _read_soul_file(path: Path) -> str | None:
 def _legacy_base_instructions_for_request(request: ExecutionRequest) -> str | None:
     if _is_coordinator_request(request):
         return MENTE_COORDINATOR_BASE_INSTRUCTIONS
+    if str(request.metadata.get("task_profile") or "").strip().lower() == _DEEP_RESEARCH_TASK_PROFILE:
+        return MENTE_DEEP_RESEARCH_BASE_INSTRUCTIONS
     if _is_content_publishing_request(request):
         return MENTE_CONTENT_BASE_INSTRUCTIONS
     if _is_config_admin_request(request):
@@ -739,19 +759,76 @@ def _resolve_provider_api_key_from_env(provider: str | None) -> str:
 
     try:
         from hermes_cli.auth import PROVIDER_REGISTRY
-        from hermes_cli.config import get_env_value
     except Exception:
         return ""
 
     pconfig = PROVIDER_REGISTRY.get(provider_id)
-    if pconfig is None:
+    if pconfig is not None:
+        for env_name in getattr(pconfig, "api_key_env_vars", ()) or ():
+            value = _get_mente_env_value(str(env_name))
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    configured_provider_key = _resolve_user_defined_provider_api_key(provider_id)
+    if configured_provider_key:
+        return configured_provider_key
+    return ""
+
+
+def _resolve_user_defined_provider_api_key(provider_id: str) -> str:
+    config_path = get_mente_home() / "config.yaml"
+    if not config_path.exists():
         return ""
 
-    for env_name in getattr(pconfig, "api_key_env_vars", ()) or ():
-        value = get_env_value(str(env_name))
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    try:
+        parsed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return ""
+
+    if not isinstance(parsed, dict):
+        return ""
+    providers = parsed.get("providers")
+    if not isinstance(providers, dict):
+        return ""
+
+    entry = providers.get(provider_id)
+    if not isinstance(entry, dict):
+        return ""
+
+    inline_api_key = _clean_optional_str(entry.get("api_key"))
+    if inline_api_key:
+        return inline_api_key
+
+    key_env = _clean_optional_str(entry.get("key_env"))
+    if not key_env:
+        return ""
+
+    value = _get_mente_env_value(key_env)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return ""
+
+
+def _get_mente_env_value(key: str) -> str | None:
+    value = os.environ.get(key)
+    if isinstance(value, str) and value.strip():
+        return value
+
+    env_path = get_mente_home() / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    prefix = f"{key}="
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if not line.startswith(prefix):
+            continue
+        return line[len(prefix):].strip().strip('"\'')
+    return None
 
 
 def _resolve_model_runtime(
@@ -976,6 +1053,8 @@ def _resolve_request_profile_override(
         return dict(runtime_config.profile_overrides.get(_CONTENT_PUBLISHING_TASK_PROFILE, {}))
     if _is_config_admin_request(request):
         return dict(runtime_config.profile_overrides.get(_CONFIG_ADMIN_TASK_PROFILE, {}))
+    if str(request.metadata.get("task_profile") or "").strip().lower() == _DEEP_RESEARCH_TASK_PROFILE:
+        return dict(runtime_config.profile_overrides.get(_DEEP_RESEARCH_TASK_PROFILE, {}))
     request_lane = _resolved_request_lane(request)
     if request_lane in {
         _DIRECTOR_LANE,

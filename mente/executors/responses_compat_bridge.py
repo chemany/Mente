@@ -504,6 +504,7 @@ def _translate_responses_request_to_chat_completions(
             instructions=_string_value(request_payload.get("instructions")),
             needs_reasoning_content=needs_reasoning_content,
         ),
+        "stream_options": {"include_usage": True},
     }
     tools = _responses_tools_to_chat(request_payload.get("tools"))
     if tools:
@@ -1026,9 +1027,14 @@ def _openai_usage_payload(usage: object) -> dict[str, object] | None:
         return None
     input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
     output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    prompt_token_details = getattr(usage, "prompt_tokens_details", None)
+    cached_tokens = int(getattr(prompt_token_details, "cached_tokens", 0) or 0)
+    input_tokens_details = None
+    if cached_tokens:
+        input_tokens_details = {"cached_tokens": cached_tokens}
     return {
         "input_tokens": input_tokens,
-        "input_tokens_details": None,
+        "input_tokens_details": input_tokens_details,
         "output_tokens": output_tokens,
         "output_tokens_details": None,
         "total_tokens": int(getattr(usage, "total_tokens", input_tokens + output_tokens) or 0),

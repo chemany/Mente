@@ -18,6 +18,82 @@ def _sse(event: str, payload: dict[str, object]) -> bytes:
 
 
 @contextmanager
+def _chat_completions_server():
+    captured: dict[str, object] = {}
+
+    class _Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+        def do_POST(self):  # noqa: N802
+            captured["path"] = self.path
+            content_length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(content_length)
+            captured["body"] = json.loads(body.decode("utf-8"))
+
+            chunks = [
+                {
+                    "id": "chatcmpl_1",
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": "我是 NewAPI。"},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                {
+                    "id": "chatcmpl_1",
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+                {
+                    "id": "chatcmpl_1",
+                    "object": "chat.completion.chunk",
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 8,
+                        "total_tokens": 108,
+                        "prompt_tokens_details": {"cached_tokens": 11},
+                    },
+                },
+            ]
+            payload = b"".join(
+                f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+                for chunk in chunks
+            ) + b"data: [DONE]\n\n"
+
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("cache-control", "no-cache")
+            self.send_header("connection", "close")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            self.wfile.flush()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", captured
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@contextmanager
 def _anthropic_message_server():
     captured: dict[str, object] = {}
 
@@ -642,3 +718,44 @@ def test_translate_anthropic_request_pads_thinking_block_for_xiaomi_mimo_tool_re
     }
     assert assistant_replay["content"][1]["type"] == "tool_use"
     assert assistant_replay["content"][1]["name"] == "shell"
+
+
+def test_responses_compat_bridge_chat_completions_requests_usage_and_preserves_cached_tokens():
+    request_payload = {
+        "model": "gpt-5.4",
+        "instructions": "You are concise.",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello，你是谁？"}],
+            }
+        ],
+        "tools": [],
+        "tool_choice": "auto",
+        "parallel_tool_calls": False,
+        "stream": True,
+        "include": [],
+    }
+
+    with _chat_completions_server() as (downstream_base_url, captured):
+        with start_responses_compat_bridge(
+            model_runtime=ModelRuntime(
+                model="gpt-5.4",
+                provider="newapi",
+                base_url=downstream_base_url,
+                api_mode="chat_completions",
+                source="mente_model_settings",
+            ),
+            api_key="sk-test-newapi",
+        ) as bridge_base_url:
+            response = httpx.post(
+                f"{bridge_base_url}/responses",
+                json=request_payload,
+                timeout=10.0,
+            )
+
+    assert response.status_code == 200
+    assert captured["path"] == "/chat/completions"
+    assert captured["body"]["stream_options"] == {"include_usage": True}
+    assert '"cached_tokens": 11' in response.text or '"cached_tokens":11' in response.text

@@ -1926,7 +1926,7 @@ def systemd_restart(system: bool = False):
         check=False,
         timeout=30,
     )
-    _run_systemctl(["reload-or-restart", get_service_name()], system=system, check=True, timeout=90)
+    _run_systemctl(["restart", get_service_name()], system=system, check=True, timeout=90)
     print(f"✓ {_service_scope_label(system).capitalize()} service restarted")
 
 

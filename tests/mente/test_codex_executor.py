@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -835,6 +836,67 @@ def test_render_execution_prompt_adds_direct_workflow_policy_for_config_admin():
     assert "Restart or reload the gateway only if the changed setting requires it" in prompt
 
 
+def test_render_execution_prompt_adds_inventory_triage_for_self_improvement_engineering_worker():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Improve Mente's future behavior",
+        user_request="调用 Codex runtime 去编程修改技能和工作流，不要只记忆。",
+        workspace=".",
+        role="worker",
+        worker_lane="engineering",
+        worker_skill_refs=["social-media/xhs-daily-news"],
+        metadata={
+            "source": "gateway",
+            "lane": "engineering",
+            "task_profile": "self_improvement",
+            "mente_inventory": {
+                "routing_hint": {
+                    "selected_category": "skills",
+                    "category_priority": [
+                        {
+                            "category": "skills",
+                            "available": True,
+                            "recommended_reads": ["skills/social-media/xhs-daily-news/SKILL.md"],
+                        },
+                        {
+                            "category": "config",
+                            "available": True,
+                            "recommended_reads": ["config.yaml", ".env"],
+                        },
+                    ],
+                },
+                "skills": {
+                    "referenced_refs": ["social-media/xhs-daily-news"],
+                },
+                "config": {
+                    "config_path": "/tmp/.mente/config.yaml",
+                },
+                "automation": {
+                    "jobs_file": "/tmp/.mente/cron/jobs.json",
+                },
+                "artifacts": {
+                    "deep_research_output_root": "/tmp/deep-research",
+                    "recent_paths": ["/tmp/deep-research/report.docx"],
+                },
+            },
+        },
+        memory_facts=[
+            "Mente inventory:\n- Referenced skills: social-media/xhs-daily-news\n- Config path: /tmp/.mente/config.yaml\n- Automation jobs: 1 total, 1 enabled via /tmp/.mente/cron/jobs.json\n- Deep-research output root: /tmp/deep-research\n- Recent artifacts: /tmp/deep-research/report.docx"
+        ],
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Mente Inventory Routing Hint:" in prompt
+    assert "Selected category: skills" in prompt
+    assert "Category order: skills, config" in prompt
+    assert "Start with skills" in prompt
+    assert "Start with config" in prompt
+    assert "Use the selected category" in prompt
+
+
 def test_render_execution_prompt_adds_report_delivery_policy_for_deep_research():
     request = ExecutionRequest(
         task_id="task_1",
@@ -849,6 +911,12 @@ def test_render_execution_prompt_adds_report_delivery_policy_for_deep_research()
 
     prompt = render_execution_prompt(request)
 
+    assert "\nDeep Research Mode:" in prompt
+    assert "\nResearch Mode:" not in prompt
+    assert "Run the managed deep-research workflow directly instead of stopping at intermediate analysis." in prompt
+    assert "Prefer the referenced skill entrypoint or direct parallel helper before manual reconstruction." in prompt
+    assert "The canonical skill instructions file is SKILL.md; do not probe for README.md in the skill root." in prompt
+    assert "When context already provides a direct launch command or entrypoint, execute it before extra directory probing." in prompt
     assert "Workflow Policy:" in prompt
     assert "Use the provided deep-research skill directly and complete the full report workflow in this turn." in prompt
     assert "Use delegate_task to launch parallel chapter workers" in prompt
@@ -1296,6 +1364,65 @@ def test_codex_executor_keeps_worker_and_session_summaries_in_thin_prompt_for_wo
     assert "Ordinary session fact that should remain runtime-query only." not in prompt
     assert "Task brief: update the supplier memo." in prompt
     assert "mente_memory_query" in prompt
+
+
+def test_codex_executor_injects_mente_inventory_for_direct_self_improvement_worker_request(
+    monkeypatch,
+    tmp_path,
+):
+    mente_home = tmp_path / ".mente"
+    skill_root = mente_home / "skills" / "social-media" / "xhs-daily-news"
+    cron_dir = mente_home / "cron"
+    deep_research_root = tmp_path / "deep-research"
+    skill_root.mkdir(parents=True, exist_ok=True)
+    cron_dir.mkdir(parents=True, exist_ok=True)
+    deep_research_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: xhs-daily-news\ndescription: Daily news skill.\n---\n",
+        encoding="utf-8",
+    )
+    (mente_home / "config.yaml").write_text(
+        f"mente:\n  deep_research:\n    output_root: {deep_research_root}\n",
+        encoding="utf-8",
+    )
+    (cron_dir / "jobs.json").write_text(
+        '{"jobs":[{"id":"job-1","name":"Daily News","enabled":true,"schedule":"0 9 * * *"}]}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("HERMES_HOME", str(mente_home))
+    captured: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            captured["prompt"] = payload.prompt
+            return KernelExecutionResult(status="success", assistant_summary="ok")
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_worker_inventory",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Improve Mente's future behavior",
+        user_request="调用 Codex runtime 去编程修改技能和工作流，不要只记忆。",
+        workspace=str(tmp_path),
+        role="worker",
+        worker_lane="engineering",
+        worker_skill_refs=["social-media/xhs-daily-news"],
+        metadata={
+            "source": "gateway",
+            "lane": "engineering",
+            "task_profile": "self_improvement",
+        },
+    )
+
+    result = executor.execute(request)
+    prompt = str(captured["prompt"])
+
+    assert result.status == "success"
+    assert "Mente inventory:" in prompt
+    assert "social-media/xhs-daily-news" in prompt
+    assert "jobs.json" in prompt
 
 
 def test_codex_executor_uses_canonical_mente_skills_without_private_runtime_mirror(
@@ -1882,6 +2009,693 @@ def test_codex_executor_execute_delegates_to_kernel_runner(monkeypatch, tmp_path
     assert result.verification_results == ["checked report files exist"]
     assert result.follow_up_tasks == []
     assert result.metadata["returncode"] == 0
+
+
+def test_codex_executor_blocks_deep_research_success_without_report_artifacts(tmp_path):
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="research",
+        objective="生成完整深度调研报告",
+        user_request="深度研究 BHEB 并形成完整报告",
+        workspace=str(tmp_path),
+        metadata={"task_profile": "deep_research"},
+    )
+
+    translated = executor._translate_kernel_result(
+        KernelExecutionResult(
+            status="success",
+            assistant_summary=(
+                "Checked the deep-research skill entrypoint and workflow. "
+                "Next I'm running the managed workflow for BHEB."
+            ),
+            debug={"structured_output": {"assistant_summary": "placeholder"}},
+        ),
+        request,
+        KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+    )
+
+    assert translated.status == "blocked"
+    assert translated.failure_reason == "deep_research_managed_cli_not_executed"
+    assert translated.artifacts_out == []
+    assert "未真正执行托管 deep-research CLI" in translated.summary
+    assert translated.metadata["deep_research_managed_cli_validation"] == {
+        "executed": False,
+        "deferred_execution": True,
+        "commands_seen": [],
+        "managed_cli_commands": [],
+        "active_commands": [],
+        "active_managed_cli_commands": [],
+        "thread_id": None,
+    }
+
+
+def test_codex_executor_accepts_deep_research_paths_extracted_from_summary(tmp_path):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    report_md = report_dir / "bheb_report.md"
+    report_html = report_dir / "bheb_report.html"
+    report_docx = report_dir / "bheb_report.docx"
+    for path in (report_md, report_html, report_docx):
+        path.write_text("ok", encoding="utf-8")
+
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="research",
+        objective="生成完整深度调研报告",
+        user_request="深度研究 BHEB 并形成完整报告",
+        workspace=str(tmp_path),
+        metadata={"task_profile": "deep_research"},
+    )
+
+    translated = executor._translate_kernel_result(
+        KernelExecutionResult(
+            status="success",
+            assistant_summary=(
+                "研究完成。\n"
+                f"Markdown: {report_md}\n"
+                f"HTML: {report_html}\n"
+                f"DOCX: {report_docx}"
+            ),
+            debug={"structured_output": {"assistant_summary": "placeholder"}},
+        ),
+        request,
+        KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+    )
+
+    assert translated.status == "success"
+    assert translated.artifacts_out == [
+        str(report_md),
+        str(report_html),
+        str(report_docx),
+    ]
+    assert translated.failure_reason is None
+    assert translated.metadata["deep_research_artifact_validation"] == {
+        "validated": True,
+        "missing_formats": [],
+        "missing_paths": [],
+        "candidate_artifacts": [
+            str(report_md),
+            str(report_html),
+            str(report_docx),
+        ],
+    }
+
+
+def test_codex_executor_preserves_real_deep_research_blocker_without_artifact_override(tmp_path):
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="research",
+        objective="生成完整深度调研报告",
+        user_request="深度研究 BHEB 并形成完整报告",
+        workspace=str(tmp_path),
+        metadata={"task_profile": "deep_research"},
+    )
+
+    translated = executor._translate_kernel_result(
+        KernelExecutionResult(
+            status="blocked",
+            assistant_summary="缺少搜索 API 配置，无法继续生成最终报告。",
+            verification_results=["已执行托管 deep research CLI"],
+            follow_up_tasks=["配置 TAVILY_API_KEY 或 BRAVE_API_KEY 后重试"],
+            debug={
+                "structured_output": {
+                    "assistant_summary": "缺少搜索 API 配置，无法继续生成最终报告。",
+                    "completion_status": "blocked",
+                }
+            },
+        ),
+        request,
+        KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+    )
+
+    assert translated.status == "blocked"
+    assert translated.summary == "缺少搜索 API 配置，无法继续生成最终报告。"
+    assert translated.follow_up_tasks == ["配置 TAVILY_API_KEY 或 BRAVE_API_KEY 后重试"]
+    assert "deep_research_artifact_validation" not in translated.metadata
+
+
+def test_codex_executor_marks_deep_research_blocked_when_managed_cli_was_not_executed(tmp_path):
+    executor = CodexExecutor(codex_binary="codex")
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="research",
+        objective="生成完整深度调研报告",
+        user_request="深度研究 BHEB 并形成完整报告",
+        workspace=str(tmp_path),
+        metadata={"task_profile": "deep_research"},
+    )
+    summary = (
+        "Started the managed deep-research workflow by reading the skill instructions and entrypoint. "
+        "Next step is to run the provided parallel CLI for the target chemical, then verify "
+        "Markdown/HTML/DOCX artifacts under the configured output root."
+    )
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-123"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_0",
+                        "type": "command_execution",
+                        "command": "/bin/bash -lc \"sed -n '1,260p' /home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py\"",
+                        "aggregated_output": "ok",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_1",
+                        "type": "command_execution",
+                        "command": "/bin/bash -lc \"sed -n '1,220p' /home/jason/.mente/skills/research/deep-research-pro/SKILL.md\"",
+                        "aggregated_output": "ok",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+        ]
+    )
+
+    translated = executor._translate_kernel_result(
+        KernelExecutionResult(
+            status="blocked",
+            assistant_summary=summary,
+            follow_up_tasks=["Run the managed CLI and verify the final artifacts."],
+            debug={
+                "stdout": stdout,
+                "thread_id": "thread-123",
+                "structured_output": {
+                    "assistant_summary": summary,
+                    "completion_status": "blocked",
+                    "follow_up_tasks": ["Run the managed CLI and verify the final artifacts."],
+                },
+            },
+        ),
+        request,
+        KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+    )
+
+    assert translated.status == "blocked"
+    assert translated.failure_reason == "deep_research_managed_cli_not_executed"
+    assert "未真正执行托管 deep-research CLI" in translated.summary
+    assert translated.metadata["deep_research_managed_cli_validation"] == {
+        "executed": False,
+        "deferred_execution": True,
+        "commands_seen": [
+            "/bin/bash -lc \"sed -n '1,260p' /home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py\"",
+            "/bin/bash -lc \"sed -n '1,220p' /home/jason/.mente/skills/research/deep-research-pro/SKILL.md\"",
+        ],
+        "managed_cli_commands": [],
+        "active_commands": [],
+        "active_managed_cli_commands": [],
+        "thread_id": "thread-123",
+    }
+
+
+def test_codex_executor_retries_deep_research_once_when_model_only_reads_skill_files(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "gateway")
+    monkeypatch.setattr(
+        CodexExecutor,
+        "_should_execute_managed_deep_research_directly",
+        lambda self, request: False,
+    )
+
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    report_md = report_dir / "bheb_report.md"
+    report_html = report_dir / "bheb_report.html"
+    report_docx = report_dir / "bheb_report.docx"
+    for path in (report_md, report_html, report_docx):
+        path.write_text("ok", encoding="utf-8")
+
+    calls: list[KernelSessionRequest] = []
+    prompts: list[str] = []
+    first_summary = (
+        "Started the managed deep-research workflow by reading the skill instructions and entrypoint. "
+        "Next step is to run the provided parallel CLI for the target chemical."
+    )
+    first_stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-123"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_0",
+                        "type": "command_execution",
+                        "command": "/bin/bash -lc \"sed -n '1,260p' /home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py\"",
+                        "aggregated_output": "ok",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+        ]
+    )
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            calls.append(session)
+            prompts.append(payload.prompt)
+            if len(calls) == 1:
+                return KernelExecutionResult(
+                    status="blocked",
+                    assistant_summary=first_summary,
+                    follow_up_tasks=["Run the managed CLI and verify the final artifacts."],
+                    debug={
+                        "stdout": first_stdout,
+                        "thread_id": "thread-123",
+                        "structured_output": {
+                            "assistant_summary": first_summary,
+                            "completion_status": "blocked",
+                            "follow_up_tasks": ["Run the managed CLI and verify the final artifacts."],
+                        },
+                    },
+                )
+            return KernelExecutionResult(
+                status="success",
+                assistant_summary=(
+                    "研究完成。\n"
+                    f"Markdown: {report_md}\n"
+                    f"HTML: {report_html}\n"
+                    f"DOCX: {report_docx}"
+                ),
+                artifacts_out=[str(report_md), str(report_html), str(report_docx)],
+                verification_results=["checked report files exist"],
+                debug={
+                    "thread_id": "thread-123",
+                    "structured_output": {
+                        "assistant_summary": "研究完成",
+                        "completion_status": "success",
+                        "artifacts_out": [str(report_md), str(report_html), str(report_docx)],
+                        "verification_results": ["checked report files exist"],
+                    },
+                },
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="research",
+        objective="生成完整深度调研报告",
+        user_request="深度研究 BHEB 并形成完整报告",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
+        tool_policy={"session_capable": True},
+        metadata={
+            "source": "gateway",
+            "task_profile": "deep_research",
+            "operator_capsule": {
+                "skill_entrypoint": "/home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py",
+            },
+        },
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert [session.mode for session in calls] == [
+        KernelSessionMode.SESSION,
+        KernelSessionMode.SESSION,
+    ]
+    assert calls[1].session_id == "thread-123"
+    assert "The previous turn stopped after only reading skill files." in prompts[1]
+    assert result.artifacts_out == [str(report_md), str(report_html), str(report_docx)]
+    assert result.metadata["deep_research_retry"] == {
+        "triggered": True,
+        "reason": "managed_cli_not_executed",
+        "resumed_thread_id": "thread-123",
+    }
+
+
+def test_codex_executor_retries_deep_research_once_for_probe_only_turn_with_latest_summary_wording(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "gateway")
+    monkeypatch.setattr(
+        CodexExecutor,
+        "_should_execute_managed_deep_research_directly",
+        lambda self, request: False,
+    )
+
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    report_md = report_dir / "bheb_report.md"
+    report_html = report_dir / "bheb_report.html"
+    report_docx = report_dir / "bheb_report.docx"
+    for path in (report_md, report_html, report_docx):
+        path.write_text("ok", encoding="utf-8")
+
+    calls: list[KernelSessionRequest] = []
+    prompts: list[str] = []
+    first_summary = (
+        "I’m using the managed deep-research skill entrypoint and checking its instructions first, "
+        "then I’ll run the full report workflow and verify the generated artifacts."
+    )
+    first_stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-123"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_0",
+                        "type": "command_execution",
+                        "command": "/bin/bash -lc \"sed -n '1,220p' /home/jason/.mente/skills/research/deep-research-pro/SKILL.md\"",
+                        "aggregated_output": "ok",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_1",
+                        "type": "command_execution",
+                        "command": "/bin/bash -lc \"sed -n '1,260p' /home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py\"",
+                        "aggregated_output": "ok",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+        ]
+    )
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            calls.append(session)
+            prompts.append(payload.prompt)
+            if len(calls) == 1:
+                return KernelExecutionResult(
+                    status="blocked",
+                    assistant_summary=first_summary,
+                    follow_up_tasks=[],
+                    debug={
+                        "stdout": first_stdout,
+                        "thread_id": "thread-123",
+                        "structured_output": {
+                            "assistant_summary": first_summary,
+                            "completion_status": "blocked",
+                            "follow_up_tasks": [],
+                        },
+                    },
+                )
+            return KernelExecutionResult(
+                status="success",
+                assistant_summary=(
+                    "研究完成。\n"
+                    f"Markdown: {report_md}\n"
+                    f"HTML: {report_html}\n"
+                    f"DOCX: {report_docx}"
+                ),
+                artifacts_out=[str(report_md), str(report_html), str(report_docx)],
+                verification_results=["checked report files exist"],
+                debug={
+                    "thread_id": "thread-123",
+                    "structured_output": {
+                        "assistant_summary": "研究完成",
+                        "completion_status": "success",
+                        "artifacts_out": [str(report_md), str(report_html), str(report_docx)],
+                        "verification_results": ["checked report files exist"],
+                    },
+                },
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="research",
+        objective="生成完整深度调研报告",
+        user_request="调用技能，深度研究抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚这一个标准化学品，形成万字调研报告。",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
+        tool_policy={"session_capable": True},
+        metadata={
+            "source": "gateway",
+            "task_profile": "deep_research",
+            "operator_capsule": {
+                "skill_entrypoint": "/home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py",
+            },
+        },
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert [session.mode for session in calls] == [
+        KernelSessionMode.SESSION,
+        KernelSessionMode.SESSION,
+    ]
+    assert calls[1].session_id == "thread-123"
+    assert "The previous turn stopped after only reading skill files." in prompts[1]
+    assert result.artifacts_out == [str(report_md), str(report_html), str(report_docx)]
+    assert result.metadata["deep_research_retry"] == {
+        "triggered": True,
+        "reason": "managed_cli_not_executed",
+        "resumed_thread_id": "thread-123",
+    }
+
+
+def test_codex_executor_retries_deep_research_once_when_managed_cli_is_still_running(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "gateway")
+    monkeypatch.setattr(
+        CodexExecutor,
+        "_should_execute_managed_deep_research_directly",
+        lambda self, request: False,
+    )
+
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    report_md = report_dir / "bheb_report.md"
+    report_html = report_dir / "bheb_report.html"
+    report_docx = report_dir / "bheb_report.docx"
+    for path in (report_md, report_html, report_docx):
+        path.write_text("ok", encoding="utf-8")
+
+    calls: list[KernelSessionRequest] = []
+    prompts: list[str] = []
+    first_summary = (
+        "已按技能要求启动受管深度研究工作流，正在生成关于“抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚”的完整调研报告。"
+        "下一步是等待工作流完成并核验 Markdown、HTML、DOCX 三种产物是否落盘。"
+    )
+    first_stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-123"}),
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "item_0",
+                        "type": "command_execution",
+                        "command": (
+                            "/bin/bash -lc "
+                            "\"python /home/jason/.mente/skills/research/deep-research-pro/"
+                            "deep_research_pro.py "
+                            "\\\"抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚\\\" "
+                            "--output-dir /home/jason/clawd/deep-research\""
+                        ),
+                        "status": "in_progress",
+                    },
+                }
+            ),
+        ]
+    )
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            calls.append(session)
+            prompts.append(payload.prompt)
+            if len(calls) == 1:
+                return KernelExecutionResult(
+                    status="blocked",
+                    assistant_summary=first_summary,
+                    follow_up_tasks=["等待工作流完成并核验 Markdown、HTML、DOCX 三种产物是否落盘。"],
+                    debug={
+                        "stdout": first_stdout,
+                        "thread_id": "thread-123",
+                        "structured_output": {
+                            "assistant_summary": first_summary,
+                            "completion_status": "blocked",
+                            "follow_up_tasks": ["等待工作流完成并核验 Markdown、HTML、DOCX 三种产物是否落盘。"],
+                        },
+                    },
+                )
+            return KernelExecutionResult(
+                status="success",
+                assistant_summary=(
+                    "研究完成。\n"
+                    f"Markdown: {report_md}\n"
+                    f"HTML: {report_html}\n"
+                    f"DOCX: {report_docx}"
+                ),
+                artifacts_out=[str(report_md), str(report_html), str(report_docx)],
+                verification_results=["checked report files exist"],
+                debug={
+                    "thread_id": "thread-123",
+                    "structured_output": {
+                        "assistant_summary": "研究完成",
+                        "completion_status": "success",
+                        "artifacts_out": [str(report_md), str(report_html), str(report_docx)],
+                        "verification_results": ["checked report files exist"],
+                    },
+                },
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="research",
+        objective="生成完整深度调研报告",
+        user_request="调用技能，深度研究抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚这一个标准化学品，形成万字调研报告。",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
+        tool_policy={"session_capable": True},
+        metadata={
+            "source": "gateway",
+            "task_profile": "deep_research",
+            "operator_capsule": {
+                "skill_entrypoint": "/home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py",
+            },
+        },
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert [session.mode for session in calls] == [
+        KernelSessionMode.SESSION,
+        KernelSessionMode.SESSION,
+    ]
+    assert calls[1].session_id == "thread-123"
+    assert "The previous turn already launched the managed deep-research CLI" in prompts[1]
+    assert "Do not stop while the managed CLI command is still running." in prompts[1]
+    assert result.artifacts_out == [str(report_md), str(report_html), str(report_docx)]
+    assert result.metadata["deep_research_retry"] == {
+        "triggered": True,
+        "reason": "managed_cli_still_running",
+        "resumed_thread_id": "thread-123",
+    }
+
+
+def test_codex_executor_runs_deep_research_via_managed_cli_directly_and_bypasses_runner(
+    monkeypatch, tmp_path
+):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir()
+    (mente_home / "config.yaml").write_text(
+        f"mente:\n  deep_research:\n    output_root: {tmp_path}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    report_md = report_dir / "bheb_report.md"
+    report_html = report_dir / "bheb_report.html"
+    report_docx = report_dir / "bheb_report.docx"
+    for path in (report_md, report_html, report_docx):
+        path.write_text("ok", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def _fake_subprocess_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        stdout = (
+            "研究完成: 抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚\n"
+            "并行 workers: 3\n"
+            f"Markdown: {report_md}\n"
+            f"HTML: {report_html}\n"
+            f"DOCX: {report_docx}\n"
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("mente.executors.codex.subprocess.run", _fake_subprocess_run)
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            raise AssertionError("deep research should bypass the Codex runner")
+
+    runtime_config = RuntimeConfig(
+        runtime_home=tmp_path / "runtime-home",
+        model_runtime=ModelRuntime(
+            model="gpt-5.4",
+            provider="newapi",
+            base_url="https://newapi.10fu.com/v1",
+            api_mode="chat_completions",
+            source="test",
+        ),
+        subprocess_env={},
+    )
+    executor = CodexExecutor(
+        codex_binary="codex",
+        runner=_Runner(),
+        runtime_config=runtime_config,
+    )
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="research",
+        objective="生成完整深度调研报告",
+        user_request="调用技能，深度研究抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚这一个标准化学品，形成万字调研报告。",
+        workspace=str(tmp_path),
+        metadata={
+            "source": "gateway",
+            "lane": "research",
+            "task_profile": "deep_research",
+            "operator_capsule": {
+                "skill_entrypoint": "/home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py",
+            },
+        },
+        skill_refs=["research/deep-research-pro"],
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert result.artifacts_out == [str(report_md), str(report_html), str(report_docx)]
+    assert result.metadata["managed_skill_execution"] == {
+        "mode": "direct_subprocess",
+        "command": [
+            captured["command"][0],
+            "/home/jason/.mente/skills/research/deep-research-pro/deep_research_pro.py",
+            "抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        "returncode": 0,
+    }
+    assert captured["kwargs"]["cwd"] == str(tmp_path)
+    assert captured["kwargs"]["text"] is True
+    assert captured["kwargs"]["capture_output"] is True
 
 
 @pytest.mark.parametrize(

@@ -83,7 +83,7 @@ class TestSystemdServiceRefresh:
             ["systemctl", "--user", "daemon-reload"],
             ["systemctl", "--user", "show", gateway_cli.get_service_name(), "--no-pager", "--property", "ActiveState,SubState,Result,ExecMainStatus"],
             ["systemctl", "--user", "reset-failed", gateway_cli.get_service_name()],
-            ["systemctl", "--user", "reload-or-restart", gateway_cli.get_service_name()],
+            ["systemctl", "--user", "restart", gateway_cli.get_service_name()],
         ]
 
 

@@ -441,7 +441,7 @@ def test_prompt_submit_revision_supersedes_worker_and_preserves_lineage(monkeypa
         server.clear_background_worker_job("sid", lane="research")
 
 
-def test_prompt_submit_same_lane_background_request_requires_confirmation(monkeypatch):
+def test_prompt_submit_same_lane_background_request_appends_worker_follow_up(monkeypatch):
     class _Agent:
         def run_conversation(self, prompt, conversation_history=None, stream_callback=None):
             raise AssertionError("same-lane follow-up should not launch a new coordinator turn")
@@ -454,23 +454,70 @@ def test_prompt_submit_same_lane_background_request_requires_confirmation(monkey
         job_id="job-research-1",
         task_id="task-research-1",
         summary="Collecting vendor benchmarks",
+        metadata={
+            "lane": "research",
+            "task_profile": "deep_research",
+            "skill_refs": ["skills/research/web"],
+        },
     )
     try:
         monkeypatch.setattr(server, "_emit", lambda *args: emits.append(args))
+        monkeypatch.setattr(
+            "mente.integrations.bridge.resolve_dispatch_decision",
+            lambda **_kwargs: types.SimpleNamespace(
+                dispatch_mode=DispatchMode.DELEGATE_BACKGROUND,
+                target_job_lane="research",
+                worker_lane=None,
+                lane="director",
+            ),
+        )
+        inner = types.SimpleNamespace(
+            model="gpt-5.4",
+            provider="openai",
+            base_url="https://api.example.test/v1",
+            api_key="sk-test",
+            session_id="tui-session-1",
+        )
+        agent = server.MenteTuiAgent(inner, sid="sid", session_key="session-key")
+        agent._recent_task_snapshots["research"] = {
+            "user_request": "研究三家供应商并写结论",
+            "status": "running",
+            "assistant_summary": "正在整理供应商资料",
+            "follow_up_tasks": ["补齐价格对比"],
+            "metadata": {
+                "lane": "research",
+                "task_profile": "deep_research",
+                "skill_refs": ["skills/research/web"],
+            },
+            "updated_at": "2026-05-13T00:00:00",
+        }
+        server._sessions["sid"]["agent"] = agent
+        follow_up = "再补一节价格对比表"
 
         resp = server.handle_request(
             {
                 "id": "1",
                 "method": "prompt.submit",
-                "params": {"session_id": "sid", "text": "再深度研究一下另一家供应商"},
+                "params": {"session_id": "sid", "text": follow_up},
             }
         )
 
         assert resp["result"]["status"] == "complete"
+        active = server.get_background_worker_job("sid", lane="research")
+        assert active is not None
+        assert active["job_id"] == "job-research-1"
+        assert active["task_id"] == "task-research-1"
+        assert active["metadata"]["control_contract"]["mode"] == "append_worker"
+
+        snapshot = agent._recent_task_snapshots["research"]
+        pending = snapshot["metadata"]["pending_worker_control"]
+        assert pending["mode"] == "append_worker"
+        assert pending["user_revision"] == follow_up
+
         complete_calls = [call for call in emits if call[0] == "message.complete"]
         assert len(complete_calls) == 1
         text = complete_calls[0][2]["text"]
-        assert "already" in text.lower() or "先取消" in text
+        assert "append" in text.lower() or "继续运行" in text
     finally:
         server._sessions.pop("sid", None)
         server.clear_background_worker_job("sid", lane="research")
@@ -559,7 +606,11 @@ def test_live_delegated_prompt_submit_registers_worker_status_and_terminal_updat
         )
         assert prompt_status["result"]["status"] == "complete"
         complete_calls = [call for call in emits if call[0] == "message.complete"]
-        assert any("Active research worker" in call[2]["text"] for call in complete_calls)
+        assert any(
+            "research worker" in call[2]["text"].lower()
+            and "当前进度" in call[2]["text"]
+            for call in complete_calls
+        )
 
         allow_finish.set()
         for _ in range(20):
@@ -576,6 +627,52 @@ def test_live_delegated_prompt_submit_registers_worker_status_and_terminal_updat
         allow_finish.set()
         server._sessions.pop("sid", None)
         server.clear_background_worker_job("sid", lane="research")
+
+
+def test_prompt_submit_replays_queued_worker_follow_up_before_final_completion(monkeypatch):
+    class _Agent:
+        def __init__(self):
+            self.calls = []
+            self._queued = ["补一节价格对比"]
+
+        def run_conversation(self, prompt, conversation_history=None, stream_callback=None):
+            self.calls.append(prompt)
+            if stream_callback is not None:
+                stream_callback(f"stream:{prompt}")
+            return {
+                "final_response": f"done:{prompt}",
+                "messages": [{"role": "assistant", "content": f"done:{prompt}"}],
+            }
+
+        def dequeue_ready_background_worker_follow_up(self):
+            if self._queued:
+                return self._queued.pop(0)
+            return None
+
+    emits = []
+    agent = _Agent()
+    server._sessions["sid"] = _session(agent=agent)
+    try:
+        monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+        monkeypatch.setattr(server, "_emit", lambda *args: emits.append(args))
+        monkeypatch.setattr(server, "_get_usage", lambda _a: {})
+        monkeypatch.setattr(server, "render_message", lambda _t, _c: "")
+
+        resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {"session_id": "sid", "text": "先研究供应商"},
+            }
+        )
+
+        assert resp["result"]["status"] == "streaming"
+        assert agent.calls == ["先研究供应商", "补一节价格对比"]
+        complete_calls = [call for call in emits if call[0] == "message.complete"]
+        assert len(complete_calls) == 1
+        assert complete_calls[0][2]["text"] == "done:补一节价格对比"
+    finally:
+        server._sessions.pop("sid", None)
 
 
 def test_live_delegated_prompt_submit_cancel_hits_real_worker_event(monkeypatch):
@@ -696,10 +793,13 @@ def test_prompt_submit_same_lane_confirmation_prefers_target_job_lane(monkeypatc
         )
 
         assert resp["result"]["status"] == "complete"
+        active = server.get_background_worker_job("sid", lane="research")
+        assert active is not None
+        assert active["metadata"]["control_contract"]["mode"] == "append_worker"
         complete_calls = [call for call in emits if call[0] == "message.complete"]
         assert len(complete_calls) == 1
         text = complete_calls[0][2]["text"]
-        assert "already" in text.lower() or "先取消" in text
+        assert "append" in text.lower() or "继续运行" in text
     finally:
         server._sessions.pop("sid", None)
         server.clear_background_worker_job("sid", lane="research")

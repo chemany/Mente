@@ -43,6 +43,11 @@ from mente.memory.context import persist_explicit_memory_write
 from mente.memory.fact_normalization import normalize_memory_fact_text
 from mente.memory.promoter import MemoryPromoter
 from mente.memory.repository import SQLiteMemoryRepository
+from mente.mente_inventory import (
+    build_mente_inventory_context,
+    build_mente_inventory_routing_hint,
+    render_mente_inventory_fact,
+)
 from mente.orchestrator.service import Orchestrator
 from mente.review.llm_memory_review import LLMMemoryReviewWorker
 from mente.review.memory_review import MemoryReviewWorker, build_memory_review_artifact
@@ -50,6 +55,16 @@ from mente.review.remember_intent import extract_explicit_remember_intent_facts
 from mente.review.session_synthesis import SessionSynthesisWorker, build_session_synthesis_artifact
 from mente.review.skill_review import SkillReviewWorker
 from mente.review.worker_summary_cache import persist_worker_summary_cache
+from mente.skills.catalog import (
+    load_combined_skill_catalog as _load_combined_skill_catalog,
+    load_skill_catalog as _load_skill_catalog,
+    match_skill_catalog_refs as _match_skill_catalog_refs,
+    skill_catalog_roots as _skill_catalog_roots,
+)
+from mente.skills.context import (
+    build_relevant_skill_context_fact,
+    build_worker_architecture_fact,
+)
 from mente.task_core.models import (
     DispatchMode,
     ExecutionMode,
@@ -68,6 +83,7 @@ _WECHAT_PUBLISHER_SKILL_REF = "media/wechat-publisher"
 _IMAGEGEN_SKILL_REF = "imagegen"
 _DEEP_RESEARCH_SKILL_REF = "research/deep-research-pro"
 _MENTE_CONFIG_ADMIN_SKILL_REF = "software-development/mente-config-admin"
+_XHS_DAILY_NEWS_SKILL_REF = "social-media/xhs-daily-news"
 DIRECTOR_LANE = "director"
 ENGINEERING_LANE = "engineering"
 RESEARCH_LANE = "research"
@@ -86,6 +102,8 @@ _CONTENT_PUBLISHING_TASK_PROFILE = "content_publishing"
 _DEEP_RESEARCH_TASK_PROFILE = "deep_research"
 _ARTIFACT_DELIVERY_TASK_PROFILE = "artifact_delivery"
 _CONFIG_ADMIN_TASK_PROFILE = "config_admin"
+_SELF_IMPROVEMENT_TASK_PROFILE = "self_improvement"
+_SKILL_AUDIT_TASK_PROFILE = "skill_audit"
 _ARTIFACT_DELIVERY_HOST_TIMEOUT_SECONDS = 180.0
 _DEEP_RESEARCH_NOTIFY_INTERVAL_SECONDS = 60.0
 _STATUS_FOLLOW_UP_HINTS: tuple[str, ...] = (
@@ -121,6 +139,145 @@ _DEEP_RESEARCH_HINTS: tuple[str, ...] = (
     "深度调研",
     "deep research",
     "deep-research",
+)
+_PERSISTENT_PREFERENCE_HINTS: tuple[str, ...] = (
+    "以后",
+    "今后",
+    "后续",
+    "未来",
+    "默认",
+    "自动",
+    "每次",
+    "每次都",
+    "always",
+    "default",
+    "automatically",
+    "future",
+)
+_PERSISTENT_MUTATION_HINTS: tuple[str, ...] = (
+    "记住",
+    "加入记忆",
+    "记到记忆",
+    "写入记忆",
+    "记忆",
+    "修改技能",
+    "技能中",
+    "改技能",
+    "配置",
+    "config",
+    "skill",
+)
+_DEEP_RESEARCH_DELIVERY_HINTS: tuple[str, ...] = (
+    "深度研究",
+    "深度调研",
+    "deep research",
+    "deep-research",
+    "报告",
+    "调研报告",
+    "research report",
+)
+_SKILL_AUDIT_REVIEW_HINTS: tuple[str, ...] = (
+    "优化",
+    "优化项",
+    "改进",
+    "建议",
+    "审查",
+    "评审",
+    "检查",
+    "review",
+    "inspect",
+    "improve",
+    "optimization",
+)
+_SKILL_AUDIT_TARGET_HINTS: tuple[str, ...] = (
+    "技能",
+    "skill",
+    "skill.md",
+    "脚本",
+    "代码",
+    "工作流",
+    "workflow",
+)
+_SELF_IMPROVEMENT_REQUEST_HINTS: tuple[str, ...] = (
+    "自我完善",
+    "自我改进",
+    "自我优化",
+    "完善自己",
+    "改进自己",
+    "优化自己",
+    "修复自己",
+    "自己解决",
+    "自动解决",
+    "自己修复",
+    "自动修复",
+    "自己处理",
+    "自己改",
+    "本身的能力",
+    "强化能力",
+    "增强能力",
+    "提升能力",
+    "以后都这样",
+    "未来都这样",
+)
+_SELF_IMPROVEMENT_ENGINEERING_HINTS: tuple[str, ...] = (
+    "codex runtime",
+    "编程",
+    "写代码",
+    "修改代码",
+    "改代码",
+    "代码",
+    "脚本",
+    "script",
+    "技能",
+    "skill",
+    "工作流",
+    "workflow",
+    "路由",
+    "route",
+    "bridge",
+    "prompt",
+    "逻辑",
+    "runtime",
+    "能力",
+)
+_SELF_IMPROVEMENT_CONFIG_HINTS: tuple[str, ...] = (
+    "config.yaml",
+    ".env",
+    "配置",
+    "gateway",
+    "provider",
+    "auth.json",
+    "登录态",
+    "凭证",
+    "密钥",
+)
+_SELF_IMPROVEMENT_CAPABILITY_SUBJECT_HINTS: tuple[str, ...] = (
+    "mente",
+    "主agent",
+    "主代理",
+    "系统",
+    "本身",
+    "这个系统",
+    "这个代理",
+)
+_SELF_IMPROVEMENT_CAPABILITY_ACTION_HINTS: tuple[str, ...] = (
+    "强化",
+    "增强",
+    "提升",
+    "提高",
+    "改进",
+    "优化",
+    "完善",
+    "升级",
+)
+_SELF_IMPROVEMENT_CAPABILITY_TARGET_HINTS: tuple[str, ...] = (
+    "自己解决",
+    "自动解决",
+    "自己修复",
+    "自动修复",
+    "自己处理",
+    "自己改",
+    "会自己",
 )
 _CONFIG_ADMIN_ACTION_HINTS: tuple[str, ...] = (
     "改",
@@ -464,6 +621,7 @@ _DEFAULT_SKILL_OWNER_LANE_BY_REF: Mapping[str, str] = {
     _IMAGEGEN_SKILL_REF: WRITING_LANE,
     _DEEP_RESEARCH_SKILL_REF: RESEARCH_LANE,
     _MENTE_CONFIG_ADMIN_SKILL_REF: CONFIG_ADMIN_LANE,
+    _XHS_DAILY_NEWS_SKILL_REF: WRITING_LANE,
 }
 _AGENT_REGISTRY_PATH = Path(__file__).resolve().parents[1] / "agents" / "registry.yaml"
 
@@ -546,6 +704,36 @@ def _build_config_admin_workflow_brief() -> str:
     )
 
 
+def _build_self_improvement_workflow_brief() -> str:
+    """Return a compact workflow brief for self-improvement coding tasks."""
+
+    return "\n".join(
+        [
+            "Self-improvement workflow brief:",
+            "1. Treat this as a real Mente self-modification task, not a memory-only acknowledgement.",
+            "2. Use Codex runtime to inspect and modify the narrowest Mente-owned files, skills, or workflow code that change the requested future behavior.",
+            "3. Prefer editing the actual modifiable surface over adding a vague promise in the reply.",
+            "4. Keep changes scoped, verify the new behavior, and report the exact files changed.",
+            "5. If the request touches live behavior, restart the relevant service only when the changed surface requires it.",
+        ]
+    )
+
+
+def _build_skill_audit_workflow_brief() -> str:
+    """Return a compact workflow brief for skill-audit coding tasks."""
+
+    return "\n".join(
+        [
+            "Skill audit workflow brief:",
+            "1. Treat this as a code-and-workflow inspection task for the referenced skill, not as a request to execute the skill end-to-end.",
+            "2. Read the target skill's SKILL.md and directly relevant scripts first.",
+            "3. Keep exploration scoped to the skill directory and minimal supporting code needed to explain concrete optimization opportunities.",
+            "4. Do not enumerate MCP resources or broad home-directory contents unless the user explicitly asks for that investigation.",
+            "5. Final reply should list the highest-signal optimization items with concrete file references.",
+        ]
+    )
+
+
 def _build_artifact_delivery_workflow_brief() -> str:
     """Return a compact workflow brief for follow-up artifact delivery tasks."""
 
@@ -591,6 +779,24 @@ def _build_deep_research_output_plan() -> str:
     )
 
 
+def _infer_deep_research_product_name(message: str | None) -> str | None:
+    """Extract a stable research target hint from one user request when possible."""
+
+    text = str(message or "").strip()
+    if not text:
+        return None
+    normalized = re.sub(r"^\s*调用(?:深度研究)?技能[，,\s]*", "", text)
+    match = re.search(r"(?:深度研究|深度调研)(?:一下|下)?(?P<subject>.+)", normalized, re.IGNORECASE)
+    candidate = match.group("subject") if match else normalized
+    candidate = candidate.strip(" ：:，,。.!！?？\"'")
+    candidate = re.sub(r"这一个标准化学品.*$", "", candidate)
+    candidate = re.sub(r"(?:并|并且)?(?:输出|形成|生成|撰写|整理|做成).*$", "", candidate)
+    candidate = re.sub(r"(?:完整|万字)?调研报告.*$", "", candidate)
+    candidate = re.sub(r"(?:完整)?报告.*$", "", candidate)
+    candidate = candidate.strip(" ：:，,。.!！?？\"'")
+    return candidate or None
+
+
 def _build_artifact_delivery_inputs_fact(artifact_paths: list[str]) -> str:
     """Return one deterministic artifact-input fact for follow-up delivery tasks."""
 
@@ -599,11 +805,19 @@ def _build_artifact_delivery_inputs_fact(artifact_paths: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _build_deep_research_execution_plan(*, workspace: str) -> str:
+def _build_deep_research_execution_plan(*, workspace: str, user_request: str | None = None) -> str:
     """Return deterministic orchestration guidance for managed deep research."""
 
     skill_root = get_skills_dir() / "research" / "deep-research-pro"
+    skill_entrypoint = skill_root / "deep_research_pro.py"
+    skill_instructions = skill_root / "SKILL.md"
     resolved_workspace = Path(workspace).expanduser()
+    output_root = resolve_deep_research_output_root()
+    product_name = _infer_deep_research_product_name(user_request)
+    quoted_product_name = json.dumps(product_name or "<研究对象>", ensure_ascii=False)
+    launch_command = (
+        f"python {skill_entrypoint} {quoted_product_name} --output-dir {output_root}"
+    )
     return "\n".join(
         [
             "Deep research execution plan:",
@@ -611,8 +825,13 @@ def _build_deep_research_execution_plan(*, workspace: str) -> str:
             "- Recommended worker ownership: chapter_1 + chapter_4; chapter_2 + chapter_3; chapter_5 + chapter_6 + chapter_7.",
             f"- Active workspace: {resolved_workspace}",
             f"- Skill root: {skill_root}",
-            f"- Preferred direct parallel entrypoint: {skill_root / 'deep_research_pro.py'}",
+            f"- Preferred direct parallel entrypoint: {skill_entrypoint}",
+            f"- Canonical instructions file: {skill_instructions}",
+            "- Do not probe README.md in the skill root; the managed instructions live in SKILL.md.",
+            f"- Managed CLI launch command: {launch_command}",
             "- Keep exploration scoped to the active workspace and the deep-research skill root.",
+            "- If one targeted read is still necessary, read SKILL.md or deep_research_pro.py once, then run the managed CLI immediately.",
+            "- Prefer the provided absolute paths and launch command over shell directory-probing commands.",
             "- Avoid broad repository or home-directory scans before delegating work.",
             "- Each worker should finish its assigned chapters, save intermediate chapter artifacts, and return concise findings plus artifact paths to the parent.",
             "- The parent should merge validated chapter outputs once, then generate the final Markdown, HTML, and DOCX report artifacts.",
@@ -801,6 +1020,11 @@ def looks_like_gateway_recent_artifact_delivery_request(
 ) -> bool:
     """Return whether the latest message is a narrow follow-up to deliver recent artifacts."""
 
+    if looks_like_gateway_persistent_deep_research_preference_request(
+        message=message,
+        channel_prompt=channel_prompt,
+    ):
+        return False
     artifact_paths = _recent_snapshot_artifacts(recent_task_snapshot)
     if not artifact_paths:
         return False
@@ -823,6 +1047,11 @@ def looks_like_gateway_recent_operator_follow_up_request(
 
     if _looks_like_status_follow_up_request(message) or _looks_like_continue_task_request(message):
         return False
+    if looks_like_gateway_persistent_deep_research_preference_request(
+        message=message,
+        channel_prompt=channel_prompt,
+    ):
+        return False
     capsule = _recent_snapshot_operator_capsule(recent_task_snapshot)
     if not capsule:
         return False
@@ -834,6 +1063,105 @@ def looks_like_gateway_recent_operator_follow_up_request(
         and any(hint in haystack for hint in _OPERATOR_FOLLOW_UP_TARGET_HINTS)
         and any(hint in haystack for hint in _OPERATOR_FOLLOW_UP_MUTATION_HINTS)
     )
+
+
+def looks_like_gateway_persistent_deep_research_preference_request(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+) -> bool:
+    """Return whether the user is changing future deep-research delivery behavior."""
+
+    haystack = _normalize_text_haystack(message, channel_prompt)
+    if not haystack:
+        return False
+    return (
+        any(hint in haystack for hint in _PERSISTENT_PREFERENCE_HINTS)
+        and any(hint in haystack for hint in _PERSISTENT_MUTATION_HINTS)
+        and any(hint in haystack for hint in _DEEP_RESEARCH_DELIVERY_HINTS)
+        and any(hint in haystack for hint in _ARTIFACT_DELIVERY_ACTION_HINTS)
+        and any(hint in haystack for hint in _ARTIFACT_DELIVERY_TARGET_HINTS)
+    )
+
+
+def looks_like_gateway_self_improvement_request(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether the user is asking Mente to modify its own behavior/code."""
+
+    haystack = _normalize_text_haystack(message, channel_prompt)
+    if not haystack:
+        return False
+    if _looks_like_gateway_self_improvement_capability_request(
+        haystack=haystack,
+        recent_task_snapshot=recent_task_snapshot,
+    ):
+        return True
+    improvement_intent = (
+        looks_like_gateway_persistent_deep_research_preference_request(
+            message=message,
+            channel_prompt=channel_prompt,
+        )
+        or any(hint in haystack for hint in _SELF_IMPROVEMENT_REQUEST_HINTS)
+    )
+    if not improvement_intent:
+        return False
+    if not any(hint in haystack for hint in _SELF_IMPROVEMENT_ENGINEERING_HINTS):
+        return False
+    if isinstance(recent_task_snapshot, Mapping):
+        return True
+    return (
+        any(hint in haystack for hint in _DEEP_RESEARCH_DELIVERY_HINTS)
+        or "mente" in haystack
+        or "自己" in haystack
+    )
+
+
+def _looks_like_gateway_self_improvement_capability_request(
+    *,
+    haystack: str,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether the user is asking Mente to upgrade its own capability."""
+
+    if not haystack:
+        return False
+    if not (
+        any(hint in haystack for hint in _SELF_IMPROVEMENT_CAPABILITY_SUBJECT_HINTS)
+        or isinstance(recent_task_snapshot, Mapping)
+    ):
+        return False
+    if not any(hint in haystack for hint in _SELF_IMPROVEMENT_CAPABILITY_ACTION_HINTS):
+        return False
+    if not any(hint in haystack for hint in _SELF_IMPROVEMENT_CAPABILITY_TARGET_HINTS):
+        return False
+    return True
+
+
+def _resolve_gateway_self_improvement_lane(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Resolve whether a request should trigger real self-modification work."""
+
+    if not looks_like_gateway_self_improvement_request(
+        message=message,
+        channel_prompt=channel_prompt,
+        recent_task_snapshot=recent_task_snapshot,
+    ):
+        return None
+    haystack = _normalize_text_haystack(message, channel_prompt)
+    if (
+        any(hint in haystack for hint in _SELF_IMPROVEMENT_CONFIG_HINTS)
+        and not any(hint in haystack for hint in _SELF_IMPROVEMENT_ENGINEERING_HINTS)
+    ):
+        return CONFIG_ADMIN_LANE
+    return ENGINEERING_LANE
 
 
 def recover_gateway_content_publishing_artifacts(
@@ -977,6 +1305,10 @@ def _resolve_lane_from_task_profile(
         return RESEARCH_LANE
     if normalized_task_profile == _CONFIG_ADMIN_TASK_PROFILE:
         return CONFIG_ADMIN_LANE
+    if normalized_task_profile == _SELF_IMPROVEMENT_TASK_PROFILE:
+        return ENGINEERING_LANE
+    if normalized_task_profile == _SKILL_AUDIT_TASK_PROFILE:
+        return ENGINEERING_LANE
     if normalized_task_profile != _ARTIFACT_DELIVERY_TASK_PROFILE:
         return None
 
@@ -1065,6 +1397,45 @@ def _looks_like_engineering_request(
         any(hint in haystack for hint in _ENGINEERING_ACTION_HINTS)
         and any(hint in haystack for hint in _ENGINEERING_TARGET_HINTS)
     )
+
+
+def _resolve_skill_audit_skill_refs(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+    inferred_skill_refs: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    explicit_skill_resolution = _resolve_explicit_skill_request(
+        message=message,
+        channel_prompt=channel_prompt,
+        inferred_skill_refs=inferred_skill_refs,
+    )
+    return _dedupe_skill_refs(
+        [*inferred_skill_refs, *explicit_skill_resolution.known_skill_refs]
+    )
+
+
+def _looks_like_skill_audit_request(
+    *,
+    message: str,
+    channel_prompt: str | None = None,
+    inferred_skill_refs: tuple[str, ...] = (),
+) -> tuple[bool, tuple[str, ...]]:
+    haystack = _normalize_text_haystack(message, channel_prompt)
+    if not haystack:
+        return False, ()
+    resolved_skill_refs = _resolve_skill_audit_skill_refs(
+        message=message,
+        channel_prompt=channel_prompt,
+        inferred_skill_refs=inferred_skill_refs,
+    )
+    if not any(hint in haystack for hint in _SKILL_AUDIT_REVIEW_HINTS):
+        return False, resolved_skill_refs
+    if not any(hint in haystack for hint in _SKILL_AUDIT_TARGET_HINTS):
+        return False, resolved_skill_refs
+    if not resolved_skill_refs and "技能" not in haystack and "skill" not in haystack:
+        return False, resolved_skill_refs
+    return True, resolved_skill_refs
 
 
 def _resolve_lane_classifier_main_runtime(
@@ -1326,6 +1697,14 @@ def _resolve_explicit_skill_request(
         if alias in haystack:
             known_skill_refs.append(skill_ref)
 
+    if not known_skill_refs and not unknown_skill_refs:
+        catalog_matches = _match_skill_catalog_refs(
+            message=message,
+            channel_prompt=channel_prompt,
+        )
+        if catalog_matches:
+            known_skill_refs.extend(catalog_matches)
+
     known_skill_refs_tuple = _dedupe_skill_refs(known_skill_refs)
     unknown_skill_refs_tuple = _dedupe_skill_refs(unknown_skill_refs)
     if not known_skill_refs_tuple and inferred_skill_refs:
@@ -1441,9 +1820,40 @@ def resolve_dispatch_decision(
 ) -> DispatchDecision:
     """Resolve one deterministic-first dispatch decision for a conversation turn."""
 
+    self_improvement_lane = _resolve_gateway_self_improvement_lane(
+        message=message,
+        channel_prompt=channel_prompt,
+        recent_task_snapshot=recent_task_snapshot,
+    )
     inferred_skill_refs = tuple(
         _infer_gateway_skill_refs(message=message, channel_prompt=channel_prompt)
     )
+    if self_improvement_lane == ENGINEERING_LANE:
+        return _build_background_dispatch_decision(
+            lane=ENGINEERING_LANE,
+            task_profile=_SELF_IMPROVEMENT_TASK_PROFILE,
+            skill_refs=(),
+            reason="deterministic:self_improvement:engineering",
+        )
+    if self_improvement_lane == CONFIG_ADMIN_LANE:
+        return _build_background_dispatch_decision(
+            lane=CONFIG_ADMIN_LANE,
+            task_profile=_CONFIG_ADMIN_TASK_PROFILE,
+            skill_refs=(_MENTE_CONFIG_ADMIN_SKILL_REF,),
+            reason="deterministic:self_improvement:config_admin",
+        )
+    skill_audit_request, skill_audit_skill_refs = _looks_like_skill_audit_request(
+        message=message,
+        channel_prompt=channel_prompt,
+        inferred_skill_refs=inferred_skill_refs,
+    )
+    if skill_audit_request:
+        return _build_background_dispatch_decision(
+            lane=ENGINEERING_LANE,
+            task_profile=_SKILL_AUDIT_TASK_PROFILE,
+            skill_refs=skill_audit_skill_refs,
+            reason="deterministic:skill_audit:engineering",
+        )
     if _looks_like_explicit_skill_request(
         message=message,
         channel_prompt=channel_prompt,
@@ -1684,15 +2094,45 @@ def _infer_gateway_skill_refs(*, message: str, channel_prompt: str | None = None
 
     haystack = _normalize_text_haystack(message, channel_prompt)
     inferred: list[str] = []
+    self_improvement_lane = _resolve_gateway_self_improvement_lane(
+        message=message,
+        channel_prompt=channel_prompt,
+    )
+    if self_improvement_lane == ENGINEERING_LANE:
+        return []
+    if self_improvement_lane == CONFIG_ADMIN_LANE:
+        return [_MENTE_CONFIG_ADMIN_SKILL_REF]
+    persistent_deep_research_preference = (
+        looks_like_gateway_persistent_deep_research_preference_request(
+            message=message,
+            channel_prompt=channel_prompt,
+        )
+    )
     if any(hint in haystack for hint in _WECHAT_PUBLISH_HINTS):
         inferred.append(_WECHAT_PUBLISHER_SKILL_REF)
     if any(hint in haystack for hint in _IMAGEGEN_HINTS):
         inferred.append(_IMAGEGEN_SKILL_REF)
-    if any(hint in haystack for hint in _DEEP_RESEARCH_HINTS):
+    if any(hint in haystack for hint in _DEEP_RESEARCH_HINTS) and not persistent_deep_research_preference:
         inferred.append(_DEEP_RESEARCH_SKILL_REF)
     if (
-        any(hint in haystack for hint in _CONFIG_ADMIN_ACTION_HINTS)
-        and any(hint in haystack for hint in _CONFIG_ADMIN_TARGET_HINTS)
+        ("技能" in haystack or "skill" in haystack)
+        and not inferred
+        and not _EXPLICIT_SKILL_TOKEN_PATTERN.search(haystack)
+    ):
+        inferred.extend(
+            _match_skill_catalog_refs(
+                message=message,
+                channel_prompt=channel_prompt,
+            )
+        )
+    if (
+        (
+            persistent_deep_research_preference
+            or (
+                any(hint in haystack for hint in _CONFIG_ADMIN_ACTION_HINTS)
+                and any(hint in haystack for hint in _CONFIG_ADMIN_TARGET_HINTS)
+            )
+        )
         and _MENTE_CONFIG_ADMIN_SKILL_REF not in inferred
     ):
         inferred.append(_MENTE_CONFIG_ADMIN_SKILL_REF)
@@ -1702,12 +2142,12 @@ def _infer_gateway_skill_refs(*, message: str, channel_prompt: str | None = None
 def _resolve_gateway_task_profile(skill_refs: list[str]) -> str | None:
     """Return a narrow execution profile for gateway requests when recognized."""
 
+    if _MENTE_CONFIG_ADMIN_SKILL_REF in skill_refs:
+        return _CONFIG_ADMIN_TASK_PROFILE
     if _WECHAT_PUBLISHER_SKILL_REF in skill_refs:
         return _CONTENT_PUBLISHING_TASK_PROFILE
     if _DEEP_RESEARCH_SKILL_REF in skill_refs:
         return _DEEP_RESEARCH_TASK_PROFILE
-    if _MENTE_CONFIG_ADMIN_SKILL_REF in skill_refs:
-        return _CONFIG_ADMIN_TASK_PROFILE
     return None
 
 
@@ -1776,10 +2216,17 @@ def _resolve_gateway_workspace(
     if _has_explicit_workspace_override(workspace):
         return resolved_workspace
 
+    if effective_task_profile == _SKILL_AUDIT_TASK_PROFILE:
+        skill_workspace = _resolve_skill_audit_workspace(skill_refs)
+        if skill_workspace is not None:
+            return skill_workspace
+        return _prefer_repo_workspace_for_scoped_task(resolved_workspace)
+
     if effective_task_profile in {
         _CONTENT_PUBLISHING_TASK_PROFILE,
         _ARTIFACT_DELIVERY_TASK_PROFILE,
         _CONFIG_ADMIN_TASK_PROFILE,
+        _SELF_IMPROVEMENT_TASK_PROFILE,
     }:
         return _prefer_repo_workspace_for_scoped_task(resolved_workspace)
 
@@ -1807,6 +2254,22 @@ def _prefer_repo_workspace_for_scoped_task(resolved_workspace: str) -> str:
     if current_cwd and current_cwd != resolved_workspace and (current_cwd_path / ".git").exists():
         return current_cwd
     return resolved_workspace
+
+
+def _resolve_skill_audit_workspace(
+    skill_refs: list[str] | tuple[str, ...] | None,
+) -> str | None:
+    normalized_skill_refs = _normalize_skill_refs(skill_refs)
+    if not normalized_skill_refs:
+        return None
+
+    skills_dir = get_skills_dir()
+    for skill_ref in normalized_skill_refs:
+        candidate = (skills_dir / skill_ref).expanduser()
+        skill_md = candidate / "SKILL.md"
+        if skill_md.is_file():
+            return str(candidate)
+    return None
 
 
 def _ensure_lane_workspace(lane: str) -> str:
@@ -2104,6 +2567,39 @@ def _build_recent_task_snapshot_fact(snapshot: Mapping[str, Any]) -> str | None:
         "- If the user asks to continue or resume the previous task, continue from this snapshot instead of claiming the prior task is unavailable."
     )
     return "\n".join(lines)
+
+
+def _should_attach_mente_inventory(*, task_profile: str | None) -> bool:
+    return task_profile in {
+        _SELF_IMPROVEMENT_TASK_PROFILE,
+        _CONFIG_ADMIN_TASK_PROFILE,
+        _SKILL_AUDIT_TASK_PROFILE,
+    }
+
+
+def _build_mente_inventory_payload(
+    *,
+    task_profile: str | None,
+    worker_lane: str | None = None,
+    skill_refs: list[str] | tuple[str, ...] | None,
+    recent_task_snapshot: Mapping[str, Any] | None = None,
+) -> tuple[str | None, dict[str, object]] | None:
+    if not _should_attach_mente_inventory(task_profile=task_profile):
+        return None
+    inventory = build_mente_inventory_context(
+        referenced_skill_refs=skill_refs,
+        recent_artifact_paths=_recent_snapshot_artifacts(recent_task_snapshot),
+    )
+    metadata = inventory.as_metadata()
+    routing_hint = build_mente_inventory_routing_hint(
+        task_profile=task_profile,
+        worker_lane=worker_lane,
+        skill_refs=skill_refs,
+        inventory=inventory,
+    )
+    if routing_hint is not None:
+        metadata["routing_hint"] = routing_hint
+    return render_mente_inventory_fact(inventory), metadata
 
 
 def _build_active_lane_handoff_capsule_fact(snapshot: Mapping[str, Any]) -> str | None:
@@ -2447,11 +2943,29 @@ def build_gateway_task(
     elif recent_task_snapshot and (
         _looks_like_continue_task_request(message)
         or task_profile == _ARTIFACT_DELIVERY_TASK_PROFILE
+        or task_profile == _SELF_IMPROVEMENT_TASK_PROFILE
         or operator_follow_up
     ):
         snapshot_fact = _build_recent_task_snapshot_fact(recent_task_snapshot)
         if snapshot_fact:
             memory_facts.append(snapshot_fact)
+    if lane != DIRECTOR_LANE or task_profile or worker_skill_refs:
+        memory_facts.append(build_worker_architecture_fact())
+    skill_context_fact = build_relevant_skill_context_fact(
+        worker_skill_refs or inferred_skill_refs
+    )
+    if skill_context_fact:
+        memory_facts.append(skill_context_fact)
+    mente_inventory_payload = _build_mente_inventory_payload(
+        task_profile=task_profile,
+        worker_lane=worker_lane or lane,
+        skill_refs=worker_skill_refs or inferred_skill_refs,
+        recent_task_snapshot=recent_task_snapshot,
+    )
+    if mente_inventory_payload is not None:
+        inventory_fact, _ = mente_inventory_payload
+        if inventory_fact:
+            memory_facts.append(inventory_fact)
 
     platform = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
     metadata = {
@@ -2483,6 +2997,8 @@ def build_gateway_task(
         "thread_id": getattr(source, "thread_id", None),
         "skill_refs": list(inferred_skill_refs),
     }
+    if mente_inventory_payload is not None:
+        metadata["mente_inventory"] = mente_inventory_payload[1]
     operator_capsule = _resolve_task_operator_capsule(
         task_profile=task_profile,
         skill_refs=inferred_skill_refs,
@@ -2588,9 +3104,42 @@ def build_gateway_task(
         acceptance_criteria.append(
             "If any settings change, the final reply must state the exact file, key, and restart action performed, with secrets redacted."
         )
+    if task_profile == _SELF_IMPROVEMENT_TASK_PROFILE:
+        memory_facts.append(_build_self_improvement_workflow_brief())
+        constraints.append(
+            "Do not stop at a memory-only acknowledgement when the user asked Mente to improve its own future behavior."
+        )
+        constraints.append(
+            "Keep edits scoped to Mente-owned, user-modifiable files, skills, prompts, routes, or workflow code directly relevant to the requested behavior change."
+        )
+        acceptance_criteria.append(
+            "Use Codex runtime to inspect and modify the relevant Mente-owned files instead of replying with a promise to remember."
+        )
+        acceptance_criteria.append(
+            "If behavior changed, the final reply must identify the exact files changed and verification performed."
+        )
+    if task_profile == _SKILL_AUDIT_TASK_PROFILE:
+        memory_facts.append(_build_skill_audit_workflow_brief())
+        constraints.append(
+            "Treat this as a skill source review task; inspect the referenced skill files directly before exploring unrelated workspace contents."
+        )
+        constraints.append(
+            "Do not enumerate MCP resources or broad home-directory contents unless a concrete blocker makes them necessary."
+        )
+        acceptance_criteria.append(
+            "Review the referenced skill's SKILL.md and directly relevant scripts, then report concrete optimization items with file references."
+        )
+        acceptance_criteria.append(
+            "Do not execute the full skill workflow unless the user explicitly asked for execution or a concrete optimization claim requires verification."
+        )
     if _DEEP_RESEARCH_SKILL_REF in inferred_skill_refs:
         memory_facts.append(_build_deep_research_workflow_brief())
-        memory_facts.append(_build_deep_research_execution_plan(workspace=resolved_workspace))
+        memory_facts.append(
+            _build_deep_research_execution_plan(
+                workspace=resolved_workspace,
+                user_request=message,
+            )
+        )
         memory_facts.append(_build_deep_research_output_plan())
         constraints.append(
             "Do not stop after intermediate findings; complete the full deep-research report workflow in this turn."
@@ -2721,6 +3270,16 @@ def build_coordinator_task(
     if decision.reason:
         dispatch_summary_lines.append(f"- Reason: {decision.reason}")
     memory_facts.append("\n".join(dispatch_summary_lines))
+    mente_inventory_payload = _build_mente_inventory_payload(
+        task_profile=task_profile,
+        worker_lane=worker_lane or decision.lane,
+        skill_refs=worker_skill_refs or inferred_skill_refs,
+        recent_task_snapshot=recent_task_snapshot,
+    )
+    if mente_inventory_payload is not None:
+        inventory_fact, _ = mente_inventory_payload
+        if inventory_fact:
+            memory_facts.append(inventory_fact)
 
     platform = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
     metadata = {
@@ -2752,6 +3311,8 @@ def build_coordinator_task(
         "thread_id": getattr(source, "thread_id", None),
         "skill_refs": list(inferred_skill_refs),
     }
+    if mente_inventory_payload is not None:
+        metadata["mente_inventory"] = mente_inventory_payload[1]
     operator_capsule = _resolve_task_operator_capsule(
         task_profile=task_profile,
         skill_refs=inferred_skill_refs,
@@ -2866,11 +3427,13 @@ def build_worker_task_from_dispatch(
         decision=decision,
         task_id=task_id,
     )
-    # Background workers report progress and lifecycle through persisted job/task state.
-    # They do not need gateway runtime continuity, and fail-closed to stateless execution
-    # to avoid session-mode replay hazards in tool-heavy specialist runs.
-    task.execution_mode = ExecutionMode.STATELESS
-    task.execution_session = None
+    # Managed deep-research workers benefit from the same bounded continuity contract as
+    # the parent gateway turn so prompt caching and resume handoff remain available during
+    # long-running report workflows. Other background workers still fail closed to stateless
+    # execution to avoid session replay hazards in generic specialist runs.
+    if str(task.metadata.get("task_profile") or "").strip().lower() != _DEEP_RESEARCH_TASK_PROFILE:
+        task.execution_mode = ExecutionMode.STATELESS
+        task.execution_session = None
     task.role = TaskRole.WORKER
     task.parent_task_id = coordinator_task.task_id
     task.job_id = coordinator_task.job_id
@@ -3182,11 +3745,30 @@ def build_tui_task(
         if capsule_fact:
             memory_facts.append(capsule_fact)
     elif recent_task_snapshot and (
-        _looks_like_continue_task_request(user_message) or operator_follow_up
+        _looks_like_continue_task_request(user_message)
+        or task_profile == _SELF_IMPROVEMENT_TASK_PROFILE
+        or operator_follow_up
     ):
         snapshot_fact = _build_recent_task_snapshot_fact(recent_task_snapshot)
         if snapshot_fact:
             memory_facts.append(snapshot_fact)
+    if lane != DIRECTOR_LANE or task_profile or worker_skill_refs:
+        memory_facts.append(build_worker_architecture_fact())
+    skill_context_fact = build_relevant_skill_context_fact(
+        worker_skill_refs or inferred_skill_refs
+    )
+    if skill_context_fact:
+        memory_facts.append(skill_context_fact)
+    mente_inventory_payload = _build_mente_inventory_payload(
+        task_profile=task_profile,
+        worker_lane=worker_lane or lane,
+        skill_refs=worker_skill_refs or inferred_skill_refs,
+        recent_task_snapshot=recent_task_snapshot,
+    )
+    if mente_inventory_payload is not None:
+        inventory_fact, _ = mente_inventory_payload
+        if inventory_fact:
+            memory_facts.append(inventory_fact)
 
     metadata = {
         "source": "tui",
@@ -3209,6 +3791,8 @@ def build_tui_task(
         ),
         "skill_refs": list(inferred_skill_refs),
     }
+    if mente_inventory_payload is not None:
+        metadata["mente_inventory"] = mente_inventory_payload[1]
     operator_capsule = _resolve_task_operator_capsule(
         task_profile=task_profile,
         skill_refs=inferred_skill_refs,
@@ -3278,6 +3862,16 @@ def build_tui_task(
         objective = "Clarify the exact skill or worker owner needed before dispatching the user's request."
         acceptance_criteria.append(
             "Ask one targeted clarification that identifies the missing skill or owning lane needed to continue."
+        )
+    elif task_profile == _SELF_IMPROVEMENT_TASK_PROFILE:
+        memory_facts.append(_build_self_improvement_workflow_brief())
+        acceptance_criteria.append(
+            "Treat self-improvement requests as real coding work on Mente-owned files, not as memory-only acknowledgements."
+        )
+    elif task_profile == _SKILL_AUDIT_TASK_PROFILE:
+        memory_facts.append(_build_skill_audit_workflow_brief())
+        acceptance_criteria.append(
+            "Treat skill audit requests as source inspection tasks on the referenced skill files, not as prompts to execute the skill workflow."
         )
 
     return Task(
@@ -3690,25 +4284,46 @@ def _apply_post_turn_conversation_workflow_contract(
 
     memory_review_contract = workflow_contract.get("memory_review")
     if isinstance(memory_review_contract, dict) and bool(memory_review_contract.get("enabled")):
-        result.metadata["memory_review"] = run_post_turn_memory_review(
+        memory_review = run_post_turn_memory_review(
             task_id=task.task_id,
             repository=repository,
             memory_repository=memory_repository,
+        )
+        _persist_task_result_metadata(
+            task=task,
+            result=result,
+            repository=repository,
+            metadata_key="memory_review",
+            metadata_value=memory_review,
         )
     llm_memory_review_contract = workflow_contract.get("llm_memory_review")
     if isinstance(llm_memory_review_contract, dict) and bool(
         llm_memory_review_contract.get("enabled")
     ):
-        result.metadata["llm_memory_review"] = run_post_turn_llm_memory_review(
+        llm_memory_review = run_post_turn_llm_memory_review(
             task_id=task.task_id,
             repository=repository,
             memory_repository=memory_repository,
         )
+        _persist_task_result_metadata(
+            task=task,
+            result=result,
+            repository=repository,
+            metadata_key="llm_memory_review",
+            metadata_value=llm_memory_review,
+        )
     skill_review_contract = workflow_contract.get("skill_review")
     if isinstance(skill_review_contract, dict) and bool(skill_review_contract.get("enabled")):
-        result.metadata["skill_review"] = run_post_turn_skill_review(
+        skill_review = run_post_turn_skill_review(
             task_id=task.task_id,
             repository=repository,
+        )
+        _persist_task_result_metadata(
+            task=task,
+            result=result,
+            repository=repository,
+            metadata_key="skill_review",
+            metadata_value=skill_review,
         )
     worker_summary_cache = persist_worker_summary_cache(
         task=task,
@@ -3727,10 +4342,17 @@ def _apply_post_turn_conversation_workflow_contract(
     if isinstance(session_synthesis_contract, dict) and bool(
         session_synthesis_contract.get("enabled")
     ):
-        result.metadata["session_synthesis"] = run_post_turn_session_synthesis(
+        session_synthesis = run_post_turn_session_synthesis(
             task_id=task.task_id,
             repository=repository,
             memory_repository=memory_repository,
+        )
+        _persist_task_result_metadata(
+            task=task,
+            result=result,
+            repository=repository,
+            metadata_key="session_synthesis",
+            metadata_value=session_synthesis,
         )
 
 

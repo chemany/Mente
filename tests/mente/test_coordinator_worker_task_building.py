@@ -67,14 +67,22 @@ def test_build_gateway_task_bundle_creates_explicit_coordinator_and_worker(tmp_p
     assert worker.skill_refs == ["research/deep-research-pro"]
     assert worker.worker_skill_refs == ["research/deep-research-pro"]
     assert worker.workspace == str(tmp_path)
-    assert worker.execution_mode is ExecutionMode.STATELESS
-    assert worker.execution_session is None
+    assert worker.execution_mode is ExecutionMode.SESSIONFUL
+    assert worker.execution_session == ExecutionSession(mode=SessionMode.START)
     assert worker.metadata["lane"] == "research"
     assert worker.metadata["task_profile"] == "deep_research"
     assert any(
         fact.startswith("Deep research workflow brief:")
         for fact in worker.memory_facts
     )
+    architecture_fact = next(
+        fact for fact in worker.memory_facts if fact.startswith("Mente worker architecture context:")
+    )
+    assert "background workers execute lane work" in architecture_fact
+    skill_context_fact = next(
+        fact for fact in worker.memory_facts if fact.startswith("Relevant skill context:")
+    )
+    assert "research/deep-research-pro" in skill_context_fact
     assert coordinator.execution_mode is ExecutionMode.SESSIONFUL
     assert coordinator.execution_session == ExecutionSession(mode=SessionMode.START)
 
@@ -124,8 +132,8 @@ def test_run_gateway_task_executes_worker_and_persists_coordinator_lineage(tmp_p
     assert executed_task.job_id == coordinator_task.job_id
     assert executed_task.worker_lane == "research"
     assert executed_task.worker_skill_refs == ["research/deep-research-pro"]
-    assert executed_task.execution_mode is ExecutionMode.STATELESS
-    assert executed_task.execution_session is None
+    assert executed_task.execution_mode is ExecutionMode.SESSIONFUL
+    assert executed_task.execution_session == ExecutionSession(mode=SessionMode.START)
     assert executed_task.metadata["task_profile"] == "deep_research"
     assert worker_task is not None
     assert worker_task.role == TaskRole.WORKER

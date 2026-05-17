@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -27,30 +28,30 @@ DEFAULT_INSTANCE = os.environ.get("REDNOTE_INSTANCE", "seller-main")
 
 
 def run_command(cmd, description, check=True):
-    """执行 shell 命令"""
+    """执行命令"""
     print(f"\n📌 {description}")
-    print(f"命令: {cmd}")
-    
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    
+    print(f"命令: {shlex.join(cmd)}")
+
+    result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
+
     if result.stdout:
         print(result.stdout)
     if result.stderr:
         print("STDERR:", result.stderr, file=sys.stderr)
-    
+
     if check and result.returncode != 0:
         print(f"❌ 命令失败 (exit code: {result.returncode})")
         return None
-    
+
     return result
 
 
 def check_rednote_status(instance):
     """检查 rednote 状态"""
     result = run_command(
-        f"rednote status --instance {instance}",
+        ["rednote", "status", "--instance", instance],
         f"检查 rednote 实例状态: {instance}",
-        check=False
+        check=False,
     )
     if result and result.returncode == 0:
         return True
@@ -60,9 +61,9 @@ def check_rednote_status(instance):
 def check_login(instance):
     """检查是否已登录"""
     result = run_command(
-        f"rednote check-login --instance {instance}",
+        ["rednote", "check-login", "--instance", instance],
         "检查登录状态",
-        check=False
+        check=False,
     )
     if result and result.returncode == 0:
         return True
@@ -126,23 +127,39 @@ def publish_to_xhs(date_str, output_dir=DEFAULT_OUTPUT_DIR, instance=DEFAULT_INS
 📌 点击主页查看更多
 
 #国际新闻 #时事热点 #全球视野 #新闻早报"""
-    
+
     # 构建图片参数
-    image_args = " ".join([f'--image "{img}"' for img in images])
-    
+    image_args: list[str] = []
+    for img in images:
+        image_args.extend(["--image", str(img)])
+
     # 构建命令
-    cmd = f"""rednote publish \\
---instance {instance} \\
---type image \\
-{image_args} \\
---title "{title}" \\
---content "{content}" \\
---tag 国际新闻 --tag 时事热点 --tag 全球视野 --tag 新闻早报 \\
---publish"""
-    
+    cmd = [
+        "rednote",
+        "publish",
+        "--instance",
+        instance,
+        "--type",
+        "image",
+        *image_args,
+        "--title",
+        title,
+        "--content",
+        content,
+        "--tag",
+        "国际新闻",
+        "--tag",
+        "时事热点",
+        "--tag",
+        "全球视野",
+        "--tag",
+        "新闻早报",
+        "--publish",
+    ]
+
     if dry_run:
         print("\n🔍 [DRY RUN] 将要执行的命令:")
-        print(cmd)
+        print(shlex.join(cmd))
         return True
     
     # 检查状态

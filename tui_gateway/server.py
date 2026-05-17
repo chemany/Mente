@@ -958,6 +958,49 @@ def _background_worker_explicit_summary(job: Mapping[str, Any]) -> str:
     return summary
 
 
+def _background_worker_summary_looks_terminal(summary: str | None) -> bool:
+    text = str(summary or "").strip().lower()
+    if not text:
+        return False
+    terminal_markers = (
+        "已完成",
+        "任务完成",
+        "deep research completed",
+        "markdown:",
+        "html:",
+        "docx:",
+        ".md",
+        ".html",
+        ".docx",
+    )
+    return any(marker in text for marker in terminal_markers)
+
+
+def _sanitize_completed_worker_summary(summary: str) -> str:
+    text = str(summary or "").strip()
+    if not text:
+        return ""
+    continuation_markers = (
+        "我继续",
+        "继续做",
+        "继续补充",
+        "继续扩写",
+        "继续完善",
+        "下一步继续",
+        "后续继续",
+        "将继续",
+    )
+    for marker in continuation_markers:
+        marker_index = text.find(marker)
+        if marker_index < 0:
+            continue
+        completed_part = text[:marker_index].rstrip("，,；;。!！?？ ")
+        if completed_part:
+            return f"{completed_part}。当前没有继续执行中的后台动作。"
+        return "当前没有继续执行中的后台动作。"
+    return text
+
+
 def _render_background_worker_status_message(
     job: Mapping[str, Any],
     *,
@@ -974,12 +1017,17 @@ def _render_background_worker_status_message(
     job_id = str(job.get("job_id") or "").strip()
     summary = _background_worker_summary_text(job)
     if normalized_status == "accepted":
-        next_step = _background_worker_default_next_step(job)
-        accepted_summary = summary or f"正在{next_step.rstrip('。')}"
-        reply = f"已转给 {lane} worker"
-        if job_id:
-            reply = f"{reply}（job {job_id}）"
-        return f"{reply}，{accepted_summary} 下一步：{next_step}"
+        if _background_worker_summary_looks_terminal(summary):
+            normalized_status = "completed"
+        else:
+            next_step = _background_worker_default_next_step(job)
+            accepted_summary = summary or f"正在{next_step.rstrip('。')}"
+            reply = f"已转给 {lane} worker"
+            if job_id:
+                reply = f"{reply}（job {job_id}）"
+            return f"{reply}，{accepted_summary} 下一步：{next_step}"
+    if normalized_status == "running" and _background_worker_summary_looks_terminal(summary):
+        normalized_status = "completed"
     if normalized_status in {"running", "queued", "paused", "cancelling"}:
         running_summary = _background_worker_explicit_summary(job) or summary or "正在处理当前任务。"
         prefix = f"{lane} worker"
@@ -998,7 +1046,9 @@ def _render_background_worker_status_message(
             f"建议下一步：{next_action}"
         )
     if normalized_status == "completed":
-        completed_summary = _background_worker_explicit_summary(job) or summary or "任务已完成。"
+        completed_summary = _sanitize_completed_worker_summary(
+            _background_worker_explicit_summary(job) or summary or "任务已完成。"
+        )
         artifact_names = _background_worker_artifact_names(job)
         prefix = f"{lane} worker"
         if job_id:
@@ -1281,6 +1331,138 @@ def _stage_background_worker_supersede(
     )
 
 
+def _stage_background_worker_append(
+    session_id: str,
+    *,
+    job: dict[str, Any],
+    user_revision: str,
+) -> dict[str, Any]:
+    request_id = uuid.uuid4().hex
+    lane = str(job.get("lane") or "")
+    control_contract = {
+        "action": "append",
+        "mode": "append_worker",
+        "runtime_mutation_supported": False,
+    }
+    existing_revisions = [
+        str(item).strip()
+        for item in ((job.get("metadata") or {}).get("appended_user_revisions") or [])
+        if str(item).strip()
+    ]
+    if user_revision not in existing_revisions:
+        existing_revisions.append(user_revision)
+    append_payload = {
+        "action": "append",
+        "mode": "append_worker",
+        "runtime_mutation_supported": False,
+        "lane": lane,
+        "request_id": request_id,
+        "task_profile": (job.get("metadata") or {}).get("task_profile"),
+        "skill_refs": list((job.get("metadata") or {}).get("skill_refs") or []),
+        "previous_job_id": str(job.get("job_id") or ""),
+        "previous_task_id": str(job.get("task_id") or ""),
+        "user_revision": user_revision,
+        "reason": "user_append",
+    }
+    appended_metadata = {
+        **dict(job.get("metadata") or {}),
+        "control_contract": control_contract,
+        "latest_appended_user_revision": user_revision,
+        "appended_user_revisions": existing_revisions[-5:],
+    }
+    controlled = register_background_worker_job(
+        session_id,
+        lane=lane,
+        job_id=str(job.get("job_id") or ""),
+        task_id=str(job.get("task_id") or ""),
+        summary=str(job.get("summary") or ""),
+        status=str(job.get("status") or "running"),
+        metadata=appended_metadata,
+        cancel_event=None,
+    )
+    _update_background_worker_task_metadata(
+        task_id=str(job.get("task_id") or ""),
+        mutate=lambda metadata: metadata.update(
+            {
+                "control_contract": control_contract,
+                "latest_appended_user_revision": user_revision,
+                "appended_user_revisions": [
+                    *[
+                        str(item).strip()
+                        for item in (metadata.get("appended_user_revisions") or [])
+                        if str(item).strip()
+                    ],
+                    user_revision,
+                ][-5:],
+            }
+        ),
+    )
+    previous_snapshot = _get_recent_task_snapshot(
+        session_id,
+        _normalize_background_worker_lane(lane),
+    )
+    snapshot_metadata = (
+        dict(previous_snapshot.get("metadata") or {})
+        if isinstance(previous_snapshot, dict)
+        else {}
+    )
+    snapshot_metadata.update(
+        {
+            "lane": lane,
+            "task_profile": (job.get("metadata") or {}).get("task_profile"),
+            "skill_refs": list(
+                (job.get("metadata") or {}).get("skill_refs")
+                or snapshot_metadata.get("skill_refs")
+                or []
+            ),
+            "pending_worker_control": append_payload,
+        }
+    )
+    follow_up_tasks: list[str] = []
+    if isinstance(previous_snapshot, dict):
+        for item in previous_snapshot.get("follow_up_tasks") or []:
+            normalized = str(item).strip()
+            if normalized and normalized not in follow_up_tasks:
+                follow_up_tasks.append(normalized)
+    if user_revision not in follow_up_tasks:
+        follow_up_tasks.append(user_revision)
+    _bind_recent_task_snapshot(
+        session_id,
+        lane=lane,
+        snapshot={
+            "user_request": (
+                str(previous_snapshot.get("user_request") or "").strip()
+                if isinstance(previous_snapshot, dict)
+                else user_revision
+            )
+            or user_revision,
+            "status": "needs_follow_up",
+            "assistant_summary": (
+                str(previous_snapshot.get("assistant_summary") or "").strip()
+                if isinstance(previous_snapshot, dict)
+                else str(job.get("summary") or "")
+            )
+            or str(job.get("summary") or ""),
+            "follow_up_tasks": follow_up_tasks,
+            "metadata": snapshot_metadata,
+            "updated_at": datetime.now().isoformat(),
+        },
+    )
+    agent = _get_background_worker_agent(session_id)
+    queue_follow_up = getattr(agent, "queue_background_worker_follow_up", None)
+    if callable(queue_follow_up):
+        try:
+            queue_follow_up(lane=lane, payload=append_payload)
+        except Exception:
+            logger.debug(
+                "failed to queue TUI worker follow-up for session %s lane %s",
+                session_id,
+                lane,
+                exc_info=True,
+            )
+    return controlled
+
+
 def _control_background_worker_job(
     session_id: str,
     *,
@@ -1476,10 +1658,17 @@ def _maybe_handle_background_worker_frontdesk_prompt(
     ):
         return _render_background_worker_status_message(current)
     if _background_worker_status_is_active(str(current.get("status") or "")) and _same_lane_background_worker_confirmation_needed(session_id, text):
-        lane = str(current.get("lane") or "worker")
+        follow_up = str(text or "").strip()
+        if not follow_up:
+            return None
+        appended = _stage_background_worker_append(
+            session_id,
+            job=current,
+            user_revision=follow_up,
+        )
         return (
-            f"A {lane} worker is already running for this session. "
-            f"Pause or cancel it first if you want to replace that job."
+            f"Kept the current {appended['lane']} worker running and queued your follow-up "
+            "to append on the next worker turn."
         )
     return None
 
@@ -2518,6 +2707,9 @@ class MenteTuiAgent:
         "_active_turn_controller",
         "_continuity_payloads",
         "_recent_task_snapshots",
+        "_queued_worker_follow_ups",
+        "_last_completed_background_lane",
+        "_last_completed_background_status",
         "_last_reasoning",
     }
 
@@ -2528,6 +2720,9 @@ class MenteTuiAgent:
         object.__setattr__(self, "_active_turn_controller", None)
         object.__setattr__(self, "_continuity_payloads", {})
         object.__setattr__(self, "_recent_task_snapshots", {})
+        object.__setattr__(self, "_queued_worker_follow_ups", {})
+        object.__setattr__(self, "_last_completed_background_lane", None)
+        object.__setattr__(self, "_last_completed_background_status", None)
         object.__setattr__(self, "_last_reasoning", None)
 
     def __getattr__(self, name: str):
@@ -2546,6 +2741,66 @@ class MenteTuiAgent:
         inner_interrupt = getattr(self._inner_agent, "interrupt", None)
         if callable(inner_interrupt):
             inner_interrupt(message)
+
+    def queue_background_worker_follow_up(
+        self,
+        *,
+        lane: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        normalized_lane = _normalize_background_worker_lane(lane)
+        normalized_payload = dict(payload or {})
+        revision = str(normalized_payload.get("user_revision") or "").strip()
+        if not revision:
+            return
+        queued = list(self._queued_worker_follow_ups.get(normalized_lane) or [])
+        if any(str(item.get("user_revision") or "").strip() == revision for item in queued):
+            return
+        queued.append(normalized_payload)
+        self._queued_worker_follow_ups[normalized_lane] = queued
+
+    def dequeue_ready_background_worker_follow_up(self) -> str | None:
+        lane = _normalize_background_worker_lane(self._last_completed_background_lane)
+        if self._last_completed_background_status != "success":
+            return None
+        queued = list(self._queued_worker_follow_ups.get(lane) or [])
+        if not queued:
+            return None
+        payload = dict(queued.pop(0))
+        if queued:
+            self._queued_worker_follow_ups[lane] = queued
+        else:
+            self._queued_worker_follow_ups.pop(lane, None)
+        revision = str(payload.get("user_revision") or "").strip()
+        if not revision:
+            return None
+        snapshot = dict(self._recent_task_snapshots.get(lane) or {})
+        snapshot_metadata = (
+            dict(snapshot.get("metadata") or {})
+            if isinstance(snapshot.get("metadata"), dict)
+            else {}
+        )
+        snapshot_metadata["pending_worker_control"] = payload
+        follow_up_tasks = [
+            str(item).strip()
+            for item in (snapshot.get("follow_up_tasks") or [])
+            if str(item).strip()
+        ]
+        if revision not in follow_up_tasks:
+            follow_up_tasks.append(revision)
+        snapshot.update(
+            {
+                "user_request": str(snapshot.get("user_request") or "").strip() or revision,
+                "status": "needs_follow_up",
+                "assistant_summary": str(snapshot.get("assistant_summary") or "").strip(),
+                "follow_up_tasks": follow_up_tasks,
+                "metadata": snapshot_metadata,
+                "updated_at": datetime.now().isoformat(),
+            }
+        )
+        self._recent_task_snapshots[lane] = snapshot
+        self._last_completed_background_lane = lane
+        return revision
 
     def run_conversation(
         self,
@@ -2573,6 +2828,8 @@ class MenteTuiAgent:
         prompt = self._normalize_user_message(user_message)
         controller = _MenteTuiTurnController()
         self._active_turn_controller = controller
+        self._last_completed_background_lane = None
+        self._last_completed_background_status = None
         self._last_reasoning = None
         active_lane = self._resolve_active_continuity_lane()
         recent_task_snapshot = self._recent_task_snapshots.get(active_lane) if active_lane else None
@@ -2742,6 +2999,12 @@ class MenteTuiAgent:
             fallback_lane=lane,
             planned_lane=planned_result_lane,
         )
+        if live_worker_job is not None:
+            self._last_completed_background_lane = effective_result_lane
+            self._last_completed_background_status = result.status
+        else:
+            self._last_completed_background_lane = None
+            self._last_completed_background_status = None
         handoff = extract_execution_session_handoff(result)
         self._update_continuity_state(handoff, lane=effective_result_lane)
         self._update_recent_task_snapshot(
@@ -4296,6 +4559,20 @@ def _(rid, params: dict) -> dict:
                 conversation_history=list(history),
                 stream_callback=_stream,
             )
+            dequeue_follow_up = getattr(agent, "dequeue_ready_background_worker_follow_up", None)
+            follow_up_loops = 0
+            while callable(dequeue_follow_up) and follow_up_loops < 5:
+                appended_prompt = dequeue_follow_up()
+                if not appended_prompt:
+                    break
+                follow_up_loops += 1
+                with session["history_lock"]:
+                    continued_history = list(session["history"])
+                result = agent.run_conversation(
+                    appended_prompt,
+                    conversation_history=continued_history,
+                    stream_callback=_stream,
+                )
 
             last_reasoning = None
             status_note = None

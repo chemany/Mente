@@ -1,9 +1,10 @@
 from mente.integrations import bridge as mente_bridge
 from mente.integrations.bridge import resolve_dispatch_decision
+from mente.skills import catalog as skill_catalog
 from mente.task_core.models import DispatchMode
 
 
-def test_explicit_known_skill_request_preserves_skill_ref_but_uses_llm_lane(
+def test_explicit_known_skill_request_preserves_skill_ref_and_prefers_owner_lane(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -22,10 +23,10 @@ def test_explicit_known_skill_request_preserves_skill_ref_but_uses_llm_lane(
     assert decision.skill_refs == ("research/deep-research-pro",)
     assert decision.target_job_lane == "research"
     assert decision.needs_clarification is False
-    assert decision.reason == "llm_classifier:research"
+    assert decision.reason == "deterministic:owner_lane:research"
 
 
-def test_explicit_multiple_skill_refs_from_same_lane_preserve_metadata_but_use_llm_lane(
+def test_explicit_multiple_skill_refs_from_same_lane_preserve_metadata_and_prefer_owner_lane(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -44,10 +45,10 @@ def test_explicit_multiple_skill_refs_from_same_lane_preserve_metadata_but_use_l
     assert decision.skill_refs == ("media/wechat-publisher", "imagegen")
     assert decision.target_job_lane == "writing"
     assert decision.needs_clarification is False
-    assert decision.reason == "llm_classifier:writing"
+    assert decision.reason == "deterministic:owner_lane:writing"
 
 
-def test_cross_lane_explicit_skill_message_uses_llm_lane_and_keeps_skill_refs(
+def test_cross_lane_explicit_skill_message_prefers_owner_lane_and_keeps_skill_refs(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -69,7 +70,7 @@ def test_cross_lane_explicit_skill_message_uses_llm_lane_and_keeps_skill_refs(
     )
     assert decision.target_job_lane == "writing"
     assert decision.needs_clarification is False
-    assert decision.reason == "llm_classifier:writing"
+    assert decision.reason == "deterministic:owner_lane:writing"
 
 
 def test_unknown_explicit_skill_request_falls_back_to_director_but_keeps_requested_ref(
@@ -94,7 +95,7 @@ def test_unknown_explicit_skill_request_falls_back_to_director_but_keeps_request
     assert decision.reason == "llm_classifier:director"
 
 
-def test_explicit_skill_message_with_engineering_words_still_uses_llm_lane(
+def test_explicit_skill_message_with_engineering_words_still_prefers_owner_lane(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -112,4 +113,59 @@ def test_explicit_skill_message_with_engineering_words_still_uses_llm_lane(
     assert decision.skill_refs == ("research/deep-research-pro",)
     assert decision.target_job_lane == "research"
     assert decision.needs_clarification is False
-    assert decision.reason == "llm_classifier:research"
+    assert decision.reason == "deterministic:owner_lane:research"
+
+
+def test_explicit_natural_language_skill_request_resolves_from_skill_catalog(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "writing", "confidence": "high", "reason": "catalog_skill"},
+    )
+
+    decision = resolve_dispatch_decision(
+        message="调用 Daily News 技能，把今天的国际要闻整理成小红书素材",
+    )
+
+    assert decision.lane == "writing"
+    assert decision.dispatch_mode == DispatchMode.DELEGATE_BACKGROUND
+    assert decision.task_profile is None
+    assert decision.skill_refs == ("social-media/xhs-daily-news",)
+    assert decision.target_job_lane == "writing"
+    assert decision.needs_clarification is False
+    assert decision.reason == "deterministic:owner_lane:writing"
+
+
+def test_skill_catalog_match_uses_directory_metadata_not_hardcoded(tmp_path):
+    skills_root = tmp_path / "skills"
+    skill_dir = skills_root / "custom" / "market-brief"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "name: market-brief",
+                'description: "Turn daily finance headlines into short market briefs."',
+                "metadata:",
+                "  hermes:",
+                "    tags: [finance, news, brief]",
+                "---",
+                "",
+                "# Market Brief",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    skill_catalog.clear_skill_catalog_caches()
+
+    try:
+        matches = skill_catalog.match_skill_catalog_refs(
+            message="调用 market brief 技能，把今天的财经新闻整理一下",
+            roots=(str(skills_root),),
+        )
+    finally:
+        skill_catalog.clear_skill_catalog_caches()
+
+    assert matches == ("custom/market-brief",)

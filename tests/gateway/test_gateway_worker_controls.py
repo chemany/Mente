@@ -351,3 +351,109 @@ def test_reprioritize_revision_supersedes_worker_and_preserves_lineage(
     assert bundle.worker_task.task_id == queued_job.task_id
     assert bundle.worker_task.metadata["supersedes"]["job_id"] == "job-research-1"
     assert bundle.worker_task.metadata["supersedes"]["task_id"] == "task-research-1"
+
+
+def test_same_lane_follow_up_appends_without_cancelling_worker(monkeypatch, tmp_path):
+    runner, db_path = _make_runner(tmp_path, monkeypatch)
+    session_id = "sess-1"
+    source = _make_source()
+    session_key = build_session_key(source)
+    cancel_event = threading.Event()
+    follow_up = "顺便把价格对比单独列一节"
+    monkeypatch.setattr(
+        "mente.integrations.bridge.resolve_dispatch_decision",
+        lambda **_kwargs: SimpleNamespace(
+            dispatch_mode=DispatchMode.DELEGATE_BACKGROUND,
+            target_job_lane="research",
+            worker_lane=None,
+            lane="director",
+            skill_refs=("research/deep-research-pro",),
+            task_profile="deep_research",
+            needs_clarification=False,
+            reason="test:same_lane_append",
+        ),
+    )
+
+    runner._running_agents[session_key] = object()
+    runner.session_store.bind_recent_task_snapshot(
+        session_id,
+        lane="research",
+        user_request="研究三家供应商并写结论",
+        status="running",
+        assistant_summary="正在整理供应商资料",
+        follow_up_tasks=["补齐价格对比"],
+        metadata={
+            "lane": "research",
+            "task_profile": "deep_research",
+            "skill_refs": ["skills/research/web"],
+        },
+    )
+    _save_worker_task(
+        db_path,
+        session_id=session_id,
+        job_id="job-research-1",
+        task_id="task-research-1",
+    )
+    runner._register_background_worker_job(
+        session_key=session_key,
+        session_id=session_id,
+        lane="research",
+        job_id="job-research-1",
+        task_id="task-research-1",
+        status="running",
+        summary="Collecting vendor data",
+        metadata={
+            "lane": "research",
+            "task_profile": "deep_research",
+            "skill_refs": ["skills/research/web"],
+        },
+        cancel_event=cancel_event,
+    )
+
+    response = runner._maybe_handle_background_worker_frontdesk_message(
+        _make_event(follow_up),
+        session_key=session_key,
+        session_id=session_id,
+    )
+
+    assert response is not None
+    assert cancel_event.is_set() is False
+
+    active_job = runner._get_background_worker_job(session_key, lane="research")
+    assert active_job is not None
+    assert active_job.job_id == "job-research-1"
+    assert active_job.task_id == "task-research-1"
+    assert active_job.status == "running"
+    assert active_job.metadata["control_contract"]["mode"] == "append_worker"
+    assert runner.adapters[Platform.TELEGRAM]._pending_messages[session_key].text == follow_up
+
+    snapshot = runner.session_store.get_recent_task_snapshot(session_id, lane="research")
+    pending = snapshot["metadata"]["pending_worker_control"]
+    assert pending["mode"] == "append_worker"
+    assert pending["user_revision"] == follow_up
+    assert pending["previous_job_id"] == "job-research-1"
+    assert pending["previous_task_id"] == "task-research-1"
+
+    repo = SQLiteTaskRepository(db_path=db_path)
+    task = repo.get("task-research-1")
+    repo.close()
+
+    assert task is not None
+    assert task.metadata["control_contract"]["mode"] == "append_worker"
+    assert follow_up in task.metadata["appended_user_revisions"]
+
+    bundle = build_gateway_task_bundle(
+        message=follow_up,
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id=session_id,
+        session_key=session_key,
+        recent_task_snapshot=snapshot,
+        active_lane="research",
+    )
+
+    assert bundle.worker_task is not None
+    assert bundle.worker_task.metadata["control_contract"]["mode"] == "append_worker"
+    assert bundle.worker_task.metadata["previous_job_id"] == "job-research-1"
+    assert bundle.worker_task.metadata["previous_task_id"] == "task-research-1"

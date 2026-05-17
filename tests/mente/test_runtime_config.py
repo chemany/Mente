@@ -9,6 +9,7 @@ from mente.executors.runtime_config import (
     MENTE_CONVERSATION_BASE_INSTRUCTIONS,
     MENTE_COORDINATOR_BASE_INSTRUCTIONS,
     MENTE_CONFIG_ADMIN_BASE_INSTRUCTIONS,
+    MENTE_DEEP_RESEARCH_BASE_INSTRUCTIONS,
     MENTE_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
     MENTE_CONTENT_BASE_INSTRUCTIONS,
     MENTE_DEFAULT_BASE_INSTRUCTIONS,
@@ -386,6 +387,74 @@ def test_runtime_config_resolves_provider_api_key_from_mente_env_without_model_s
     assert runtime_config.subprocess_env["MENTE_CODEX_API_KEY"] == "sk-test-xiaomi"
 
 
+def test_runtime_config_resolves_user_defined_provider_api_key_from_mente_env(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir(parents=True, exist_ok=True)
+    (mente_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "model:",
+                '  default: "gpt-5.4"',
+                '  provider: "newapi"',
+                '  base_url: "https://newapi.10fu.com/v1"',
+                '  api_mode: "chat_completions"',
+                "providers:",
+                "  newapi:",
+                '    name: "NewAPI"',
+                '    base_url: "https://newapi.10fu.com/v1"',
+                '    default_model: "gpt-5.4"',
+                '    api_mode: "chat_completions"',
+                '    key_env: "NEWAPI_API_KEY"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (mente_home / ".env").write_text("NEWAPI_API_KEY=sk-test-newapi\n", encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("NEWAPI_API_KEY", raising=False)
+
+    runtime_config = resolve_runtime_config(tmp_path)
+
+    assert runtime_config.model_runtime.provider == "newapi"
+    assert runtime_config.model_runtime.api_mode == "chat_completions"
+    assert runtime_config.subprocess_env["MENTE_CODEX_API_KEY"] == "sk-test-newapi"
+
+
+def test_runtime_config_uses_default_mente_home_for_provider_env_resolution(monkeypatch, tmp_path):
+    monkeypatch.delenv("MENTE_HOME", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("NEWAPI_API_KEY", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    mente_home = tmp_path / ".mente"
+    mente_home.mkdir(parents=True, exist_ok=True)
+    (mente_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "model:",
+                '  default: "gpt-5.4"',
+                '  provider: "newapi"',
+                '  base_url: "https://newapi.10fu.com/v1"',
+                '  api_mode: "chat_completions"',
+                "providers:",
+                "  newapi:",
+                '    name: "NewAPI"',
+                '    base_url: "https://newapi.10fu.com/v1"',
+                '    default_model: "gpt-5.4"',
+                '    api_mode: "chat_completions"',
+                '    key_env: "NEWAPI_API_KEY"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (mente_home / ".env").write_text("NEWAPI_API_KEY=sk-test-default-home\n", encoding="utf-8")
+
+    runtime_config = resolve_runtime_config(tmp_path / "workspace")
+
+    assert runtime_config.subprocess_env["MENTE_CODEX_API_KEY"] == "sk-test-default-home"
+
+
 def test_adapt_runtime_config_for_content_publishing_switches_to_content_profile(tmp_path):
     runtime_config = resolve_runtime_config(tmp_path)
     request = ExecutionRequest(
@@ -598,7 +667,7 @@ def test_adapt_runtime_config_for_coordinator_preserves_deep_research_runtime_se
     adapted = adapt_runtime_config_for_request(runtime_config, request)
 
     assert adapted is not runtime_config
-    assert adapted.codex_config["base_instructions"] == MENTE_RESEARCH_BASE_INSTRUCTIONS
+    assert adapted.codex_config["base_instructions"] == MENTE_DEEP_RESEARCH_BASE_INSTRUCTIONS
 
 
 def test_adapt_runtime_config_keeps_default_engineering_base_for_project_requests(tmp_path):

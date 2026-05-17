@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import contextmanager
+import json
 import logging
 import os
+import re
+import shlex
 import shutil
+import subprocess
 from pathlib import Path
+import sys
 from typing import Any
 from uuid import uuid4
 
@@ -18,6 +23,7 @@ from kernel.codex.runtime.protocol import KernelExecutionPayload
 from kernel.codex.runtime.result import KernelExecutionResult
 from kernel.codex.runtime.runner import KernelRunner
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
+from mente.deep_research_paths import resolve_deep_research_output_root
 from mente.execution_events import (
     ExecutionEventCallback,
     emit_execution_event,
@@ -54,6 +60,7 @@ from mente.memory.context import (
     retain_on_demand_prompt_memories,
     uses_on_demand_memory,
 )
+from mente.mente_inventory import build_worker_mente_inventory_payload
 from mente.memory.policy import MemoryPolicyResolver
 from mente.memory.repository import MemoryRepository
 from mente.task_core.models import (
@@ -65,6 +72,42 @@ from mente.task_core.models import (
 from mente.task_core.repository import SQLiteTaskRepository
 
 logger = logging.getLogger(__name__)
+
+_DEEP_RESEARCH_TASK_PROFILE = "deep_research"
+_DEEP_RESEARCH_REQUIRED_ARTIFACT_SUFFIXES: tuple[str, ...] = (".md", ".html", ".docx")
+_ARTIFACT_PATH_PATTERN = re.compile(
+    r"(?P<path>(?:~|/)[^\s<>()\[\]{}\"'`]+?\.(?:md|markdown|html|docx|doc|pdf|txt|csv|tsv|xlsx|xls|pptx|json|yaml|yml))",
+    re.IGNORECASE,
+)
+_ARTIFACT_PATH_TRAILING_PUNCTUATION = ".,，。!！?？:：;；)]}>\"'"
+_DEEP_RESEARCH_READ_ONLY_COMMAND_PREFIXES: tuple[str, ...] = (
+    "cat ",
+    "find ",
+    "head ",
+    "less ",
+    "ls ",
+    "more ",
+    "pwd",
+    "printf",
+    "rg ",
+    "sed ",
+    "stat ",
+    "tail ",
+)
+_DEEP_RESEARCH_DEFERRED_EXECUTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bchecking (?:its|the) instructions first\b", re.IGNORECASE),
+    re.compile(r"\bnext step\b", re.IGNORECASE),
+    re.compile(r"\bnext i(?:'|’)m running\b", re.IGNORECASE),
+    re.compile(r"\brun the provided parallel cli\b", re.IGNORECASE),
+    re.compile(r"\brun the managed .*cli\b", re.IGNORECASE),
+    re.compile(r"\bfull report workflow\b", re.IGNORECASE),
+    re.compile(r"\bverify the generated artifacts\b", re.IGNORECASE),
+    re.compile(r"\bverify markdown/html/docx artifacts\b", re.IGNORECASE),
+    re.compile(r"\bstarted the managed deep-research workflow\b", re.IGNORECASE),
+    re.compile(r"下一步"),
+    re.compile(r"请继续执行深度研究工作流"),
+    re.compile(r"继续执行深度研究工作流"),
+)
 
 
 class CodexExecutor(CodexKernelAdapter):
@@ -201,6 +244,38 @@ class CodexExecutor(CodexKernelAdapter):
             enriched_request,
         )
         try:
+            if self._should_execute_managed_deep_research_directly(enriched_request):
+                emit_execution_event(
+                    self._event_callback,
+                    "executor.runtime_config_resolved",
+                    {
+                        "task_id": request.task_id,
+                        "session_id": request.session_id,
+                        "runtime_home": str(runtime_config.runtime_home),
+                    },
+                    logger=logger,
+                )
+                codex_home = runtime_config.runtime_home
+                codex_home.mkdir(parents=True, exist_ok=True)
+                self._seed_canonical_memories_into_isolated_home(codex_home)
+                self._seed_canonical_memory_aliases_into_isolated_home(codex_home)
+                self._seed_user_skills_into_isolated_home(codex_home)
+                auth_source = self._seed_auth_into_isolated_home(codex_home, runtime_config)
+                emit_execution_event(
+                    self._event_callback,
+                    "executor.auth_prepared",
+                    {
+                        "task_id": request.task_id,
+                        "session_id": request.session_id,
+                        "auth_source": auth_source,
+                    },
+                    logger=logger,
+                )
+                translated_result = self._execute_managed_deep_research_directly(
+                    enriched_request,
+                    runtime_config=runtime_config,
+                )
+                return translated_result
             with self._prepare_runtime_config_for_execution(runtime_config) as execution_runtime_config:
                 emit_execution_event(
                     self._event_callback,
@@ -233,6 +308,7 @@ class CodexExecutor(CodexKernelAdapter):
                     enriched_request,
                     precondition_fallback_reason=precondition_fallback_reason,
                 )
+                deep_research_retry_metadata: dict[str, Any] | None = None
                 kernel_result = self._runner.run(
                     payload=self._build_kernel_payload(enriched_request),
                     session=session_request,
@@ -248,14 +324,29 @@ class CodexExecutor(CodexKernelAdapter):
                         session=session_request,
                         runtime_config=execution_runtime_config,
                     )
+                active_request = enriched_request
+                while True:
+                    retry_outcome = self._maybe_retry_deep_research_after_incomplete_turn(
+                        request=active_request,
+                        session_request=session_request,
+                        kernel_result=kernel_result,
+                        runtime_config=execution_runtime_config,
+                    )
+                    if retry_outcome is None:
+                        break
+                    kernel_result, session_request, active_request, deep_research_retry_metadata = (
+                        retry_outcome
+                    )
                 translated_result = self._translate_kernel_result(
                     kernel_result,
-                    enriched_request,
+                    active_request,
                     session_request,
                     model_name=execution_runtime_config.model_runtime.model,
                     precondition_fallback_reason=precondition_fallback_reason,
                     runtime_fallback_reason=runtime_fallback_reason,
                 )
+                if deep_research_retry_metadata is not None:
+                    translated_result.metadata["deep_research_retry"] = deep_research_retry_metadata
                 return translated_result
         except ResponsesCompatBridgeError as exc:
             translated_result = self._responses_compat_bridge_failure_result(runtime_config, exc)
@@ -387,6 +478,14 @@ class CodexExecutor(CodexKernelAdapter):
                 task_memory_facts=list(request.memory_facts),
             )
         metadata = dict(request.metadata)
+        inventory_payload = build_worker_mente_inventory_payload(request)
+        if inventory_payload is not None:
+            inventory_fact, inventory_metadata = inventory_payload
+            if inventory_fact and not any(
+                fact.startswith("Mente inventory:") for fact in prepared_memory_facts
+            ):
+                prepared_memory_facts = [*prepared_memory_facts, inventory_fact]
+            metadata.setdefault("mente_inventory", inventory_metadata)
         metadata["memory_context_prepared"] = True
         metadata["memory_read_mode"] = memory_read_mode
         return request.model_copy(
@@ -763,4 +862,746 @@ class CodexExecutor(CodexKernelAdapter):
             precondition_fallback_reason=precondition_fallback_reason,
             runtime_fallback_reason=runtime_fallback_reason,
         )
+        if self._is_deep_research_request(request):
+            self._apply_deep_research_managed_cli_contract(
+                translated,
+                request=request,
+                kernel_result=result,
+            )
+            self._apply_deep_research_artifact_contract(
+                translated,
+                request=request,
+                kernel_result=result,
+            )
         return translated
+
+    def _is_deep_research_request(self, request: ExecutionRequest) -> bool:
+        return (
+            str(request.metadata.get("task_profile") or "").strip().lower()
+            == _DEEP_RESEARCH_TASK_PROFILE
+        )
+
+    def _apply_deep_research_artifact_contract(
+        self,
+        translated: ExecutionResult,
+        *,
+        request: ExecutionRequest,
+        kernel_result: KernelExecutionResult,
+    ) -> None:
+        if translated.status != "success":
+            return
+
+        candidate_artifacts = self._collect_deep_research_artifact_candidates(
+            request=request,
+            kernel_result=kernel_result,
+        )
+        validated_artifacts, missing_formats, missing_paths = self._validate_deep_research_artifacts(
+            candidate_artifacts
+        )
+        translated.metadata["deep_research_artifact_validation"] = {
+            "validated": not missing_formats,
+            "missing_formats": missing_formats,
+            "missing_paths": missing_paths,
+            "candidate_artifacts": candidate_artifacts,
+        }
+        if missing_formats:
+            translated.status = "blocked"
+            translated.failure_reason = "deep_research_artifacts_missing"
+            translated.artifacts_out = validated_artifacts
+            translated.summary = self._format_deep_research_artifact_blocked_summary(
+                missing_formats=missing_formats,
+                missing_paths=missing_paths,
+            )
+            return
+        translated.artifacts_out = validated_artifacts
+
+    def _collect_deep_research_artifact_candidates(
+        self,
+        *,
+        request: ExecutionRequest,
+        kernel_result: KernelExecutionResult,
+    ) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def _record(raw_path: str) -> None:
+            normalized = self._normalize_artifact_path(raw_path, workspace=request.workspace)
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            candidates.append(normalized)
+
+        for item in kernel_result.artifacts_out:
+            _record(str(item))
+
+        structured_output = kernel_result.debug.get("structured_output")
+        if isinstance(structured_output, dict):
+            for item in structured_output.get("artifacts_out") or []:
+                _record(str(item))
+            for key in ("assistant_summary", "summary", "final_reply"):
+                for path in self._extract_artifact_paths_from_text(structured_output.get(key)):
+                    _record(path)
+
+        for path in self._extract_artifact_paths_from_text(kernel_result.assistant_summary):
+            _record(path)
+        return candidates
+
+    def _normalize_artifact_path(self, raw_path: str, *, workspace: str) -> str | None:
+        candidate = str(raw_path or "").strip()
+        if not candidate:
+            return None
+        path = Path(os.path.expandvars(candidate)).expanduser()
+        if not path.is_absolute():
+            path = Path(workspace).expanduser() / path
+        return str(path.resolve())
+
+    def _extract_artifact_paths_from_text(self, text: Any) -> list[str]:
+        raw_text = str(text or "")
+        if not raw_text:
+            return []
+        extracted: list[str] = []
+        seen: set[str] = set()
+        for match in _ARTIFACT_PATH_PATTERN.finditer(raw_text):
+            candidate = match.group("path").rstrip(_ARTIFACT_PATH_TRAILING_PUNCTUATION)
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            extracted.append(candidate)
+        return extracted
+
+    def _validate_deep_research_artifacts(
+        self,
+        candidate_artifacts: list[str],
+    ) -> tuple[list[str], list[str], list[str]]:
+        validated: list[str] = []
+        existing_by_suffix: dict[str, str] = {}
+        missing_paths: list[str] = []
+        seen_existing: set[str] = set()
+        for candidate in candidate_artifacts:
+            path = Path(candidate)
+            if not path.exists():
+                missing_paths.append(candidate)
+                continue
+            if candidate not in seen_existing:
+                seen_existing.add(candidate)
+                validated.append(candidate)
+            suffix = path.suffix.lower()
+            if suffix == ".markdown":
+                suffix = ".md"
+            if suffix in _DEEP_RESEARCH_REQUIRED_ARTIFACT_SUFFIXES and suffix not in existing_by_suffix:
+                existing_by_suffix[suffix] = candidate
+        missing_formats = sorted(
+            suffix
+            for suffix in _DEEP_RESEARCH_REQUIRED_ARTIFACT_SUFFIXES
+            if suffix not in existing_by_suffix
+        )
+        ordered_validated = [
+            existing_by_suffix[suffix]
+            for suffix in _DEEP_RESEARCH_REQUIRED_ARTIFACT_SUFFIXES
+            if suffix in existing_by_suffix
+        ]
+        for candidate in validated:
+            if candidate not in ordered_validated:
+                ordered_validated.append(candidate)
+        return ordered_validated, missing_formats, missing_paths
+
+    def _format_deep_research_artifact_blocked_summary(
+        self,
+        *,
+        missing_formats: list[str],
+        missing_paths: list[str],
+    ) -> str:
+        format_labels = {
+            ".md": "Markdown (.md)",
+            ".html": "HTML (.html)",
+            ".docx": "DOCX (.docx)",
+        }
+        missing_format_text = "、".join(format_labels.get(item, item) for item in missing_formats)
+        summary = (
+            "深度研究任务未产出完整报告工件："
+            f"缺少 {missing_format_text} 的实际文件，当前结果不能判定为完成。"
+            "请继续执行深度研究工作流，并返回已生成的 Markdown、HTML、DOCX 文件路径。"
+        )
+        if missing_paths:
+            preview = "；".join(missing_paths[:3])
+            summary += f" 未落盘的候选路径：{preview}"
+        return summary
+
+    def _should_execute_managed_deep_research_directly(self, request: ExecutionRequest) -> bool:
+        if not self._is_deep_research_request(request):
+            return False
+        return self._resolve_deep_research_skill_entrypoint(request).exists()
+
+    def _execute_managed_deep_research_directly(
+        self,
+        request: ExecutionRequest,
+        *,
+        runtime_config: RuntimeConfig,
+    ) -> ExecutionResult:
+        command = self._build_deep_research_managed_cli_argv(request)
+        emit_execution_event(
+            self._event_callback,
+            "executor.managed_skill.started",
+            {
+                "task_id": request.task_id,
+                "session_id": request.session_id,
+                "skill": "research/deep-research-pro",
+                "mode": "direct_subprocess",
+                "command": command,
+            },
+            logger=logger,
+        )
+        completed = subprocess.run(
+            command,
+            cwd=request.workspace,
+            env=self._build_managed_deep_research_subprocess_env(runtime_config),
+            capture_output=True,
+            text=True,
+        )
+        stdout = str(completed.stdout or "")
+        stderr = str(completed.stderr or "")
+        candidate_artifacts = self._collect_deep_research_artifact_candidates_from_texts(
+            request=request,
+            texts=[stdout, stderr],
+        )
+        validated_artifacts, missing_formats, missing_paths = self._validate_deep_research_artifacts(
+            candidate_artifacts
+        )
+
+        if completed.returncode == 0 and not missing_formats:
+            status = "success"
+            failure_reason = None
+            summary = self._format_managed_deep_research_direct_success_summary(validated_artifacts)
+            verification_results = [
+                "managed deep-research CLI exited successfully",
+                "checked report files exist",
+            ]
+        elif completed.returncode != 0:
+            status = "blocked"
+            failure_reason = "deep_research_managed_cli_failed"
+            summary = self._format_managed_deep_research_direct_failure_summary(
+                returncode=completed.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                artifacts=validated_artifacts,
+            )
+            verification_results = []
+        else:
+            status = "blocked"
+            failure_reason = "deep_research_artifacts_missing"
+            summary = self._format_deep_research_artifact_blocked_summary(
+                missing_formats=missing_formats,
+                missing_paths=missing_paths,
+            )
+            verification_results = []
+
+        result = ExecutionResult(
+            status=status,
+            summary=summary,
+            commands_run=[shlex.join(command)],
+            artifacts_out=validated_artifacts,
+            verification_results=verification_results,
+            failure_reason=failure_reason,
+            metadata={
+                "managed_skill_execution": {
+                    "mode": "direct_subprocess",
+                    "command": list(command),
+                    "returncode": completed.returncode,
+                },
+                "managed_skill_stdout": stdout,
+                "managed_skill_stderr": stderr,
+                "deep_research_artifact_validation": {
+                    "validated": not missing_formats,
+                    "missing_formats": missing_formats,
+                    "missing_paths": missing_paths,
+                    "candidate_artifacts": candidate_artifacts,
+                },
+            },
+        )
+        stateless_session = KernelSessionRequest(mode=KernelSessionMode.STATELESS)
+        result.metadata["execution_session"] = self._execution_session_metadata(
+            request,
+            stateless_session,
+            result,
+        )
+        emit_execution_event(
+            self._event_callback,
+            "executor.managed_skill.completed",
+            {
+                "task_id": request.task_id,
+                "session_id": request.session_id,
+                "skill": "research/deep-research-pro",
+                "mode": "direct_subprocess",
+                "returncode": completed.returncode,
+                "status": result.status,
+            },
+            logger=logger,
+        )
+        return result
+
+    def _build_managed_deep_research_subprocess_env(
+        self,
+        runtime_config: RuntimeConfig,
+    ) -> dict[str, str]:
+        env = build_private_runtime_env(runtime_config.runtime_home, runtime_config.subprocess_env)
+        mente_home = get_mente_home().expanduser().resolve()
+        env["HOME"] = str(mente_home.parent)
+        env["MENTE_HOME"] = str(mente_home)
+        env["HERMES_HOME"] = str(mente_home)
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        for key, value in self._load_env_file_values(mente_home / ".env").items():
+            env.setdefault(key, value)
+        return env
+
+    def _load_env_file_values(self, env_path: Path) -> dict[str, str]:
+        if not env_path.exists():
+            return {}
+        values: dict[str, str] = {}
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return {}
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            normalized_key = key.strip()
+            normalized_value = value.strip().strip("\"'")
+            if normalized_key:
+                values[normalized_key] = normalized_value
+        return values
+
+    def _collect_deep_research_artifact_candidates_from_texts(
+        self,
+        *,
+        request: ExecutionRequest,
+        texts: list[str],
+    ) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for text in texts:
+            for raw_path in self._extract_artifact_paths_from_text(text):
+                normalized = self._normalize_artifact_path(raw_path, workspace=request.workspace)
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                candidates.append(normalized)
+        return candidates
+
+    def _format_managed_deep_research_direct_success_summary(self, artifacts: list[str]) -> str:
+        if not artifacts:
+            return "深度研究完成。"
+        labels = {
+            ".md": "Markdown",
+            ".html": "HTML",
+            ".docx": "DOCX",
+        }
+        lines = ["深度研究完成。"]
+        for artifact in artifacts:
+            suffix = Path(artifact).suffix.lower()
+            label = labels.get(suffix, "Artifact")
+            lines.append(f"{label}: {artifact}")
+        return "\n".join(lines)
+
+    def _format_managed_deep_research_direct_failure_summary(
+        self,
+        *,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        artifacts: list[str],
+    ) -> str:
+        lines = [f"托管 deep-research CLI 执行失败，退出码 {returncode}。"]
+        detail = stderr.strip() or stdout.strip()
+        if detail:
+            lines.append(detail)
+        if artifacts:
+            lines.append("已生成的工件：")
+            lines.extend(artifacts)
+        return "\n".join(lines)
+
+    def _maybe_retry_deep_research_after_incomplete_turn(
+        self,
+        *,
+        request: ExecutionRequest,
+        session_request: KernelSessionRequest,
+        kernel_result: KernelExecutionResult,
+        runtime_config: RuntimeConfig,
+    ) -> tuple[KernelExecutionResult, KernelSessionRequest, ExecutionRequest, dict[str, Any]] | None:
+        if not self._is_deep_research_request(request):
+            return None
+        validation = self._deep_research_managed_cli_validation(
+            request=request,
+            kernel_result=kernel_result,
+        )
+        thread_id = validation["thread_id"]
+        if session_request.mode is not KernelSessionMode.SESSION or not thread_id:
+            return None
+        if validation["active_managed_cli_commands"] and not self._deep_research_retry_reason_attempted(
+            request,
+            "managed_cli_still_running",
+        ):
+            retry_request = self._build_deep_research_cli_retry_request(
+                request,
+                reason="managed_cli_still_running",
+                active_commands=validation["active_managed_cli_commands"],
+            )
+            retry_session = KernelSessionRequest(
+                mode=KernelSessionMode.SESSION,
+                session_id=thread_id,
+            )
+            retry_result = self._runner.run(
+                payload=self._build_kernel_payload(retry_request),
+                session=retry_session,
+                runtime_config=runtime_config,
+            )
+            return (
+                retry_result,
+                retry_session,
+                retry_request,
+                {
+                    "triggered": True,
+                    "reason": "managed_cli_still_running",
+                    "resumed_thread_id": thread_id,
+                },
+            )
+        if validation["executed"] or not validation["deferred_execution"]:
+            return None
+        if self._deep_research_retry_reason_attempted(request, "managed_cli_not_executed"):
+            return None
+        retry_request = self._build_deep_research_cli_retry_request(
+            request,
+            reason="managed_cli_not_executed",
+        )
+        retry_session = KernelSessionRequest(
+            mode=KernelSessionMode.SESSION,
+            session_id=thread_id,
+        )
+        retry_result = self._runner.run(
+            payload=self._build_kernel_payload(retry_request),
+            session=retry_session,
+            runtime_config=runtime_config,
+        )
+        return (
+            retry_result,
+            retry_session,
+            retry_request,
+            {
+                "triggered": True,
+                "reason": "managed_cli_not_executed",
+                "resumed_thread_id": thread_id,
+            },
+        )
+
+    def _build_deep_research_cli_retry_request(
+        self,
+        request: ExecutionRequest,
+        *,
+        reason: str,
+        active_commands: list[str] | None = None,
+    ) -> ExecutionRequest:
+        retry_fact = self._build_deep_research_cli_retry_fact(
+            request,
+            reason=reason,
+            active_commands=active_commands or [],
+        )
+        memory_facts = list(request.memory_facts)
+        if retry_fact not in memory_facts:
+            memory_facts.append(retry_fact)
+        metadata = dict(request.metadata)
+        metadata["deep_research_cli_retry_attempted"] = True
+        reasons_attempted = self._normalize_deep_research_retry_reasons(metadata)
+        if reason not in reasons_attempted:
+            reasons_attempted.append(reason)
+        metadata["deep_research_cli_retry_reasons_attempted"] = reasons_attempted
+        return request.model_copy(
+            update={
+                "memory_facts": memory_facts,
+                "metadata": metadata,
+            }
+        )
+
+    def _build_deep_research_cli_retry_fact(
+        self,
+        request: ExecutionRequest,
+        *,
+        reason: str,
+        active_commands: list[str],
+    ) -> str:
+        launch_command = self._build_deep_research_managed_cli_launch_command(request)
+        if reason == "managed_cli_still_running":
+            retry_lines = [
+                "Deep research retry instruction:",
+                "- The previous turn already launched the managed deep-research CLI.",
+                "- Do not stop while the managed CLI command is still running.",
+                "- Resume the same session, wait for the active CLI command to finish, and only then verify the output directory.",
+                "- Confirm that Markdown, HTML, and DOCX report artifacts exist before you conclude the task.",
+                "- Only report blocked if the CLI exits with a concrete error or the required artifacts are still missing after verification.",
+            ]
+            if active_commands:
+                retry_lines.append(f"- Active CLI command: {active_commands[0]}")
+            return "\n".join(retry_lines)
+        return "\n".join(
+            [
+                "Deep research retry instruction:",
+                "- The previous turn stopped after only reading skill files.",
+                "- Do not summarize, stop at planning, or ask for confirmation.",
+                f"- Execute the managed deep-research CLI now: {launch_command}",
+                "- Continue until Markdown, HTML, and DOCX report artifacts exist or a concrete execution blocker is verified after attempting the CLI.",
+            ]
+        )
+
+    def _deep_research_retry_reason_attempted(
+        self,
+        request: ExecutionRequest,
+        reason: str,
+    ) -> bool:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        reasons_attempted = self._normalize_deep_research_retry_reasons(metadata)
+        if reason in reasons_attempted:
+            return True
+        return reason == "managed_cli_not_executed" and bool(
+            metadata.get("deep_research_cli_retry_attempted")
+        )
+
+    def _normalize_deep_research_retry_reasons(self, metadata: dict[str, Any]) -> list[str]:
+        raw_reasons = metadata.get("deep_research_cli_retry_reasons_attempted")
+        if not isinstance(raw_reasons, list):
+            return []
+        normalized: list[str] = []
+        for value in raw_reasons:
+            text = str(value or "").strip()
+            if text and text not in normalized:
+                normalized.append(text)
+        return normalized
+
+    def _build_deep_research_managed_cli_launch_command(self, request: ExecutionRequest) -> str:
+        skill_entrypoint = str(self._resolve_deep_research_skill_entrypoint(request))
+        product_name = self._infer_deep_research_product_name(request.user_request)
+        quoted_product_name = json.dumps(product_name or "<研究对象>", ensure_ascii=False)
+        output_root = resolve_deep_research_output_root()
+        return f"python {skill_entrypoint} {quoted_product_name} --output-dir {output_root}"
+
+    def _build_deep_research_managed_cli_argv(self, request: ExecutionRequest) -> list[str]:
+        return [
+            sys.executable,
+            str(self._resolve_deep_research_skill_entrypoint(request)),
+            self._infer_deep_research_product_name(request.user_request) or "<研究对象>",
+            "--output-dir",
+            str(resolve_deep_research_output_root()),
+        ]
+
+    def _resolve_deep_research_skill_entrypoint(self, request: ExecutionRequest) -> Path:
+        operator_capsule = request.metadata.get("operator_capsule")
+        if isinstance(operator_capsule, dict):
+            raw_entrypoint = operator_capsule.get("skill_entrypoint")
+            if raw_entrypoint:
+                return Path(str(raw_entrypoint).strip()).expanduser()
+        return get_skills_dir() / "research" / "deep-research-pro" / "deep_research_pro.py"
+
+    def _infer_deep_research_product_name(self, user_request: str | None) -> str | None:
+        text = str(user_request or "").strip()
+        if not text:
+            return None
+        normalized = re.sub(r"^\s*调用(?:深度研究)?技能[，,\s]*", "", text)
+        match = re.search(r"(?:深度研究|深度调研)(?:一下|下)?(?P<subject>.+)", normalized, re.IGNORECASE)
+        candidate = match.group("subject") if match else normalized
+        candidate = candidate.strip(" ：:，,。.!！?？\"'")
+        candidate = re.sub(r"这一个标准化学品.*$", "", candidate)
+        candidate = re.sub(r"(?:并|并且)?(?:输出|形成|生成|撰写|整理|做成).*$", "", candidate)
+        candidate = re.sub(r"(?:完整|万字)?调研报告.*$", "", candidate)
+        candidate = re.sub(r"(?:完整)?报告.*$", "", candidate)
+        candidate = candidate.strip(" ：:，,。.!！?？\"'")
+        return candidate or None
+
+    def _apply_deep_research_managed_cli_contract(
+        self,
+        translated: ExecutionResult,
+        *,
+        request: ExecutionRequest,
+        kernel_result: KernelExecutionResult,
+    ) -> None:
+        validation = self._deep_research_managed_cli_validation(
+            request=request,
+            kernel_result=kernel_result,
+        )
+        if validation["executed"] or not validation["deferred_execution"]:
+            return
+        translated.status = "blocked"
+        translated.failure_reason = "deep_research_managed_cli_not_executed"
+        translated.summary = self._format_deep_research_managed_cli_not_executed_summary(
+            commands_seen=validation["commands_seen"],
+        )
+        translated.metadata["deep_research_managed_cli_validation"] = validation
+
+    def _deep_research_managed_cli_validation(
+        self,
+        *,
+        request: ExecutionRequest,
+        kernel_result: KernelExecutionResult,
+    ) -> dict[str, Any]:
+        command_state = self._extract_command_execution_state(
+            kernel_result.debug.get("stdout"),
+        )
+        commands_seen = command_state["commands_seen"]
+        active_commands = command_state["active_commands"]
+        managed_cli_commands = self._extract_managed_deep_research_cli_commands(
+            request=request,
+            commands_seen=commands_seen,
+        )
+        active_managed_cli_commands = self._extract_managed_deep_research_cli_commands(
+            request=request,
+            commands_seen=active_commands,
+        )
+        executed = self._managed_deep_research_cli_was_executed(
+            request=request,
+            commands_seen=commands_seen,
+        )
+        return {
+            "executed": executed,
+            "managed_cli_commands": managed_cli_commands,
+            "active_commands": active_commands,
+            "active_managed_cli_commands": active_managed_cli_commands,
+            "deferred_execution": self._looks_like_deep_research_deferred_execution(
+                assistant_summary=kernel_result.assistant_summary,
+                follow_up_tasks=kernel_result.follow_up_tasks,
+                commands_seen=commands_seen,
+                managed_cli_executed=executed,
+            ),
+            "commands_seen": commands_seen,
+            "thread_id": self._extract_deep_research_thread_id(kernel_result),
+        }
+
+    def _extract_command_execution_state(self, stdout: Any) -> dict[str, list[str]]:
+        raw_stdout = str(stdout or "")
+        if not raw_stdout:
+            return {"commands_seen": [], "active_commands": []}
+        commands: list[str] = []
+        seen: set[str] = set()
+        active_by_item_id: dict[str, str] = {}
+        for line in raw_stdout.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            event_type = payload.get("type")
+            if event_type not in {"item.started", "item.completed"}:
+                continue
+            item = payload.get("item")
+            if not isinstance(item, dict) or item.get("type") != "command_execution":
+                continue
+            item_id = str(item.get("id") or "").strip()
+            command = str(item.get("command") or "").strip()
+            if command and command not in seen:
+                seen.add(command)
+                commands.append(command)
+            if not item_id:
+                continue
+            if event_type == "item.started":
+                if command:
+                    active_by_item_id[item_id] = command
+                continue
+            active_by_item_id.pop(item_id, None)
+        active_commands: list[str] = []
+        for command in active_by_item_id.values():
+            if command not in active_commands:
+                active_commands.append(command)
+        return {
+            "commands_seen": commands,
+            "active_commands": active_commands,
+        }
+
+    def _extract_command_execution_commands(self, stdout: Any) -> list[str]:
+        return self._extract_command_execution_state(stdout)["commands_seen"]
+
+    def _extract_managed_deep_research_cli_commands(
+        self,
+        *,
+        request: ExecutionRequest,
+        commands_seen: list[str],
+    ) -> list[str]:
+        managed_commands: list[str] = []
+        operator_capsule = request.metadata.get("operator_capsule")
+        skill_entrypoint = None
+        if isinstance(operator_capsule, dict):
+            raw_entrypoint = operator_capsule.get("skill_entrypoint")
+            if raw_entrypoint:
+                skill_entrypoint = str(raw_entrypoint).strip()
+        for command in commands_seen:
+            normalized = command.strip().lower()
+            if self._looks_like_read_only_deep_research_probe(normalized):
+                continue
+            if skill_entrypoint and skill_entrypoint in command:
+                managed_commands.append(command)
+                continue
+            if "deep_research_pro.py" in command:
+                managed_commands.append(command)
+        return managed_commands
+
+    def _managed_deep_research_cli_was_executed(
+        self,
+        *,
+        request: ExecutionRequest,
+        commands_seen: list[str],
+    ) -> bool:
+        return bool(
+            self._extract_managed_deep_research_cli_commands(
+                request=request,
+                commands_seen=commands_seen,
+            )
+        )
+
+    def _looks_like_read_only_deep_research_probe(self, command: str) -> bool:
+        normalized = command.strip().lower()
+        if normalized.startswith("/bin/bash -lc "):
+            normalized = normalized[len("/bin/bash -lc ") :].strip("\"'")
+        return normalized.startswith(_DEEP_RESEARCH_READ_ONLY_COMMAND_PREFIXES)
+
+    def _looks_like_deep_research_deferred_execution(
+        self,
+        *,
+        assistant_summary: str,
+        follow_up_tasks: list[str],
+        commands_seen: list[str],
+        managed_cli_executed: bool,
+    ) -> bool:
+        text = "\n".join(
+            [str(assistant_summary or "").strip(), *[str(item).strip() for item in follow_up_tasks]]
+        )
+        if (
+            not managed_cli_executed
+            and commands_seen
+            and all(self._looks_like_read_only_deep_research_probe(command) for command in commands_seen)
+        ):
+            return True
+        if not text.strip():
+            return False
+        return any(pattern.search(text) for pattern in _DEEP_RESEARCH_DEFERRED_EXECUTION_PATTERNS)
+
+    def _extract_deep_research_thread_id(self, kernel_result: KernelExecutionResult) -> str | None:
+        thread_id = str(kernel_result.debug.get("thread_id") or "").strip()
+        if thread_id:
+            return thread_id
+        stdout = str(kernel_result.debug.get("stdout") or "")
+        match = re.search(r'"thread_id"\s*:\s*"([^"]+)"', stdout)
+        if match:
+            return match.group(1).strip() or None
+        return None
+
+    def _format_deep_research_managed_cli_not_executed_summary(
+        self,
+        *,
+        commands_seen: list[str],
+    ) -> str:
+        summary = (
+            "深度研究任务本回合未真正执行托管 deep-research CLI，"
+            "只停留在读取技能入口或说明文件的探测阶段，因此当前结果不能判定为有效进展。"
+            "请直接执行托管 CLI 工作流，并继续产出 Markdown、HTML、DOCX 报告工件。"
+        )
+        if commands_seen:
+            summary += f" 本回合命令：{'；'.join(commands_seen[:3])}"
+        return summary

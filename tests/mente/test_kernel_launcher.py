@@ -131,12 +131,18 @@ def test_build_private_runtime_env_sets_private_home_and_preserves_safe_vars(mon
     monkeypatch.setenv("LANG", "C.UTF-8")
     monkeypatch.setenv("CODEX_HOME", "/shared/public-codex-home")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://env.example/v1")
+    monkeypatch.setenv("TAVILY_API_URL", "https://tavily.example/search")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("BRAVE_API_KEY", "brave-test")
 
     env = build_private_runtime_env(Path("/private/codex-home"))
 
     assert env["PATH"] == "/usr/local/bin"
     assert env["LANG"] == "C.UTF-8"
     assert env["OPENAI_BASE_URL"] == "https://env.example/v1"
+    assert env["TAVILY_API_URL"] == "https://tavily.example/search"
+    assert env["TAVILY_API_KEY"] == "tvly-test"
+    assert env["BRAVE_API_KEY"] == "brave-test"
     assert env["HOME"] == "/private/codex-home"
     assert env["CODEX_HOME"] == "/private/codex-home"
 

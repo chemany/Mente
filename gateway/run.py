@@ -391,6 +391,24 @@ def _background_worker_explicit_summary(job: Mapping[str, Any]) -> str:
     return summary
 
 
+def _background_worker_summary_looks_terminal(summary: str | None) -> bool:
+    text = str(summary or "").strip().lower()
+    if not text:
+        return False
+    terminal_markers = (
+        "已完成",
+        "任务完成",
+        "deep research completed",
+        "markdown:",
+        "html:",
+        "docx:",
+        ".md",
+        ".html",
+        ".docx",
+    )
+    return any(marker in text for marker in terminal_markers)
+
+
 def _sanitize_completed_worker_summary(summary: str) -> str:
     text = str(summary or "").strip()
     if not text:
@@ -432,6 +450,18 @@ def _render_background_worker_coordinator_reply(
     lane = _normalize_background_worker_lane(job.get("lane"))
     job_id = str(job.get("job_id") or "").strip()
     summary = _background_worker_summary_text(job)
+    if normalized_status == "accepted":
+        if _background_worker_summary_looks_terminal(summary):
+            normalized_status = "completed"
+        else:
+            next_step = _background_worker_default_next_step(job)
+            accepted_summary = summary or f"正在{next_step.rstrip('。')}"
+            reply = f"已转给 {lane} worker"
+            if job_id:
+                reply = f"{reply}（job {job_id}）"
+            return f"{reply}，{accepted_summary} 下一步：{next_step}"
+    if normalized_status == "running" and _background_worker_summary_looks_terminal(summary):
+        normalized_status = "completed"
     if normalized_status == "accepted":
         next_step = _background_worker_default_next_step(job)
         accepted_summary = summary or f"正在{next_step.rstrip('。')}"
@@ -2342,6 +2372,7 @@ def _format_mente_gateway_phase_update(
     progress_items: list[str],
     *,
     elapsed_seconds: float,
+    is_final: bool = False,
 ) -> str:
     """Render one periodic phase update for long-running Mente tasks."""
     elapsed_display = (
@@ -2353,6 +2384,8 @@ def _format_mente_gateway_phase_update(
         summary = "；".join(str(item).strip() for item in progress_items if str(item).strip())
         summary = _truncate_mente_gateway_progress_text(summary, limit=180)
         if summary:
+            if is_final:
+                return f"⏳ 阶段进展（{elapsed_display}）：已执行到 {summary}。"
             return f"⏳ 阶段进展（{elapsed_display}）：已执行到 {summary}。仍在继续整理结论。"
     return f"⏳ 阶段进展（{elapsed_display}）：仍在继续执行与整理中。"
 
@@ -4167,7 +4200,7 @@ class GatewayRunner:
                 ) or job.summary,
                 follow_up_tasks=[user_revision],
                 metadata=snapshot_metadata,
-            )
+        )
         return self._register_background_worker_job(
             session_key=session_key,
             session_id=session_id,
@@ -4179,6 +4212,120 @@ class GatewayRunner:
             metadata=replacement_metadata,
             cancel_event=None,
         )
+
+    def _stage_background_worker_append(
+        self,
+        *,
+        session_key: str,
+        session_id: str,
+        job: _GatewayBackgroundWorkerJob,
+        user_revision: str,
+    ) -> _GatewayBackgroundWorkerJob:
+        request_id = uuid.uuid4().hex
+        control_contract = {
+            "action": "append",
+            "mode": "append_worker",
+            "runtime_mutation_supported": False,
+        }
+        existing_revisions = [
+            str(item).strip()
+            for item in (job.metadata.get("appended_user_revisions") or [])
+            if str(item).strip()
+        ] if isinstance(job.metadata, dict) else []
+        if user_revision not in existing_revisions:
+            existing_revisions.append(user_revision)
+        appended_metadata = {
+            **dict(job.metadata or {}),
+            "control_contract": control_contract,
+            "latest_appended_user_revision": user_revision,
+            "appended_user_revisions": existing_revisions[-5:],
+        }
+        controlled = self._register_background_worker_job(
+            session_key=session_key,
+            session_id=session_id,
+            lane=job.lane,
+            job_id=job.job_id,
+            task_id=job.task_id,
+            summary=job.summary,
+            status=job.status,
+            metadata=appended_metadata,
+            cancel_event=job.cancel_event,
+        )
+        self._update_background_worker_task_metadata(
+            task_id=job.task_id,
+            mutate=lambda metadata: metadata.update(
+                {
+                    "control_contract": control_contract,
+                    "latest_appended_user_revision": user_revision,
+                    "appended_user_revisions": [
+                        *[
+                            str(item).strip()
+                            for item in (metadata.get("appended_user_revisions") or [])
+                            if str(item).strip()
+                        ],
+                        user_revision,
+                    ][-5:],
+                }
+            ),
+        )
+        previous_snapshot = None
+        if self.session_store is not None and hasattr(self.session_store, "get_recent_task_snapshot"):
+            previous_snapshot = self.session_store.get_recent_task_snapshot(
+                session_id,
+                lane=job.lane,
+            )
+        if self.session_store is not None and hasattr(self.session_store, "bind_recent_task_snapshot"):
+            snapshot_metadata = (
+                dict(previous_snapshot.get("metadata") or {})
+                if isinstance(previous_snapshot, dict)
+                else {}
+            )
+            snapshot_metadata.update(
+                {
+                    "lane": job.lane,
+                    "task_profile": job.metadata.get("task_profile"),
+                    "skill_refs": list(job.metadata.get("skill_refs") or snapshot_metadata.get("skill_refs") or []),
+                    "pending_worker_control": {
+                        "action": "append",
+                        "mode": "append_worker",
+                        "runtime_mutation_supported": False,
+                        "lane": job.lane,
+                        "request_id": request_id,
+                        "task_profile": job.metadata.get("task_profile"),
+                        "skill_refs": list(job.metadata.get("skill_refs") or []),
+                        "previous_job_id": job.job_id,
+                        "previous_task_id": job.task_id,
+                        "user_revision": user_revision,
+                        "reason": "user_append",
+                    },
+                }
+            )
+            follow_up_tasks = []
+            if isinstance(previous_snapshot, dict):
+                for item in previous_snapshot.get("follow_up_tasks") or []:
+                    normalized = str(item).strip()
+                    if normalized and normalized not in follow_up_tasks:
+                        follow_up_tasks.append(normalized)
+            if user_revision not in follow_up_tasks:
+                follow_up_tasks.append(user_revision)
+            self.session_store.bind_recent_task_snapshot(
+                session_id,
+                lane=job.lane,
+                user_request=(
+                    str(previous_snapshot.get("user_request") or "").strip()
+                    if isinstance(previous_snapshot, dict)
+                    else user_revision
+                ) or user_revision,
+                status="needs_follow_up",
+                assistant_summary=(
+                    str(previous_snapshot.get("assistant_summary") or "").strip()
+                    if isinstance(previous_snapshot, dict)
+                    else job.summary
+                ) or job.summary,
+                follow_up_tasks=follow_up_tasks,
+                metadata=snapshot_metadata,
+            )
+        return controlled
 
     def _control_background_worker_job(
         self,
@@ -4405,9 +4552,19 @@ class GatewayRunner:
             message=event.text or "",
             lane=job.lane,
         ):
+            follow_up = str(event.text or "").strip()
+            if not follow_up:
+                return None
+            appended_job = self._stage_background_worker_append(
+                session_key=session_key,
+                session_id=session_id,
+                job=job,
+                user_revision=follow_up,
+            )
+            self._queue_or_replace_pending_event(session_key, event)
             return (
-                f"A {job.lane} worker is already running for this session. "
-                f"Pause or cancel it first if you want to replace that job."
+                f"Kept the current {appended_job.lane} worker running and queued your follow-up "
+                "to append on the next worker turn."
             )
         return None
 
@@ -12743,7 +12900,7 @@ class GatewayRunner:
                         return
                     await _publish_mente_phase_update()
 
-            async def _publish_mente_phase_update() -> None:
+            async def _publish_mente_phase_update(*, is_final: bool = False) -> None:
                 _notify_adapter = self.adapters.get(source.platform)
                 if not _notify_adapter:
                     return
@@ -12755,6 +12912,12 @@ class GatewayRunner:
                     if session_key
                     else None
                 )
+                live_worker_status = (
+                    str(live_worker_job.status or "").strip().lower()
+                    if live_worker_job is not None
+                    else ""
+                )
+                effective_final = is_final or live_worker_status in {"completed", "failed", "cancelled"}
                 _phase_update = _format_mente_gateway_phase_update(
                     _resolve_background_worker_phase_progress_items(
                         session_id=session_id,
@@ -12762,6 +12925,7 @@ class GatewayRunner:
                         live_items=list(mente_progress_summary_items),
                     ),
                     elapsed_seconds=time.time() - _mente_notify_start,
+                    is_final=effective_final,
                 )
                 try:
                     if mente_notify_message_id[0] and _notify_supports_edit:
@@ -12891,9 +13055,10 @@ class GatewayRunner:
                     _MENTE_NOTIFY_INTERVAL is not None
                     and time.time() - _mente_notify_start >= _MENTE_NOTIFY_INTERVAL
                     and mente_progress_summary_items
+                    and result.get("failed", False)
                     and _run_still_current()
                 ):
-                    await _publish_mente_phase_update()
+                    await _publish_mente_phase_update(is_final=True)
                 lane_terminal_event = build_lane_terminal_event(
                     ExecutionResult(
                         status="failed" if result.get("failed", False) else "success",

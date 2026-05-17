@@ -268,6 +268,83 @@ def test_build_gateway_task_preserves_explicit_workspace_over_lane_default(monke
     assert task.workspace == str(explicit_workspace)
 
 
+def test_build_gateway_task_routes_skill_audit_to_installed_skill_workspace(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    fallback_cwd = tmp_path / "fallback-cwd"
+    repo_root = tmp_path / "repo"
+    installed_skill = mente_home / "skills" / "social-media" / "xhs-daily-news"
+    mente_home.mkdir()
+    fallback_cwd.mkdir()
+    repo_root.mkdir()
+    installed_skill.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    (installed_skill / "SKILL.md").write_text("# XHS Daily News\n", encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("TERMINAL_CWD", str(fallback_cwd))
+    monkeypatch.chdir(repo_root)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="查找一下Daily News技能，看看有什么优化项",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+    )
+
+    assert task.metadata["lane"] == "engineering"
+    assert task.metadata["task_profile"] == "skill_audit"
+    assert task.metadata["skill_refs"] == ["social-media/xhs-daily-news"]
+    assert task.workspace == str(installed_skill)
+    assert any(
+        fact.startswith("Skill audit workflow brief:")
+        for fact in task.memory_facts
+    )
+
+
+def test_build_gateway_task_routes_skill_audit_to_repo_workspace_when_skill_missing(
+    monkeypatch,
+    tmp_path,
+):
+    mente_home = tmp_path / ".mente"
+    fallback_cwd = tmp_path / "fallback-cwd"
+    repo_root = tmp_path / "repo"
+    mente_home.mkdir()
+    fallback_cwd.mkdir()
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("TERMINAL_CWD", str(fallback_cwd))
+    monkeypatch.chdir(repo_root)
+
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="查找一下Daily News技能，看看有什么优化项",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+    )
+
+    assert task.metadata["task_profile"] == "skill_audit"
+    assert task.metadata["skill_refs"] == ["social-media/xhs-daily-news"]
+    assert task.workspace == str(repo_root)
+
+
 def test_build_gateway_task_injects_recent_task_snapshot_for_continue_request(tmp_path):
     source = SessionSource(
         platform=Platform.LOCAL,
@@ -361,7 +438,7 @@ def test_resolve_conversation_route_uses_classifier_for_ambiguous_turn(monkeypat
     assert route.reason == "llm_classifier:research"
 
 
-def test_resolve_conversation_route_uses_classifier_for_engineering_turn(
+def test_resolve_conversation_route_uses_deterministic_engineering_route(
     monkeypatch,
 ):
     def _classify(**kwargs):
@@ -381,7 +458,7 @@ def test_resolve_conversation_route_uses_classifier_for_engineering_turn(
     )
 
     assert route.lane == "engineering"
-    assert route.reason == "llm_classifier:engineering"
+    assert route.reason == "deterministic:engineering"
 
 
 def test_resolve_conversation_route_classifier_failure_falls_back_to_director(monkeypatch):
@@ -1062,6 +1139,274 @@ def test_build_gateway_task_infers_config_admin_skill_for_direct_mente_config_up
     )
 
 
+def test_build_gateway_task_routes_persistent_deep_research_upload_preference_to_config_admin(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "director", "confidence": "low", "reason": "fallback"},
+    )
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message=(
+            "以后深度研究报告完成后，默认上传到我的飞书云文档这个目录，"
+            "写到配置里："
+            "https://my.feishu.cn/drive/folder/BGamf6YTllHumVdAdCpcHtlpnhh"
+        ),
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "调用技能，深度研究抗氧基BHEB，形成完整调研报告。",
+            "status": "needs_follow_up",
+            "assistant_summary": "已生成 Markdown、HTML、DOCX 三份报告。",
+            "follow_up_tasks": ["上传这三个报告到飞书云文档"],
+            "metadata": {
+                "lane": "research",
+                "task_profile": "deep_research",
+                "skill_refs": ["research/deep-research-pro"],
+                "artifacts_out": [
+                    "/tmp/report.md",
+                    "/tmp/report.html",
+                    "/tmp/report.docx",
+                ],
+            },
+        },
+    )
+
+    assert task.skill_refs == ["software-development/mente-config-admin"]
+    assert task.metadata["lane"] == "config_admin"
+    assert task.metadata["task_profile"] == "config_admin"
+    assert task.metadata["dispatch_decision"]["reason"] == "deterministic:owner_lane:config_admin"
+    assert any(
+        fact.startswith("Config-admin workflow brief:")
+        for fact in task.memory_facts
+    )
+
+
+def test_build_gateway_task_routes_self_improvement_skill_change_to_engineering(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "director", "confidence": "low", "reason": "fallback"},
+    )
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message=(
+            "根据这次运行情况自我完善。以后深度研究报告完成后默认上传到我的飞书云文档目录，"
+            "调用 Codex runtime 去编程修改技能、脚本和工作流，不要只记忆："
+            "https://my.feishu.cn/drive/folder/BGamf6YTllHumVdAdCpcHtlpnhh"
+        ),
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "调用技能，深度研究抗氧基BHEB，形成完整调研报告。",
+            "status": "needs_follow_up",
+            "assistant_summary": "已生成 Markdown、HTML、DOCX 三份报告。",
+            "follow_up_tasks": ["上传这三个报告到飞书云文档"],
+            "metadata": {
+                "lane": "research",
+                "task_profile": "deep_research",
+                "skill_refs": ["research/deep-research-pro"],
+                "artifacts_out": [
+                    "/tmp/report.md",
+                    "/tmp/report.html",
+                    "/tmp/report.docx",
+                ],
+            },
+        },
+    )
+
+    assert task.skill_refs == []
+    assert task.metadata["lane"] == "engineering"
+    assert task.metadata["task_profile"] == "self_improvement"
+    assert task.metadata["dispatch_decision"]["reason"] == "deterministic:self_improvement:engineering"
+    assert any(
+        fact.startswith("Self-improvement workflow brief:")
+        for fact in task.memory_facts
+    )
+    assert any(
+        "do not stop at a memory-only acknowledgement" in constraint.lower()
+        for constraint in task.constraints
+    )
+    assert any(
+        "exact files changed and verification performed" in criterion.lower()
+        for criterion in task.acceptance_criteria
+    )
+
+
+def test_build_gateway_task_routes_skill_audit_capability_follow_up_to_self_improvement(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "director", "confidence": "low", "reason": "fallback"},
+    )
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="这类问题我倾向mente要会自己解决，你要强化的是mente本身的能力。",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "查找一下Daily News技能，看看有什么优化项",
+            "status": "needs_follow_up",
+            "assistant_summary": "已列出 workflow、解析和发布顺序方面的改进项。",
+            "metadata": {
+                "lane": "engineering",
+                "task_profile": "skill_audit",
+                "skill_refs": ["social-media/xhs-daily-news"],
+            },
+        },
+    )
+
+    assert task.skill_refs == []
+    assert task.worker_skill_refs == ["social-media/xhs-daily-news"]
+    assert task.metadata["lane"] == "engineering"
+    assert task.metadata["task_profile"] == "self_improvement"
+    assert task.metadata["dispatch_decision"]["reason"] == "deterministic:self_improvement:engineering"
+    assert task.metadata["dispatch_decision"]["worker_skill_refs"] == [
+        "social-media/xhs-daily-news"
+    ]
+    assert any(
+        fact.startswith("Self-improvement workflow brief:")
+        for fact in task.memory_facts
+    )
+    assert any(
+        "xhs-daily-news" in fact for fact in task.memory_facts
+    )
+
+
+def test_build_gateway_task_injects_mente_inventory_for_self_improvement(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        mente_bridge,
+        "_classify_ambiguous_conversation_lane",
+        lambda **kwargs: {"lane": "director", "confidence": "low", "reason": "fallback"},
+    )
+    mente_home = tmp_path / ".mente"
+    skills_root = mente_home / "skills" / "social-media" / "xhs-daily-news"
+    cron_dir = mente_home / "cron"
+    deep_research_root = tmp_path / "deep-research"
+    skills_root.mkdir(parents=True)
+    cron_dir.mkdir(parents=True)
+    deep_research_root.mkdir(parents=True)
+    (skills_root / "SKILL.md").write_text(
+        "---\nname: xhs-daily-news\ndescription: Daily news skill.\n---\n",
+        encoding="utf-8",
+    )
+    (mente_home / "config.yaml").write_text(
+        f"mente:\n  deep_research:\n    output_root: {deep_research_root}\n",
+        encoding="utf-8",
+    )
+    (cron_dir / "jobs.json").write_text(
+        '{"jobs":[{"id":"job-1","name":"Daily News","enabled":true,"schedule":"0 9 * * *"}]}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.setenv("HERMES_HOME", str(mente_home))
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="这类问题我倾向mente要会自己解决，你要强化的是mente本身的能力。",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+        recent_task_snapshot={
+            "user_request": "查找一下Daily News技能，看看有什么优化项",
+            "status": "needs_follow_up",
+            "assistant_summary": "已列出 workflow、解析和发布顺序方面的改进项。",
+            "metadata": {
+                "lane": "engineering",
+                "task_profile": "skill_audit",
+                "skill_refs": ["social-media/xhs-daily-news"],
+                "artifacts_out": [str(deep_research_root / "latest.md")],
+            },
+        },
+    )
+
+    inventory_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Mente inventory:")
+    )
+    assert "social-media/xhs-daily-news" in inventory_fact
+    assert "jobs.json" in inventory_fact
+    assert str(deep_research_root) in inventory_fact
+    assert task.metadata["mente_inventory"]["skills"]["referenced_refs"] == [
+        "social-media/xhs-daily-news"
+    ]
+    assert task.metadata["mente_inventory"]["automation"]["total_jobs"] == 1
+    assert task.metadata["mente_inventory"]["routing_hint"]["selected_category"] == "skills"
+
+
+def test_build_gateway_task_skips_mente_inventory_for_generic_chat(tmp_path):
+    source = SessionSource(
+        platform=Platform.LOCAL,
+        chat_id="cli",
+        chat_name="CLI",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="你好，今天怎么样？",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:local:dm",
+        workspace=str(tmp_path),
+    )
+
+    assert not any(fact.startswith("Mente inventory:") for fact in task.memory_facts)
+    assert "mente_inventory" not in task.metadata
+
+
 def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
     monkeypatch, tmp_path
 ):
@@ -1099,6 +1444,14 @@ def test_build_gateway_task_infers_deep_research_skill_and_delivery_contract(
         fact.startswith("Deep research workflow brief:")
         for fact in task.memory_facts
     )
+    architecture_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Mente worker architecture context:")
+    )
+    assert "coordinator owns user turns" in architecture_fact
+    skill_context_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Relevant skill context:")
+    )
+    assert "research/deep-research-pro" in skill_context_fact
     entrypoint_fact = next(
         fact for fact in task.memory_facts if fact.startswith("Deep research execution plan:")
     )
@@ -1166,6 +1519,38 @@ def test_build_gateway_task_deep_research_parallel_plan_is_workspace_scoped(tmp_
 
     assert str(tmp_path) in entrypoint_fact
     assert "Avoid broad repository or home-directory scans before delegating work." in entrypoint_fact
+
+
+def test_build_gateway_task_deep_research_plan_points_to_skill_md_and_direct_cli(tmp_path):
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    task = build_gateway_task(
+        message="调用技能，深度研究抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚这一个标准化学品，形成万字调研报告。",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        workspace=str(tmp_path),
+    )
+
+    entrypoint_fact = next(
+        fact for fact in task.memory_facts if fact.startswith("Deep research execution plan:")
+    )
+
+    assert "Canonical instructions file:" in entrypoint_fact
+    assert "/research/deep-research-pro/SKILL.md" in entrypoint_fact
+    assert "Do not probe README.md" in entrypoint_fact
+    assert "Managed CLI launch command:" in entrypoint_fact
+    assert 'deep_research_pro.py "抗氧基BHEB 2,6-二叔丁基-4-乙基苯酚"' in entrypoint_fact
+    assert "--output-dir" in entrypoint_fact
+    assert "deep-research" in entrypoint_fact
 
 
 def test_resolve_gateway_task_host_timeout_seconds_defaults_content_publishing_timeout_off():

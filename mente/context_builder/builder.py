@@ -13,6 +13,7 @@ from mente.memory.context import (
     retain_on_demand_prompt_memories,
     uses_on_demand_memory,
 )
+from mente.mente_inventory import build_worker_mente_inventory_payload
 from mente.task_core.models import ExecutionRequest, Task
 
 
@@ -56,6 +57,14 @@ class ContextBuilder:
             trace.injected_count = max(0, len(request_memory_facts) - len(task_memory_facts))
             trace.prompt_budget_char_count = retained_char_count
         metadata = dict(task.metadata)
+        inventory_payload = build_worker_mente_inventory_payload(task)
+        if inventory_payload is not None:
+            inventory_fact, inventory_metadata = inventory_payload
+            if inventory_fact and not any(
+                fact.startswith("Mente inventory:") for fact in request_memory_facts
+            ):
+                request_memory_facts = [*request_memory_facts, inventory_fact]
+            metadata.setdefault("mente_inventory", inventory_metadata)
         metadata["memory_context_prepared"] = True
         metadata["memory_read_mode"] = memory_read_mode
         return ExecutionRequest(

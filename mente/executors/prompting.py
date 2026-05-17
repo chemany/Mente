@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from mente.executors.bridge_mcp import model_visible_mcp_tool_name
+from mente.mente_inventory import render_mente_inventory_routing_hint
 from mente.task_core.models import ExecutionRequest
 
 
@@ -298,6 +299,24 @@ def _append_lane_execution_guidance(
     lane: str | None,
 ) -> None:
     if lane == _RESEARCH_LANE:
+        if _is_deep_research_request(request):
+            lines.append("Deep Research Mode:")
+            lines.append(
+                "- Run the managed deep-research workflow directly instead of stopping at intermediate analysis."
+            )
+            lines.append(
+                "- Prefer the referenced skill entrypoint or direct parallel helper before manual reconstruction."
+            )
+            lines.append(
+                "- The canonical skill instructions file is SKILL.md; do not probe for README.md in the skill root."
+            )
+            lines.append(
+                "- When context already provides a direct launch command or entrypoint, execute it before extra directory probing."
+            )
+            lines.append(
+                "- Treat the task as incomplete until the required report artifacts exist or a concrete blocker is verified."
+            )
+            return
         lines.append("Research Mode:")
         lines.append("- Gather only the evidence needed to answer the request well.")
         lines.append(
@@ -333,6 +352,26 @@ def _append_lane_execution_guidance(
     lines.append(
         "- Rigorous engineering mode: when the request changes code logic, default-value provenance, compatibility behavior, or spans multiple files, inspect the relevant implementation and affected paths before editing."
     )
+    routing_hint_block = _render_mente_inventory_routing_hint_block(request, lane)
+    if routing_hint_block:
+        lines.append(routing_hint_block)
+
+
+def _render_mente_inventory_routing_hint_block(
+    request: ExecutionRequest,
+    lane: str | None,
+) -> str | None:
+    if lane not in {_ENGINEERING_LANE, _CONFIG_ADMIN_LANE}:
+        return None
+    if str(request.role or "").strip().lower() != "worker":
+        return None
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    inventory = metadata.get("mente_inventory")
+    if not isinstance(inventory, dict):
+        return None
+    if _task_profile(request) not in {"self_improvement", "skill_audit", "config_admin"}:
+        return None
+    return render_mente_inventory_routing_hint(inventory.get("routing_hint"))
 
 
 def _normalized_skill_refs(skill_refs: object) -> list[str]:

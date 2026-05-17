@@ -1729,6 +1729,45 @@ def test_resolve_mente_gateway_progress_detail_summarizes_rg_queries():
     assert completed == "✅ Bash · rg 十三碳二酸|菜籽油 agent.log 完成"
 
 
+def test_render_background_worker_coordinator_reply_treats_terminal_summary_as_completed():
+    reply = gateway_run._render_background_worker_coordinator_reply(
+        {
+            "lane": "research",
+            "job_id": "mente_gateway_job_1",
+            "status": "running",
+            "summary": (
+                "市场部任务已完成：深度研究完成。 Markdown: /tmp/report.md "
+                "HTML: /tmp/report.html DOCX: /tmp/report.docx"
+            ),
+            "metadata": {
+                "artifacts_out": [
+                    "/tmp/report.md",
+                    "/tmp/report.html",
+                    "/tmp/report.docx",
+                ]
+            },
+        },
+        reply_kind="accepted",
+    )
+
+    assert "下一步" not in reply
+    assert "已完成" in reply
+    assert "report.md" in reply
+
+
+def test_format_mente_gateway_phase_update_uses_completed_wording_for_final_updates():
+    update = gateway_run._format_mente_gateway_phase_update(
+        [
+            "市场部任务已完成：深度研究完成。 Markdown: /tmp/report.md HTML: /tmp/report.html",
+        ],
+        elapsed_seconds=181,
+        is_final=True,
+    )
+
+    assert "仍在继续整理结论" not in update
+    assert "已执行到" in update
+
+
 @pytest.mark.asyncio
 async def test_run_agent_flag_off_post_delivery_reviews_stay_silent_and_do_not_break_main_reply(
     monkeypatch,

@@ -342,6 +342,65 @@ def test_kernel_runner_respects_blocked_completion_status(tmp_path):
     assert result.follow_up_tasks == ["configure publish credentials and retry"]
 
 
+def test_kernel_runner_recovers_blocked_structured_output_from_agent_message_stdout(tmp_path):
+    structured_payload = {
+        "assistant_summary": "缺少搜索 API 配置，无法继续生成最终报告。",
+        "memory_candidates": [],
+        "completion_status": "blocked",
+        "changed_files": [],
+        "artifacts_out": [],
+        "verification_results": ["已执行托管 deep research CLI"],
+        "follow_up_tasks": ["配置 TAVILY_API_KEY 或 BRAVE_API_KEY 后重试"],
+    }
+    duplicated_payload = json.dumps(structured_payload, ensure_ascii=False) * 2
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-456"}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_3",
+                        "type": "agent_message",
+                        "status": "completed",
+                        "text": duplicated_payload,
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}, ensure_ascii=False),
+        ]
+    )
+
+    class _Transport:
+        def execute(self, request: KernelTransportRequest) -> KernelTransportResponse:
+            return KernelTransportResponse(
+                command=["codex", "exec", "--ephemeral"],
+                returncode=0,
+                stdout=stdout,
+                stderr="",
+                raw_output="not-json",
+            )
+
+    runner = KernelRunner(transport=_Transport())
+    result = runner.run(
+        payload=KernelExecutionPayload(
+            prompt="Inspect repository",
+            workspace=str(tmp_path),
+            tool_policy=None,
+        ),
+        session=KernelSessionRequest(mode=KernelSessionMode.STATELESS),
+        runtime_config=RuntimeConfig(runtime_home=tmp_path / "private-codex-home"),
+    )
+
+    assert result.status == "blocked"
+    assert result.assistant_summary == "缺少搜索 API 配置，无法继续生成最终报告。"
+    assert result.verification_results == ["已执行托管 deep research CLI"]
+    assert result.follow_up_tasks == ["配置 TAVILY_API_KEY 或 BRAVE_API_KEY 后重试"]
+    assert result.debug["structured_output"] == structured_payload
+    assert result.debug["thread_id"] == "thread-456"
+
+
 def test_kernel_runner_preserves_session_mode_when_transport_supports_it(tmp_path):
     class _Transport:
         def __init__(self) -> None:

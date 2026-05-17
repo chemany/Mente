@@ -126,6 +126,9 @@ def build_private_runtime_env(
         "TMP",
         "TEMP",
         "TMPDIR",
+        "TAVILY_API_URL",
+        "TAVILY_API_KEY",
+        "BRAVE_API_KEY",
     ):
         value = os.environ.get(key)
         if value:

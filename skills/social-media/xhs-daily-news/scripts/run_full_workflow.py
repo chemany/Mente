@@ -14,6 +14,7 @@
 
 import argparse
 import os
+import shlex
 import sys
 import subprocess
 from datetime import datetime, timedelta
@@ -32,14 +33,16 @@ def run_command(cmd, description, check=True):
     print(f"\n{'='*60}")
     print(f"📌 {description}")
     print(f"{'='*60}")
-    print(f"命令: {cmd}")
+    print(f"命令: {shlex.join(cmd)}")
     print("-" * 60)
-    
-    # 使用系统 Python 环境
-    env = os.environ.copy()
-    env['PATH'] = '/usr/bin:' + env.get('PATH', '')
-    
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env, executable='/bin/bash')
+
+    result = subprocess.run(
+        cmd,
+        shell=False,
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+    )
     
     if result.stdout:
         print(result.stdout)
@@ -57,32 +60,43 @@ def run_command(cmd, description, check=True):
 def step1_generate_news(date_str, output_dir):
     """步骤 1: 生成每日新闻"""
     output_file = output_dir / f"daily-briefing-{date_str}.md"
-    
+
     if output_file.exists():
         print(f"⚠️ 新闻文件已存在: {output_file}")
         print("跳过新闻生成，使用现有文件")
         return True
-    
-cmd = f"""python3 {SCRIPTS_DIR}/generate_daily_news.py \
---date {date_str} \
---output-dir {output_dir}"""
-    
+
+    cmd = [
+        "python3",
+        str(SCRIPTS_DIR / "generate_daily_news.py"),
+        "--date",
+        date_str,
+        "--output-dir",
+        str(output_dir),
+    ]
+
     return run_command(cmd, "生成每日新闻（使用 Tavily API）")
 
 
 def step2_generate_images(date_str, output_dir):
     """步骤 2: 生成配图"""
     input_file = output_dir / f"daily-briefing-{date_str}.md"
-    
+
     if not input_file.exists():
         print(f"❌ 新闻文件不存在: {input_file}")
         return False
-    
-cmd = f"""python3 {SCRIPTS_DIR}/generate_news_image.py \
---input {input_file} \
---output-dir {output_dir} \
---layout both"""
-    
+
+    cmd = [
+        "python3",
+        str(SCRIPTS_DIR / "generate_news_image.py"),
+        "--input",
+        str(input_file),
+        "--output-dir",
+        str(output_dir),
+        "--layout",
+        "both",
+    ]
+
     return run_command(cmd, "生成配图（纵版+横版）")
 
 
@@ -90,15 +104,20 @@ def step3_convert_to_xhs(date_str, output_dir):
     """步骤 3: 转换为小红书格式"""
     input_file = output_dir / f"daily-briefing-{date_str}.md"
     output_file = output_dir / f"xhs_daily_{date_str}.md"
-    
+
     if not input_file.exists():
         print(f"❌ 新闻文件不存在: {input_file}")
         return False
-    
-    cmd = f"""python3 {SCRIPTS_DIR}/convert_to_xhs.py \
---input {input_file} \
---output {output_file}"""
-    
+
+    cmd = [
+        "python3",
+        str(SCRIPTS_DIR / "convert_to_xhs.py"),
+        "--input",
+        str(input_file),
+        "--output",
+        str(output_file),
+    ]
+
     return run_command(cmd, "转换为小红书格式")
 
 
@@ -106,52 +125,62 @@ def step4_render_cards(date_str, output_dir):
     """步骤 4: 渲染小红书卡片"""
     input_file = output_dir / f"xhs_daily_{date_str}.md"
     cards_dir = output_dir / f"xhs_output_{date_str}"
-    
+
     if not input_file.exists():
         print(f"❌ 小红书文件不存在: {input_file}")
         return False
-    
+
     # 创建输出目录
     cards_dir.mkdir(exist_ok=True)
-    
-cmd = f"""python3 {SCRIPTS_DIR}/render_xhs_cards.py \
-{input_file} \
---output-dir {cards_dir} \
---style xiaohongshu"""
-    
+
+    cmd = [
+        "python3",
+        str(SCRIPTS_DIR / "render_xhs_cards.py"),
+        str(input_file),
+        "--output-dir",
+        str(cards_dir),
+        "--style",
+        "xiaohongshu",
+    ]
+
     return run_command(cmd, "渲染小红书卡片")
 
 
 def step5_publish(date_str, output_dir, dry_run=False):
     """步骤 5: 发布到小红书"""
     cards_dir = output_dir / f"xhs_output_{date_str}"
-    
+
     if not cards_dir.exists():
         print(f"❌ 输出目录不存在: {cards_dir}")
         return False
-    
+
     # 检查必要的文件
     cover = cards_dir / "cover.png"
     if not cover.exists():
         print(f"❌ 封面不存在: {cover}")
         return False
-    
+
     # 获取图片
     images = sorted(cards_dir.glob("*.png"))
     if not images:
         print("❌ 没有找到图片文件")
         return False
-    
+
     print(f"📸 找到 {len(images)} 张图片")
-    
+
     # 使用 publish_to_xhs.py 脚本
-    cmd = f"""python3 {SCRIPTS_DIR}/publish_to_xhs.py \
---date {date_str} \
---output-dir {output_dir}"""
-    
+    cmd = [
+        "python3",
+        str(SCRIPTS_DIR / "publish_to_xhs.py"),
+        "--date",
+        date_str,
+        "--output-dir",
+        str(output_dir),
+    ]
+
     if dry_run:
-        cmd += " --dry-run"
-    
+        cmd.append("--dry-run")
+
     return run_command(cmd, "发布到小红书", check=False)
 
 
