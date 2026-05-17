@@ -345,6 +345,44 @@ def test_build_gateway_task_routes_skill_audit_to_repo_workspace_when_skill_miss
     assert task.workspace == str(repo_root)
 
 
+def test_build_gateway_task_bundle_keeps_skill_audit_worker_sessionful(monkeypatch, tmp_path):
+    mente_home = tmp_path / ".mente"
+    installed_skill = mente_home / "skills" / "social-media" / "xhs-daily-news"
+    repo_root = tmp_path / "repo"
+    mente_home.mkdir()
+    installed_skill.mkdir(parents=True)
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+    (installed_skill / "SKILL.md").write_text("# XHS Daily News\n", encoding="utf-8")
+    monkeypatch.setenv("MENTE_HOME", str(mente_home))
+    monkeypatch.chdir(repo_root)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    bundle = mente_bridge.build_gateway_task_bundle(
+        message="你帮我看看 daily news 技能，看看有哪些方面需要改进",
+        context_prompt="session summary",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
+        workspace=str(repo_root),
+    )
+
+    assert bundle.worker_task is not None
+    assert bundle.worker_task.metadata["task_profile"] == "skill_audit"
+    assert bundle.worker_task.execution_mode is ExecutionMode.SESSIONFUL
+    assert bundle.worker_task.execution_session == ExecutionSession(mode=SessionMode.START)
+
+
 def test_build_gateway_task_injects_recent_task_snapshot_for_continue_request(tmp_path):
     source = SessionSource(
         platform=Platform.LOCAL,

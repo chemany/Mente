@@ -395,6 +395,8 @@ def _background_worker_summary_looks_terminal(summary: str | None) -> bool:
     text = str(summary or "").strip().lower()
     if not text:
         return False
+    if _background_worker_summary_looks_incomplete(summary):
+        return False
     terminal_markers = (
         "已完成",
         "任务完成",
@@ -407,6 +409,27 @@ def _background_worker_summary_looks_terminal(summary: str | None) -> bool:
         ".docx",
     )
     return any(marker in text for marker in terminal_markers)
+
+
+def _background_worker_summary_looks_incomplete(summary: str | None) -> bool:
+    text = str(summary or "").strip().lower()
+    if not text:
+        return False
+    incomplete_markers = (
+        "下一步",
+        "next step",
+        "继续检查",
+        "继续定位",
+        "继续收集",
+        "会检查",
+        "will inspect",
+        "will review",
+        "继续整理结论",
+        "不执行整条工作流",
+        "先按技能审查模式处理",
+        "i already read skill.md",
+    )
+    return any(marker in text for marker in incomplete_markers)
 
 
 def _sanitize_completed_worker_summary(summary: str) -> str:
@@ -451,7 +474,10 @@ def _render_background_worker_coordinator_reply(
     job_id = str(job.get("job_id") or "").strip()
     summary = _background_worker_summary_text(job)
     if normalized_status == "accepted":
-        if _background_worker_summary_looks_terminal(summary):
+        if (
+            _background_worker_summary_looks_terminal(summary)
+            and not _background_worker_summary_looks_incomplete(summary)
+        ):
             normalized_status = "completed"
         else:
             next_step = _background_worker_default_next_step(job)
@@ -460,7 +486,11 @@ def _render_background_worker_coordinator_reply(
             if job_id:
                 reply = f"{reply}（job {job_id}）"
             return f"{reply}，{accepted_summary} 下一步：{next_step}"
-    if normalized_status == "running" and _background_worker_summary_looks_terminal(summary):
+    if (
+        normalized_status == "running"
+        and _background_worker_summary_looks_terminal(summary)
+        and not _background_worker_summary_looks_incomplete(summary)
+    ):
         normalized_status = "completed"
     if normalized_status == "accepted":
         next_step = _background_worker_default_next_step(job)
@@ -1207,18 +1237,24 @@ def _run_mente_gateway_turn(
             final_status = "cancelled"
         elif result.status != "success":
             final_status = "failed"
+        elif _background_worker_summary_looks_incomplete(result.summary):
+            final_status = "blocked"
         finished_payload = dict(worker_job_payload)
+        merged_metadata = {
+            **dict(worker_job_payload.get("metadata") or {}),
+            **dict(result.metadata or {}),
+            "worker_status": result.status,
+        }
+        if final_status == "blocked":
+            merged_metadata.setdefault("blocked_reason", "incomplete_worker_turn")
         finished_payload.update(
             {
                 "status": final_status,
                 "summary": result.summary or worker_job_payload.get("summary", ""),
                 "task_id": str(result.metadata.get("task_id") or worker_job_payload["task_id"]),
                 "job_id": str(result.metadata.get("job_id") or worker_job_payload["job_id"]),
-                "metadata": {
-                    **dict(worker_job_payload.get("metadata") or {}),
-                    **dict(result.metadata or {}),
-                    "worker_status": result.status,
-                },
+                "metadata": merged_metadata,
+                "blocked_reason": merged_metadata.get("blocked_reason"),
             }
         )
         background_worker_finished(finished_payload)

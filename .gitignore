@@ -70,3 +70,8 @@ mini-swe-agent/
 result
 website/static/api/skills-index.json
 models-dev-upstream/
+
+# Local runtime artifacts and planning scratch files
+.mente/publishing/
+docs/plans/
+paseo.json

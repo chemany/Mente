@@ -84,6 +84,19 @@ _CHINESE_SELF_INTRO_MARKERS: tuple[str, ...] = (
     "有什么需要帮忙的",
     "大语言模型",
 )
+_USER_FACING_SUMMARY_JSON_KEYS: frozenset[str] = frozenset(
+    {
+        "结论",
+        "conclusion",
+        "summary",
+        "findings",
+        "issues",
+        "优先级建议",
+        "priority_recommendations",
+        "recommendations",
+        "next_steps",
+    }
+)
 
 _MENTE_PROJECT_SUPERPOWERS: tuple[str, ...] = (
     "brainstorming",
@@ -239,6 +252,15 @@ def render_execution_prompt(request: ExecutionRequest) -> str:
                 "- Read only the targeted config, env, or auth files required for the change; do not scan the repository or home directory just to rediscover the setup.",
                 "- Patch only the requested keys, preserve unrelated settings, and redact secrets in user-facing confirmations.",
                 "- Restart or reload the gateway only if the changed setting requires it, then report exactly what changed.",
+            ]
+        )
+    if _is_skill_audit_request(request):
+        workflow_policy_lines.extend(
+            [
+                "- Treat the audit as incomplete until you deliver concrete optimization findings tied to the referenced skill files.",
+                "- Reading only SKILL.md, locating scripts, or announcing a next step is not a completed audit.",
+                "- If you have not yet delivered concrete optimization findings with file references, set `completion_status` to `blocked` and explain the blocker or remaining review step instead of returning success.",
+                "- Prefer 2-5 high-signal findings over a process update, and keep each finding anchored to a directly relevant file or script entrypoint.",
             ]
         )
     if workflow_policy_lines:
@@ -509,6 +531,10 @@ def _is_config_admin_request(request: ExecutionRequest) -> bool:
     return _MENTE_CONFIG_ADMIN_SKILL_REF in skill_refs
 
 
+def _is_skill_audit_request(request: ExecutionRequest) -> bool:
+    return _task_profile(request) == "skill_audit"
+
+
 def _looks_like_chinese_identity_or_greeting_request(user_request: str | None) -> bool:
     """Return True for narrow Chinese greeting/identity prompts."""
     if not user_request:
@@ -547,6 +573,9 @@ def normalize_user_facing_summary(
     normalized = summary or ""
     for pattern, replacement in _USER_FACING_BRAND_PATTERNS:
         normalized = pattern.sub(replacement, normalized)
+    formatted_structured_summary = _format_user_facing_summary_json(normalized)
+    if formatted_structured_summary is not None:
+        normalized = formatted_structured_summary
     if _looks_like_chinese_model_identity_request(user_request):
         stripped = normalized.lstrip()
         if (
@@ -565,6 +594,91 @@ def normalize_user_facing_summary(
         ):
             return _CANONICAL_MENTE_IDENTITY_SUMMARY
     return normalized
+
+
+def _format_user_facing_summary_json(summary: str) -> str | None:
+    text = str(summary or "").strip()
+    if not text or not text.startswith("{"):
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if not any(str(key) in _USER_FACING_SUMMARY_JSON_KEYS for key in payload):
+        return None
+
+    lines: list[str] = []
+    conclusion = str(
+        payload.get("结论")
+        or payload.get("conclusion")
+        or payload.get("summary")
+        or ""
+    ).strip()
+    if conclusion:
+        lines.append(conclusion)
+
+    raw_findings = payload.get("findings")
+    if isinstance(raw_findings, list):
+        finding_lines = _render_user_facing_findings(raw_findings)
+        if finding_lines:
+            if lines:
+                lines.append("")
+            lines.extend(finding_lines)
+
+    raw_recommendations = (
+        payload.get("优先级建议")
+        or payload.get("priority_recommendations")
+        or payload.get("recommendations")
+        or payload.get("next_steps")
+    )
+    recommendation_lines = _render_user_facing_recommendations(raw_recommendations)
+    if recommendation_lines:
+        if lines:
+            lines.append("")
+        lines.extend(recommendation_lines)
+
+    formatted = "\n".join(line.rstrip() for line in lines if line is not None).strip()
+    return formatted or None
+
+
+def _render_user_facing_findings(findings: list[Any]) -> list[str]:
+    lines: list[str] = ["主要问题："]
+    rendered_count = 0
+    for index, item in enumerate(findings, start=1):
+        if not isinstance(item, dict):
+            text = str(item or "").strip()
+            if not text:
+                continue
+            lines.append(f"{index}. {text}")
+            rendered_count += 1
+            continue
+        title = str(item.get("title") or item.get("问题") or "").strip()
+        file_ref = str(item.get("file") or item.get("path") or "").strip()
+        detail = str(item.get("detail") or item.get("description") or "").strip()
+        if not (title or file_ref or detail):
+            continue
+        headline = title or file_ref or f"问题 {index}"
+        if file_ref and file_ref != headline:
+            lines.append(f"{index}. {headline} [{file_ref}]")
+        else:
+            lines.append(f"{index}. {headline}")
+        if detail:
+            lines.append(detail)
+        rendered_count += 1
+    return lines if rendered_count else []
+
+
+def _render_user_facing_recommendations(recommendations: Any) -> list[str]:
+    if not isinstance(recommendations, list):
+        return []
+    items = [str(item or "").strip() for item in recommendations if str(item or "").strip()]
+    if not items:
+        return []
+    lines = ["优先级建议："]
+    lines.extend(f"- {item}" for item in items)
+    return lines
 
 
 def normalize_user_facing_failure_summary(

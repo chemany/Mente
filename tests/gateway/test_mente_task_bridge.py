@@ -349,6 +349,45 @@ def test_run_mente_gateway_turn_exposes_task_snapshot_fields(monkeypatch):
     assert result["task_profile"] == "investigation"
 
 
+def test_run_mente_gateway_turn_marks_probe_only_worker_success_as_blocked(monkeypatch):
+    finished_payloads = []
+
+    def _fake_run_gateway_task(**kwargs):
+        return ExecutionResult(
+            status="success",
+            summary=(
+                "先按技能审查模式处理。我已经读了 SKILL.md 并锁定了直接相关的脚本，"
+                "下一步会检查这些入口的一致性、健壮性和可维护性，不执行整条工作流。"
+            ),
+            metadata={"task_id": "task-123"},
+        )
+
+    monkeypatch.setattr("mente.integrations.bridge.run_gateway_task", _fake_run_gateway_task)
+
+    source = SessionSource(
+        platform=Platform.FEISHU,
+        chat_id="oc_test",
+        chat_name="Feishu",
+        chat_type="dm",
+        user_id="user-1",
+    )
+
+    gateway_run._run_mente_gateway_turn(
+        message="你帮我看看 daily news 技能，看看有哪些方面需要改进",
+        context_prompt="session context",
+        history=[],
+        source=source,
+        session_id="session-1",
+        session_key="agent:main:feishu:dm:oc_test",
+        background_worker_finished=finished_payloads.append,
+    )
+
+    assert len(finished_payloads) == 1
+    assert finished_payloads[0]["status"] == "blocked"
+    assert finished_payloads[0]["metadata"]["worker_status"] == "success"
+    assert finished_payloads[0]["metadata"]["blocked_reason"] == "incomplete_worker_turn"
+
+
 def test_format_mente_memory_review_outcome_persisted():
     assert gateway_run._format_mente_memory_review_outcome(
         {
@@ -1753,6 +1792,26 @@ def test_render_background_worker_coordinator_reply_treats_terminal_summary_as_c
     assert "下一步" not in reply
     assert "已完成" in reply
     assert "report.md" in reply
+
+
+def test_render_background_worker_coordinator_reply_does_not_treat_next_step_summary_as_completed():
+    reply = gateway_run._render_background_worker_coordinator_reply(
+        {
+            "lane": "engineering",
+            "job_id": "mente_gateway_job_2",
+            "status": "blocked",
+            "summary": (
+                "先按技能审查模式处理。我已经读了 SKILL.md 并锁定了直接相关的脚本，"
+                "下一步会检查这些入口的一致性、健壮性和可维护性，不执行整条工作流。"
+            ),
+            "blocked_reason": "incomplete_worker_turn",
+            "metadata": {"blocked_reason": "incomplete_worker_turn"},
+        }
+    )
+
+    assert "已完成" not in reply
+    assert "当前卡点" in reply
+    assert "建议下一步" in reply
 
 
 def test_format_mente_gateway_phase_update_uses_completed_wording_for_final_updates():

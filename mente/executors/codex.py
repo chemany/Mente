@@ -74,6 +74,7 @@ from mente.task_core.repository import SQLiteTaskRepository
 logger = logging.getLogger(__name__)
 
 _DEEP_RESEARCH_TASK_PROFILE = "deep_research"
+_SKILL_AUDIT_TASK_PROFILE = "skill_audit"
 _DEEP_RESEARCH_REQUIRED_ARTIFACT_SUFFIXES: tuple[str, ...] = (".md", ".html", ".docx")
 _ARTIFACT_PATH_PATTERN = re.compile(
     r"(?P<path>(?:~|/)[^\s<>()\[\]{}\"'`]+?\.(?:md|markdown|html|docx|doc|pdf|txt|csv|tsv|xlsx|xls|pptx|json|yaml|yml))",
@@ -107,6 +108,17 @@ _DEEP_RESEARCH_DEFERRED_EXECUTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"下一步"),
     re.compile(r"请继续执行深度研究工作流"),
     re.compile(r"继续执行深度研究工作流"),
+)
+_SKILL_AUDIT_PROBE_ONLY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bnext step\b", re.IGNORECASE),
+    re.compile(r"\bwill inspect\b", re.IGNORECASE),
+    re.compile(r"\bcontinue (?:checking|reviewing|inspecting)\b", re.IGNORECASE),
+    re.compile(r"\bi already read skill\.md\b", re.IGNORECASE),
+    re.compile(r"\bstarting with the skill audit\b", re.IGNORECASE),
+    re.compile(r"先按技能审查模式处理"),
+    re.compile(r"我已经读了\s*SKILL\.md", re.IGNORECASE),
+    re.compile(r"下一步"),
+    re.compile(r"继续检查"),
 )
 
 
@@ -309,6 +321,7 @@ class CodexExecutor(CodexKernelAdapter):
                     precondition_fallback_reason=precondition_fallback_reason,
                 )
                 deep_research_retry_metadata: dict[str, Any] | None = None
+                skill_audit_retry_metadata: dict[str, Any] | None = None
                 kernel_result = self._runner.run(
                     payload=self._build_kernel_payload(enriched_request),
                     session=session_request,
@@ -337,6 +350,18 @@ class CodexExecutor(CodexKernelAdapter):
                     kernel_result, session_request, active_request, deep_research_retry_metadata = (
                         retry_outcome
                     )
+                while True:
+                    retry_outcome = self._maybe_retry_skill_audit_after_incomplete_turn(
+                        request=active_request,
+                        session_request=session_request,
+                        kernel_result=kernel_result,
+                        runtime_config=execution_runtime_config,
+                    )
+                    if retry_outcome is None:
+                        break
+                    kernel_result, session_request, active_request, skill_audit_retry_metadata = (
+                        retry_outcome
+                    )
                 translated_result = self._translate_kernel_result(
                     kernel_result,
                     active_request,
@@ -347,6 +372,8 @@ class CodexExecutor(CodexKernelAdapter):
                 )
                 if deep_research_retry_metadata is not None:
                     translated_result.metadata["deep_research_retry"] = deep_research_retry_metadata
+                if skill_audit_retry_metadata is not None:
+                    translated_result.metadata["skill_audit_retry"] = skill_audit_retry_metadata
                 return translated_result
         except ResponsesCompatBridgeError as exc:
             translated_result = self._responses_compat_bridge_failure_result(runtime_config, exc)
@@ -881,6 +908,12 @@ class CodexExecutor(CodexKernelAdapter):
             == _DEEP_RESEARCH_TASK_PROFILE
         )
 
+    def _is_skill_audit_request(self, request: ExecutionRequest) -> bool:
+        return (
+            str(request.metadata.get("task_profile") or "").strip().lower()
+            == _SKILL_AUDIT_TASK_PROFILE
+        )
+
     def _apply_deep_research_artifact_contract(
         self,
         translated: ExecutionResult,
@@ -1294,6 +1327,98 @@ class CodexExecutor(CodexKernelAdapter):
             },
         )
 
+    def _maybe_retry_skill_audit_after_incomplete_turn(
+        self,
+        *,
+        request: ExecutionRequest,
+        session_request: KernelSessionRequest,
+        kernel_result: KernelExecutionResult,
+        runtime_config: RuntimeConfig,
+    ) -> tuple[KernelExecutionResult, KernelSessionRequest, ExecutionRequest, dict[str, Any]] | None:
+        if not self._is_skill_audit_request(request):
+            return None
+        validation = self._skill_audit_probe_only_validation(kernel_result=kernel_result)
+        thread_id = validation["thread_id"]
+        if session_request.mode is not KernelSessionMode.SESSION or not thread_id:
+            return None
+        if not validation["probe_only_turn"] or self._skill_audit_retry_attempted(request):
+            return None
+        retry_request = self._build_skill_audit_retry_request(request)
+        retry_session = KernelSessionRequest(
+            mode=KernelSessionMode.SESSION,
+            session_id=thread_id,
+        )
+        retry_result = self._runner.run(
+            payload=self._build_kernel_payload(retry_request),
+            session=retry_session,
+            runtime_config=runtime_config,
+        )
+        return (
+            retry_result,
+            retry_session,
+            retry_request,
+            {
+                "triggered": True,
+                "reason": "probe_only_turn",
+                "resumed_thread_id": thread_id,
+            },
+        )
+
+    def _build_skill_audit_retry_request(self, request: ExecutionRequest) -> ExecutionRequest:
+        retry_fact = "\n".join(
+            [
+                "Skill audit retry instruction:",
+                "- The previous turn stopped after only reading the skill instructions or locating entry scripts.",
+                "- Do not stop at process narration, a next-step update, or a summary of what you plan to inspect.",
+                "- Continue the same session and finish the audit now.",
+                "- Read only the remaining directly relevant skill files you actually need, then return concrete optimization findings with file references.",
+                "- If a targeted review is still blocked after those reads, set completion_status to blocked and explain the concrete blocker.",
+            ]
+        )
+        memory_facts = list(request.memory_facts)
+        if retry_fact not in memory_facts:
+            memory_facts.append(retry_fact)
+        metadata = dict(request.metadata)
+        metadata["skill_audit_retry_attempted"] = True
+        return request.model_copy(
+            update={
+                "memory_facts": memory_facts,
+                "metadata": metadata,
+            }
+        )
+
+    def _skill_audit_probe_only_validation(
+        self,
+        *,
+        kernel_result: KernelExecutionResult,
+    ) -> dict[str, Any]:
+        command_state = self._extract_command_execution_state(
+            kernel_result.debug.get("stdout"),
+        )
+        commands_seen = command_state["commands_seen"]
+        text = "\n".join(
+            [
+                str(kernel_result.assistant_summary or "").strip(),
+                *[str(item).strip() for item in kernel_result.follow_up_tasks],
+            ]
+        )
+        read_only_probe = bool(commands_seen) and all(
+            self._looks_like_read_only_probe_command(command) for command in commands_seen
+        )
+        probe_only_turn = read_only_probe and any(
+            pattern.search(text) for pattern in _SKILL_AUDIT_PROBE_ONLY_PATTERNS
+        )
+        return {
+            "probe_only_turn": probe_only_turn,
+            "commands_seen": commands_seen,
+            "active_commands": command_state["active_commands"],
+            "thread_id": self._extract_kernel_thread_id(kernel_result),
+        }
+
+    def _skill_audit_retry_attempted(self, request: ExecutionRequest) -> bool:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        return bool(metadata.get("skill_audit_retry_attempted"))
+
     def _build_deep_research_cli_retry_request(
         self,
         request: ExecutionRequest,
@@ -1556,10 +1681,10 @@ class CodexExecutor(CodexKernelAdapter):
         )
 
     def _looks_like_read_only_deep_research_probe(self, command: str) -> bool:
-        normalized = command.strip().lower()
-        if normalized.startswith("/bin/bash -lc "):
-            normalized = normalized[len("/bin/bash -lc ") :].strip("\"'")
-        return normalized.startswith(_DEEP_RESEARCH_READ_ONLY_COMMAND_PREFIXES)
+        return self._looks_like_read_only_probe_command(
+            command,
+            prefixes=_DEEP_RESEARCH_READ_ONLY_COMMAND_PREFIXES,
+        )
 
     def _looks_like_deep_research_deferred_execution(
         self,
@@ -1582,7 +1707,7 @@ class CodexExecutor(CodexKernelAdapter):
             return False
         return any(pattern.search(text) for pattern in _DEEP_RESEARCH_DEFERRED_EXECUTION_PATTERNS)
 
-    def _extract_deep_research_thread_id(self, kernel_result: KernelExecutionResult) -> str | None:
+    def _extract_kernel_thread_id(self, kernel_result: KernelExecutionResult) -> str | None:
         thread_id = str(kernel_result.debug.get("thread_id") or "").strip()
         if thread_id:
             return thread_id
@@ -1591,6 +1716,20 @@ class CodexExecutor(CodexKernelAdapter):
         if match:
             return match.group(1).strip() or None
         return None
+
+    def _extract_deep_research_thread_id(self, kernel_result: KernelExecutionResult) -> str | None:
+        return self._extract_kernel_thread_id(kernel_result)
+
+    def _looks_like_read_only_probe_command(
+        self,
+        command: str,
+        *,
+        prefixes: tuple[str, ...] = _DEEP_RESEARCH_READ_ONLY_COMMAND_PREFIXES,
+    ) -> bool:
+        normalized = command.strip().lower()
+        if normalized.startswith("/bin/bash -lc "):
+            normalized = normalized[len("/bin/bash -lc ") :].strip("\"'")
+        return normalized.startswith(prefixes)
 
     def _format_deep_research_managed_cli_not_executed_summary(
         self,

@@ -729,7 +729,8 @@ def _build_skill_audit_workflow_brief() -> str:
             "2. Read the target skill's SKILL.md and directly relevant scripts first.",
             "3. Keep exploration scoped to the skill directory and minimal supporting code needed to explain concrete optimization opportunities.",
             "4. Do not enumerate MCP resources or broad home-directory contents unless the user explicitly asks for that investigation.",
-            "5. Final reply should list the highest-signal optimization items with concrete file references.",
+            "5. Do not stop after a progress update like 'I read SKILL.md' or 'next I will inspect scripts'.",
+            "6. Final reply should list the highest-signal optimization items with concrete file references, or state the concrete blocker.",
         ]
     )
 
@@ -2049,6 +2050,16 @@ def _resolve_worker_skill_refs(
     return _recent_snapshot_skill_refs(recent_task_snapshot)
 
 
+def _background_worker_supports_sessionful_continuity(task: Task) -> bool:
+    task_profile = str(task.metadata.get("task_profile") or "").strip().lower()
+    return task_profile in {
+        _DEEP_RESEARCH_TASK_PROFILE,
+        _SKILL_AUDIT_TASK_PROFILE,
+        _SELF_IMPROVEMENT_TASK_PROFILE,
+        _CONFIG_ADMIN_TASK_PROFILE,
+    }
+
+
 def _resolve_worker_lane_for_dispatch(decision: DispatchDecision) -> str | None:
     if decision.target_job_lane:
         return decision.target_job_lane
@@ -3126,11 +3137,17 @@ def build_gateway_task(
         constraints.append(
             "Do not enumerate MCP resources or broad home-directory contents unless a concrete blocker makes them necessary."
         )
+        constraints.append(
+            "Do not stop after only reading SKILL.md, listing scripts, or describing the next inspection step."
+        )
         acceptance_criteria.append(
             "Review the referenced skill's SKILL.md and directly relevant scripts, then report concrete optimization items with file references."
         )
         acceptance_criteria.append(
             "Do not execute the full skill workflow unless the user explicitly asked for execution or a concrete optimization claim requires verification."
+        )
+        acceptance_criteria.append(
+            "If the audit cannot yet name concrete optimization items with file references, return blocked instead of a progress-only summary."
         )
     if _DEEP_RESEARCH_SKILL_REF in inferred_skill_refs:
         memory_facts.append(_build_deep_research_workflow_brief())
@@ -3427,11 +3444,10 @@ def build_worker_task_from_dispatch(
         decision=decision,
         task_id=task_id,
     )
-    # Managed deep-research workers benefit from the same bounded continuity contract as
-    # the parent gateway turn so prompt caching and resume handoff remain available during
-    # long-running report workflows. Other background workers still fail closed to stateless
-    # execution to avoid session replay hazards in generic specialist runs.
-    if str(task.metadata.get("task_profile") or "").strip().lower() != _DEEP_RESEARCH_TASK_PROFILE:
+    # Control-plane workers that inspect or modify a scoped workflow benefit from bounded
+    # continuity so follow-up constraints and retry instructions can land in the same Codex
+    # runtime session. Generic background specialists still fail closed to stateless mode.
+    if not _background_worker_supports_sessionful_continuity(task):
         task.execution_mode = ExecutionMode.STATELESS
         task.execution_session = None
     task.role = TaskRole.WORKER

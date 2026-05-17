@@ -14,7 +14,11 @@ from kernel.codex.runtime.runner import KernelRunner
 from kernel.codex.session.protocol import KernelSessionMode, KernelSessionRequest
 from mente.executors import CodexKernelAdapter, ToolExposurePolicy, resolve_runtime_home
 from mente.executors.base import Executor
-from mente.executors.prompting import build_prompt_fingerprint, render_execution_prompt
+from mente.executors.prompting import (
+    build_prompt_fingerprint,
+    normalize_user_facing_summary,
+    render_execution_prompt,
+)
 from mente.executors.runtime_config import (
     MENTE_CONTENT_BASE_INSTRUCTIONS,
     MENTE_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
@@ -895,6 +899,63 @@ def test_render_execution_prompt_adds_inventory_triage_for_self_improvement_engi
     assert "Start with skills" in prompt
     assert "Start with config" in prompt
     assert "Use the selected category" in prompt
+
+
+def test_render_execution_prompt_marks_probe_only_skill_audit_turn_as_incomplete():
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="conversation",
+        objective="Audit a Daily News skill",
+        user_request="你帮我看看 daily news 技能，看看有哪些方面需要改进",
+        workspace=".",
+        role="worker",
+        worker_lane="engineering",
+        worker_skill_refs=["social-media/xhs-daily-news"],
+        skill_refs=["social-media/xhs-daily-news"],
+        metadata={"source": "gateway", "task_profile": "skill_audit", "lane": "engineering"},
+    )
+
+    prompt = render_execution_prompt(request)
+
+    assert "Workflow Policy:" in prompt
+    assert "Reading only SKILL.md, locating scripts, or announcing a next step is not a completed audit." in prompt
+    assert "If you have not yet delivered concrete optimization findings with file references" in prompt
+    assert "set `completion_status` to `blocked`" in prompt
+
+
+def test_normalize_user_facing_summary_unwraps_user_facing_json_report():
+    raw_summary = json.dumps(
+        {
+            "结论": "这个 skill 能跑通基础链路，但实现质量和产出稳定性还有明显改进空间。",
+            "findings": [
+                {
+                    "title": "发布文案没有使用转换后的正文",
+                    "file": "/tmp/publish_to_xhs.py:122",
+                    "detail": "最终发出去的正文仍然是固定模板，前面的改写结果没有被复用。",
+                },
+                {
+                    "title": "标题生成使用 Python 内置 hash()，跨进程不稳定",
+                    "file": "/tmp/generate_daily_news.py:152",
+                    "detail": "相同输入在不同进程下可能产生不同标题前缀，影响复现。",
+                },
+            ],
+            "优先级建议": [
+                "先修发布文案复用问题。",
+                "再修真实 fallback 和确定性标题逻辑。",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    normalized = normalize_user_facing_summary(raw_summary)
+
+    assert normalized.startswith("这个 skill 能跑通基础链路")
+    assert '{"结论"' not in normalized
+    assert "主要问题：" in normalized
+    assert "1. 发布文案没有使用转换后的正文 [/tmp/publish_to_xhs.py:122]" in normalized
+    assert "优先级建议：" in normalized
+    assert "- 先修发布文案复用问题。" in normalized
 
 
 def test_render_execution_prompt_adds_report_delivery_policy_for_deep_research():
@@ -2342,6 +2403,118 @@ def test_codex_executor_retries_deep_research_once_when_model_only_reads_skill_f
         "triggered": True,
         "reason": "managed_cli_not_executed",
         "resumed_thread_id": "thread-123",
+    }
+
+
+def test_codex_executor_retries_skill_audit_once_when_first_turn_only_reads_skill_files(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("MENTE_SESSIONFUL_EXECUTION_SOURCES", "gateway")
+
+    calls: list[KernelSessionRequest] = []
+    prompts: list[str] = []
+    first_summary = (
+        "先按技能审查模式处理。我已经读了 SKILL.md 并锁定了直接相关的脚本，"
+        "下一步会检查这些入口的一致性、健壮性和可维护性，不执行整条工作流。"
+    )
+    first_stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-skill-audit"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_0",
+                        "type": "command_execution",
+                        "command": "/bin/bash -lc \"sed -n '1,220p' /home/jason/.mente/skills/social-media/xhs-daily-news/SKILL.md\"",
+                        "aggregated_output": "ok",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_1",
+                        "type": "command_execution",
+                        "command": "/bin/bash -lc \"rg -n 'convert_to_xhs|publish' /home/jason/.mente/skills/social-media/xhs-daily-news\"",
+                        "aggregated_output": "ok",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+        ]
+    )
+
+    class _Runner:
+        def run(self, *, payload, session, runtime_config):
+            calls.append(session)
+            prompts.append(payload.prompt)
+            if len(calls) == 1:
+                return KernelExecutionResult(
+                    status="success",
+                    assistant_summary=first_summary,
+                    follow_up_tasks=["继续检查脚本入口并整理结论。"],
+                    debug={
+                        "stdout": first_stdout,
+                        "thread_id": "thread-skill-audit",
+                        "structured_output": {
+                            "assistant_summary": first_summary,
+                            "completion_status": "success",
+                            "follow_up_tasks": ["继续检查脚本入口并整理结论。"],
+                        },
+                    },
+                )
+            return KernelExecutionResult(
+                status="success",
+                assistant_summary=(
+                    "发现 2 个高优先级优化项："
+                    " [1] convert_to_xhs.py 解析链路对字段变体过于脆弱；"
+                    " [2] publish_images.py 的图片选择与顺序规则过于隐式。"
+                ),
+                verification_results=["checked referenced skill files"],
+                debug={
+                    "thread_id": "thread-skill-audit",
+                    "structured_output": {
+                        "assistant_summary": "发现 2 个高优先级优化项",
+                        "completion_status": "success",
+                        "verification_results": ["checked referenced skill files"],
+                    },
+                },
+            )
+
+    executor = CodexExecutor(codex_binary="codex", runner=_Runner())
+    request = ExecutionRequest(
+        task_id="task_1",
+        session_id="session_1",
+        task_type="engineering",
+        objective="审查 Daily News 技能并给出优化建议",
+        user_request="你帮我看看 daily news 技能，看看有哪些方面需要改进",
+        workspace=str(tmp_path),
+        execution_mode=ExecutionMode.SESSIONFUL,
+        execution_session=ExecutionSession(mode=SessionMode.START),
+        tool_policy={"session_capable": True},
+        skill_refs=["social-media/xhs-daily-news"],
+        metadata={"source": "gateway", "task_profile": "skill_audit", "lane": "engineering"},
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == "success"
+    assert [session.mode for session in calls] == [
+        KernelSessionMode.SESSION,
+        KernelSessionMode.SESSION,
+    ]
+    assert calls[1].session_id == "thread-skill-audit"
+    assert "The previous turn stopped after only reading the skill instructions" in prompts[1]
+    assert result.metadata["skill_audit_retry"] == {
+        "triggered": True,
+        "reason": "probe_only_turn",
+        "resumed_thread_id": "thread-skill-audit",
     }
 
 
